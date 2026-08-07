@@ -1,0 +1,148 @@
+const express = require('express');
+const router = express.Router();
+const { protect } = require('../../../middleware/authMiddleware');
+const { prescriptionUploads } = require('../../../middleware/multer'); // Ensure this handles 'prescriptionImages' key
+const { 
+    getStandardCatalogTests,searchStandardTests, getStandardPackages,searchStandardPackages,getFemaleStandardPackages,getFemaleStandardTests,getSearchSuggestions,getLabSuggestions,
+    getLabs, getLabDetails,getLabInventoryTests,searchLabInventoryTests,getLabInventoryPackages,searchLabInventoryPackages,
+    
+    getLabSlots, getLabDeliveryCharges,
+    bookLabTest, uploadPrescriptionFlow,
+    getMyBookings, getBookingDetails ,
+    getLabsByMasterTest, getLabsByMasterPackage,
+    getMasterTestDetails, getMasterPackageDetails,
+    checkoutLabBooking,getUniqueMainCategories,
+    confirmPrescriptionBooking,verifyLabPayment,
+    rateLabOrder,getPaginatedReviews,updateReviewByOrderId, updateReviewByVendorId,getReviewByOrderId,
+    cancelBooking,
+    getAvailableCoupons ,validateLabCoupon,
+    getPreparationGuide, suggestPersonalizedPackage,getTestSuggestions,getWomenSpecialTests,
+    getWomenCategories,getWomenTestsByCategory,
+    
+    // Prescription Flow
+    scanLabPrescription,searchMasterTestsForPrescription,
+    createLabPrescriptionRequest,
+    getUserLabPrescriptionRequests,
+    getUserLabPrescriptionRequestDetails,
+    payAndConfirmLabRequest,
+    verifyLabPrescriptionPayment
+    
+} = require('../../../controllers/user/Lab/BookLab');
+
+// Base URL: /user/labs
+
+router.post('/test-suggestions', getTestSuggestions);
+
+
+router.get('/standard-tests', getStandardCatalogTests);
+router.post('/standard-tests/details/:id', getMasterTestDetails);
+router.post('/standard-tests/search', searchStandardTests); ///user/labs/standard-tests/search?page=1
+
+router.get('/standard-packages', getStandardPackages); 
+router.post('/standard-packages/details/:id', getMasterPackageDetails); ///user/labs/standard-packages/details/:id
+router.post('/standard-packages/search', searchStandardPackages); ///user/labs/standard-packages/search?page=1
+router.get('/standard-packages/female', getFemaleStandardPackages);
+router.get('/standard-tests/female', getFemaleStandardTests);
+
+
+router.get('/suggestions', getSearchSuggestions); //user/labs/suggestions?query=Labname
+router.get('/lab-suggestions', getLabSuggestions); //user/labs/lab-suggestions?query=Labname
+// Discovery
+router.post('/list', getLabs);
+router.get('/details/:id', getLabDetails);
+// 2. Inventory - Tests for specific lab
+router.get('/:labId/inventory-tests', getLabInventoryTests); // GET with ?page=1
+router.post('/:labId/inventory-tests/search', searchLabInventoryTests); // POST with body {query: ""}
+// 3. Inventory - Packages for specific lab
+router.get('/:labId/inventory-packages', getLabInventoryPackages);
+router.post('/:labId/inventory-packages/search', searchLabInventoryPackages);
+
+
+router.get('/slots', getLabSlots); // user/labs/slots?labId=xxx&date=2024-08-20
+
+// --- Guidance & Suggestion ---
+router.get('/prep-guide', protect('user'), getPreparationGuide); // For Fasting/Instructions modal
+router.post('/suggest-package', protect('user'), suggestPersonalizedPackage); // Figma Personalized Flow
+
+
+
+
+router.get('/master-test/:id', protect('user'), getMasterTestDetails);
+router.get('/master-package/:id', protect('user'), getMasterPackageDetails);
+
+router.get('/comparison/test/:masterTestId', protect('user'), getLabsByMasterTest);
+router.get('/comparison/package/:masterPackageId', protect('user'), getLabsByMasterPackage);
+
+router.get('/delivery-charges', protect('user'), getLabDeliveryCharges); // NEW
+
+// Booking (Protected)
+router.post('/checkout', protect('user'), checkoutLabBooking);
+router.get('/main-categories', protect('user'), getUniqueMainCategories);
+router.post('/confirm-prescription', protect('user'), confirmPrescriptionBooking); // Prescription Flow Part 2
+router.post('/verify-payment', protect('user'), verifyLabPayment); // NEW
+router.post('/upload-prescription', protect('user'), prescriptionUploads.array('prescriptionImages', 5), uploadPrescriptionFlow);
+
+// Discovery & Logistics
+router.get('/slots', protect('user'), getLabSlots); // User selects slot
+router.get('/coupons', protect('user'), getAvailableCoupons); // User views applicable coupons
+router.post('/validate-coupon', protect('user'), validateLabCoupon); 
+  
+
+router.post('/book', protect('user'), bookLabTest);
+
+// Tracking & History
+router.get('/my-bookings', protect('user'), getMyBookings);
+router.get('/details/:id/track', protect('user'), getBookingDetails);
+router.put('/cancel/:id', protect('user'), cancelBooking);
+// rating user full
+router.post('/rate', protect('user'), rateLabOrder);
+router.get('/reviews/:targetType/:targetId', protect('user'), getPaginatedReviews);
+router.put('/review/update-by-order/:orderId', protect('user'), updateReviewByOrderId);
+router.put('/review/update-by-vendor/:targetId', protect('user'), updateReviewByVendorId);
+router.get('/review/by-order/:orderId', protect('user'), getReviewByOrderId); // 👈 Maps Get Review
+
+router.get('/women-special-tests', protect('user'), getWomenSpecialTests); //
+router.get('/test/women/categories', protect('user'), getWomenCategories); //
+router.get('/test/women/tests-by-category', protect('user'), getWomenTestsByCategory); //
+
+// AI prescriptioin Flow
+router.post(
+    '/scan-rx', 
+    protect('user'), 
+    prescriptionUploads.single('prescriptionFile'), // Utilizes standard single upload config
+    scanLabPrescription
+);
+router.get('/prescription/search-tests', protect('user'), searchMasterTestsForPrescription);
+router.post(
+    '/prescription-request', 
+    protect('user'), 
+    prescriptionUploads.single('prescriptionImage'), // single upload key
+    createLabPrescriptionRequest
+);
+
+router.get(
+    '/prescription-request/list', 
+    protect('user'), 
+    getUserLabPrescriptionRequests
+);
+
+router.get(
+    '/prescription-request/details/:requestId', 
+    protect('user'), 
+    getUserLabPrescriptionRequestDetails
+);
+
+router.post(
+    '/prescription-request/pay-confirm', 
+    protect('user'), 
+    payAndConfirmLabRequest
+);
+
+router.post(
+    '/prescription-request/verify-payment', 
+    protect('user'), 
+    verifyLabPrescriptionPayment
+);
+
+
+module.exports = router;

@@ -1,0 +1,61 @@
+const mongoose = require('mongoose');
+
+const availabilitySchema = new mongoose.Schema({
+    vendorId: { 
+        type: mongoose.Schema.Types.ObjectId, 
+        required: true, 
+        refPath: 'vendorType',
+        unique: true 
+    },
+    vendorType: { 
+        type: String, 
+        enum: ['Lab', 'Pharmacy', 'Food','Doctor', 'Hospital'], 
+        required: true 
+    },
+
+    // Global Settings
+    morningSlots: { type: Boolean, default: true },
+    afternoonSlots: { type: Boolean, default: true },
+    eveningSlots: { type: Boolean, default: true },
+    
+    startTime: { type: String, default: "09:00" }, 
+    endTime: { type: String, default: "21:00" },   
+    
+    // Sirf Lab aur Food ke liye use hoga
+    slotDuration: { type: Number, default: 30 }, 
+    maxClientsPerSlot: { type: Number, default: 0 }, // 0 means unlimited bookings
+    premiumSlots: [{
+        time: String,
+        extraFee: { type: Number, default: 0 }
+    }],
+
+     // --- Food SPECIFIC FIELDS (Figma Match) ---
+    allowedBookingTypes: { 
+        type: [String], 
+        enum: ['One day One Time', 'For Multiple Days', 'Acc. To Per/Hours'],
+        default: ['One day One Time'] 
+    },
+    premiumDates: [{
+        date: { type: String }, // "2026-05-03" (YYYY-MM-DD)
+        extraFee: { type: Number, default: 0 }
+    }],
+    hourlyRateSurcharge: { type: Number, default: 0 }, // For "Acc. To Per/Hours"
+
+    // "Delete" option ke liye: Vendor jin slots ko hide karna chahta hai
+    unavailableSlots: [String], // Example: ["10:30", "14:15"]
+
+    offDays: [String], // ["Sunday"]
+    blockedDates: [String], // Gap Fix: ["2023-12-25", "2024-01-01"] for holidays
+
+
+    // for hospital only
+    startDate: { type: Date }, // Admission start
+    endDate: { type: Date },   // Admission end (Discharge target)
+    rescheduleCount: { type: Number, default: 0 },
+    originalBookingId: { type: mongoose.Schema.Types.ObjectId, ref: 'Appointment' },
+
+    
+
+}, { timestamps: true });
+
+module.exports = mongoose.model('Availability', availabilitySchema);

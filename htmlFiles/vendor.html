@@ -1,0 +1,765 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Health Kangaroo | Professional Unified Ecosystem</title>
+    
+    <!-- Professional UI Stack -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.29.4/moment.min.js"></script>
+
+    <style>
+        :root {
+            --hk-primary: #00b894;
+            --hk-primary-dark: #009475;
+            --hk-secondary: #6c5ce7;
+            --hk-dark: #1e272e;
+            --hk-bg: #f4f7f6;
+            --hk-light: #ffffff;
+            --hk-border: #edf2f7;
+            --hk-radius: 28px;
+            --hk-shadow: 0 15px 45px rgba(0,0,0,0.06);
+            --hk-blue: #0984e3;
+        }
+
+        body { 
+            font-family: 'Plus Jakarta Sans', sans-serif; 
+            background-color: var(--hk-bg); 
+            color: var(--hk-dark); 
+            padding-top: 95px; 
+            overflow-x: hidden;
+            letter-spacing: -0.2px;
+        }
+
+        /* --- PROFESSIONAL SCROLLBAR --- */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #ddd; border-radius: 10px; }
+
+        /* --- NAVIGATION --- */
+        .hk-nav {
+            background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(20px); height: 85px;
+            border-bottom: 2px solid var(--hk-primary); position: fixed; top: 0; width: 100%; z-index: 1050;
+            display: flex; align-items: center; justify-content: space-between; padding: 0 6%;
+        }
+
+        .hk-logo { font-weight: 800; font-size: 1.7rem; color: var(--hk-primary); text-decoration: none; letter-spacing: -1.5px; display: flex; align-items: center; gap: 10px; }
+        .hk-logo i { background: var(--hk-primary); color: white; padding: 10px; border-radius: 14px; font-size: 1.1rem; }
+
+        .nav-menu { display: flex; gap: 8px; }
+        .nav-btn {
+            border: none; background: transparent; font-weight: 700; font-size: 0.85rem;
+            padding: 11px 22px; border-radius: 50px; transition: 0.3s; color: #555;
+        }
+        .nav-btn:hover { background: #e0f2f1; color: var(--hk-primary); }
+        .nav-btn.active { background: var(--hk-primary); color: white; box-shadow: 0 8px 20px rgba(0,184,148,0.25); }
+
+        /* --- VIEW SECTIONS --- */
+        .view-section { display: none; opacity: 0; transform: translateY(15px); transition: 0.4s ease-out; }
+        .view-section.active { display: block; opacity: 1; transform: translateY(0); }
+
+        /* --- CARD SYSTEM --- */
+        .hk-card { background: white; border-radius: var(--hk-radius); border: 1px solid var(--hk-border); box-shadow: var(--hk-shadow); transition: 0.3s; height: 100%; overflow: hidden; display: flex; flex-direction: column; position: relative; }
+        .hk-card:hover { transform: translateY(-10px); box-shadow: 0 25px 60px rgba(0,0,0,0.1); }
+        
+        .med-img { height: 140px; object-fit: contain; padding: 25px; transition: 0.4s; }
+        .hk-card:hover .med-img { transform: scale(1.08); }
+
+        /* --- FIGMA: FASTER DELIVERY UI --- */
+        .delivery-segment { display: flex; gap: 15px; margin: 25px 0; }
+        .delivery-mode-card {
+            flex: 1; border: 2.5px solid var(--hk-border); border-radius: 24px; padding: 25px 15px;
+            text-align: center; cursor: pointer; transition: 0.3s; background: white;
+            position: relative; overflow: visible;
+        }
+        .delivery-mode-card.active { border-color: var(--hk-primary); background: #f0fdf4; transform: scale(1.05); z-index: 2; box-shadow: 0 10px 30px rgba(0,184,148,0.15); }
+        .delivery-mode-card .fastest-label {
+            position: absolute; top: -14px; left: 50%; transform: translateX(-50%);
+            background: var(--hk-blue); color: white; font-size: 10px; padding: 4px 16px;
+            border-radius: 50px; font-weight: 800; text-transform: uppercase;
+        }
+        .delivery-mode-card i { font-size: 1.8rem; color: var(--hk-primary); margin-bottom: 12px; display: block; }
+        .delivery-mode-card .mode-name { font-weight: 800; font-size: 1.1rem; display: block; }
+        .delivery-mode-card .mode-price { font-weight: 700; color: var(--hk-primary); font-size: 0.95rem; }
+
+        /* --- ADDRESS & PATIENT UI --- */
+        .address-card, .patient-card { 
+            border: 2px solid var(--hk-border); border-radius: 25px; padding: 22px; 
+            cursor: pointer; position: relative; transition: 0.3s; background: white; 
+        }
+        .address-card.active, .patient-card.active { border-color: var(--hk-primary); background: #f0fdf4; }
+        .address-card.active::after, .patient-card.active::after { 
+            content: '\f058'; font-family: 'Font Awesome 6 Free'; font-weight: 900; 
+            position: absolute; top: 15px; right: 15px; color: var(--hk-primary); font-size: 1.4rem; 
+        }
+
+        /* --- FIGMA BILLING SUMMARY --- */
+        .bill-container { background: white; border-radius: var(--hk-radius); padding: 30px; border: 1px solid var(--hk-border); box-shadow: var(--hk-shadow); }
+        .bill-row { display: flex; justify-content: space-between; font-size: 0.95rem; margin-bottom: 14px; color: #636e72; font-weight: 500; }
+        .bill-row.total-row { border-top: 2px dashed var(--hk-border); padding-top: 20px; margin-top: 20px; color: var(--hk-dark); font-weight: 800; font-size: 1.3rem; }
+        
+        .savings-alert {
+            background: #e6fcf5; color: var(--hk-primary); padding: 15px; border-radius: 20px;
+            margin-bottom: 15px; font-weight: 700; display: flex; justify-content: space-between;
+        }
+
+        .slot-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 12px; }
+        .slot-box { 
+            border: 2px solid var(--hk-border); border-radius: 18px; padding: 14px; 
+            text-align: center; cursor: pointer; background: white; font-weight: 700; transition: 0.2s; 
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+        }
+        .slot-box.selected { background: var(--hk-primary); color: white; border-color: var(--hk-primary); box-shadow: 0 8px 20px rgba(0,184,148,0.3); }
+        .slot-box.full { background: #f1f3f5; color: #adb5bd; border-color: #eee; cursor: not-allowed; opacity: 0.7; }
+        .slot-box .fee-tag { font-size: 0.7rem; font-weight: 800; color: #e74c3c; margin-top: 3px; }
+        .slot-box.selected .fee-tag { color: white; }
+
+        .cart-badge {
+            position: absolute; top: -8px; right: -12px; background: #e74c3c;
+            color: white; font-size: 11px; padding: 4px 10px; border-radius: 50px;
+            border: 2.5px solid white; font-weight: 800;
+        }
+
+        .btn-hk { background: var(--hk-primary); color: white; font-weight: 700; border-radius: 50px; padding: 18px 40px; border: none; transition: 0.3s; letter-spacing: 0.5px; }
+        .btn-hk:hover { background: var(--hk-primary-dark); transform: scale(1.02); color: white; }
+
+        .scroll-y { max-height: 450px; overflow-y: auto; padding-right: 10px; }
+        .scroll-y::-webkit-scrollbar { width: 5px; }
+        .scroll-y::-webkit-scrollbar-thumb { background: #ddd; border-radius: 10px; }
+
+        .cat-toggle { background: #f1f3f5; border-radius: 50px; padding: 6px; display: inline-flex; border: 1px solid #ddd; }
+        .cat-toggle button { border: none; padding: 10px 30px; border-radius: 50px; font-weight: 700; font-size: 0.85rem; transition: 0.3s; background: transparent; }
+        .cat-toggle .active { background: white; color: var(--hk-primary); box-shadow: 0 4px 15px rgba(0,0,0,0.08); }
+
+        .coupon-card { border: 2px dashed #ddd; border-radius: 22px; padding: 20px; margin-bottom: 15px; cursor: pointer; transition: 0.3s; background: white; }
+        .coupon-card:hover { border-color: var(--hk-primary); background: #f9fdfc; }
+
+        /* Rx Flows UI */
+        .rx-banner { background: #f0fdf4; border: 1px dashed var(--hk-primary); border-radius: 20px; padding: 25px; margin-bottom: 30px; }
+        .detected-med-card { border: 1.5px solid var(--hk-border); border-radius: 18px; padding: 15px; margin-bottom: 10px; transition: 0.3s; cursor: pointer; background: white;}
+        .detected-med-card:hover { border-color: var(--hk-primary); background: #f9fdfc; }
+    </style>
+</head>
+<body>
+
+    <!-- Professional Navbar -->
+    <nav class="hk-nav">
+        <a href="#" class="hk-logo" onclick="switchView('discoveryView')">
+            <i class="fas fa-hand-holding-medical"></i> <span>HEALTH KANGAROO</span>
+        </a>
+        <div class="nav-menu">
+            <button class="nav-btn active" id="btn-nav-labs" onclick="switchView('discoveryView')">Diagnostic Catalog</button>
+            <button class="nav-btn" id="btn-nav-meds" onclick="switchView('medicineMarketView')">Meds Marketplace</button>
+            <button class="nav-btn" id="btn-nav-orders" onclick="switchView('historyView')">My Bookings</button>
+        </div>
+        <div class="d-flex align-items-center gap-4">
+            <div class="position-relative" style="cursor:pointer" id="cartTrigger" data-bs-toggle="offcanvas" data-bs-target="#cartSidebar" onclick="loadCartDetails()">
+                <div style="background: #f8f9fa; width: 52px; height: 52px; border-radius: 50%; display: flex; align-items: center; justify-content: center; border: 1px solid #eee;">
+                    <i class="fas fa-shopping-basket fa-lg text-dark"></i>
+                </div>
+                <span class="cart-badge" id="navCartBadge">0</span>
+            </div>
+            <img src="https://ui-avatars.com/api/?name=Admin&background=00b894&color=fff" class="rounded-circle border" width="48">
+        </div>
+    </nav>
+
+    <div class="container py-4">
+
+        <!-- 1. LAB CATALOG -->
+        <section id="discoveryView" class="view-section active">
+            <div class="row mb-5 align-items-center">
+                <div class="col-lg-7">
+                    <h1 class="fw-800 mb-1">Health Intelligence Catalog</h1>
+                    <p class="text-muted fs-5">Compare diagnostics across verified laboratory networks.</p>
+                </div>
+                <div class="col-lg-5 text-lg-end">
+                    <div class="cat-toggle">
+                        <button class="active" id="btn-lab-test" onclick="setLabType('test')">Standard Tests</button>
+                        <button id="btn-lab-pkg" onclick="setLabType('package')">Health Packages</button>
+                    </div>
+                </div>
+            </div>
+            <div class="row g-4" id="catalogGrid"></div>
+        </section>
+
+        <!-- 2. MEDICINE MARKETPLACE -->
+        <section id="medicineMarketView" class="view-section">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <div>
+                    <h2 class="fw-800 mb-1">Unified Meds Marketplace</h2>
+                    <p class="text-muted">Licensed pharmacies delivering quality medicines at honest prices.</p>
+                </div>
+                <button class="btn btn-hk py-3" onclick="triggerAIScan()"><i class="fas fa-file-medical me-2"></i>Order with Prescription</button>
+                <input type="file" id="aiRxInput" class="d-none" onchange="handleAIScan(event)">
+            </div>
+
+            <!-- AI Detection Area (Figma 23/24) -->
+            <div id="aiDetectionArea" class="d-none">
+                <div class="rx-banner shadow-sm">
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <h5 class="fw-800 mb-0 text-primary"><i class="fas fa-robot me-2"></i>AI Detected Medicines</h5>
+                        <button class="btn btn-sm btn-outline-secondary rounded-pill px-3" onclick="closeAIScan()">Close Scan</button>
+                    </div>
+                    <p class="small text-muted mb-4">AI has matched medicines with our inventory. Select a pharmacy to add to cart.</p>
+                    <div id="detectedMedsList" class="row"></div>
+                </div>
+            </div>
+
+            <div class="row g-4 mt-2" id="medicineGrid"></div>
+        </section>
+
+        <!-- 3. COMPARISON ENGINE -->
+        <section id="comparisonView" class="view-section">
+            <button class="btn btn-outline-dark btn-sm rounded-pill mb-4 px-4 shadow-sm" onclick="handleComparisonBack()">← BACK</button>
+            <div class="row g-4">
+                <div class="col-lg-4"><div id="masterInfoPanel" class="hk-card p-4 sticky-top" style="top:115px"></div></div>
+                <div class="col-lg-8"><h4 class="fw-800 mb-4" id="sellersTitleUI">Sellers Providing This Service</h4><div id="comparisonList"></div></div>
+            </div>
+        </section>
+
+        <!-- 4. SECURE CHECKOUT (SYNCED ENGINE) -->
+        <section id="checkoutView" class="view-section">
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <h2 class="fw-800 m-0">Finalize <span id="checkoutContextTitle" class="text-success">...</span> Order</h2>
+                <span class="badge bg-white text-dark border p-2 rounded-pill"><i class="fas fa-shield-check text-success me-1"></i> Secure SSL Checkout</span>
+            </div>
+
+            <div class="row g-4">
+                <div class="col-lg-8">
+                    <!-- Step 1: Recipient Detail -->
+                    <div class="hk-card p-4 mb-4">
+                        <h6 class="fw-800 mb-3" id="step1TitleUI"><i class="fas fa-users me-2 text-success"></i>1. Recipient Details</h6>
+                        <div class="row g-3" id="chkRecipientGridArea"></div>
+                    </div>
+
+                    <!-- Flow: Prescription Mandatory (Figma 25-27) -->
+                    <div id="rxMandatorySection" class="d-none">
+                        <div class="hk-card p-4 mb-4 border-danger">
+                            <h6 class="fw-800 text-danger mb-2"><i class="fas fa-exclamation-triangle me-2"></i>Prescription Required</h6>
+                            <p class="text-muted small">Some items in your cart require a valid prescription. Please upload to continue.</p>
+                            <div class="mt-3">
+                                <label class="btn btn-outline-danger w-100 py-3 rounded-4" style="border: 2.5px dashed">
+                                    <input type="file" id="rxCheckoutFiles" multiple class="d-none" onchange="previewRxFiles()">
+                                    <i class="fas fa-cloud-upload-alt me-2"></i>Click to Upload Rx Images
+                                </label>
+                                <div id="rxPreviewArea" class="mt-3 d-flex gap-2"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- LAB ONLY: Rapid Collection Toggle -->
+                    <div id="labRapidFlowUI" class="d-none">
+                        <!-- Collection Mode Toggle (Home vs Walkin) -->
+                        <div class="hk-card p-4 mb-4">
+                            <h6 class="fw-800 mb-3"><i class="fas fa-truck-loading me-2 text-success"></i>Select Collection Mode</h6>
+                            <div class="row g-3">
+                                <div class="col-md-6">
+                                    <div class="address-card active" id="labModeHome" onclick="setLabCollectionMode('Home Collection')">
+                                        <h6>Home Collection</h6>
+                                        <small class="text-muted">Technician visits your home</small>
+                                    </div>
+                                </div>
+                                <div class="col-md-6">
+                                    <div class="address-card" id="labModeVisit" onclick="setLabCollectionMode('Visit Lab')">
+                                        <h6>Visit Lab</h6>
+                                        <small class="text-success fw-bold">FREE (No service charge)</small>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="hk-card p-4 mb-4 border-primary">
+                            <div class="d-flex justify-content-between align-items-center">
+                                <div>
+                                    <h6 class="fw-800 mb-1"><i class="fas fa-bolt text-warning me-2"></i>Express Lab Collection</h6>
+                                    <p class="text-muted small mb-0">Technician will reach your location within 60 mins.</p>
+                                </div>
+                                <div class="form-check form-switch">
+                                    <input class="form-check-input" type="checkbox" id="labRapidCheck" style="width: 50px; height: 25px;" onchange="updateLiveBill()">
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- PHARMA ONLY: Faster Delivery Segment -->
+                    <div id="pharmaSpeedFlowUI" class="d-none">
+                        <div class="hk-card p-4 mb-4">
+                            <h6 class="fw-800 mb-1">Faster Delivery <span class="badge bg-success ms-2">NEW</span></h6>
+                            <p class="text-muted small">Choose your preferred medicine delivery speed.</p>
+                            <div class="delivery-segment">
+                                <div class="delivery-mode-card" id="speed-rapid" onclick="updatePharmaSpeed('rapid')">
+                                    <span class="fastest-label">Fastest</span>
+                                    <i class="fas fa-bolt text-warning"></i>
+                                    <span class="mode-name">1 hr</span>
+                                    <span class="mode-price">₹29</span>
+                                </div>
+                                <div class="delivery-mode-card active" id="speed-standard" onclick="updatePharmaSpeed('standard')">
+                                    <i class="fas fa-truck text-primary"></i>
+                                    <span class="mode-name">3 hrs</span>
+                                    <span class="mode-price">Free</span>
+                                </div>
+                                <div class="delivery-mode-card" id="speed-custom" onclick="updatePharmaSpeed('custom')">
+                                    <i class="fas fa-calendar-alt text-info"></i>
+                                    <span class="mode-name">Custom</span>
+                                    <span class="mode-price">Slot Select</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Step 2: Slot Selection (Shared) -->
+                    <div class="hk-card p-4 mb-4" id="slotSelectionSection">
+                        <h6 class="fw-800 mb-3"><i class="fas fa-clock me-2 text-success"></i>Choose Delivery/Collection Slot</h6>
+                        <div class="row">
+                            <div class="col-md-5">
+                                <label class="small fw-bold mb-1">Pick Date</label>
+                                <input type="date" id="chkDateInp" class="form-control rounded-4 mb-3" onchange="fetchCheckoutSlots()">
+                            </div>
+                            <div class="col-md-7">
+                                <label class="small fw-bold mb-1">Available Times</label>
+                                <div class="slot-grid" id="chkSlotGridUI"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- FIGMA BILLING SIDEBAR -->
+                <div class="col-lg-4">
+                    <div class="sticky-top" style="top:115px">
+                        <div class="savings-alert shadow-sm">
+                            <span><i class="fas fa-sparkles me-2"></i> Savings on order</span>
+                            <span id="savingsValueVal">₹0</span>
+                        </div>
+
+                        <div class="bill-container shadow-sm">
+                            <h5 class="fw-800 mb-4 border-bottom pb-2">Bill Summary</h5>
+                            <div id="chkItemsListUI" class="mb-3 border-bottom pb-2 scroll-y" style="max-height: 180px;"></div>
+                            
+                            <div class="bill-row"><span>Item total (MRP)</span><span id="billMRPVal">₹0</span></div>
+                            <div class="bill-row text-success"><span>Price discount</span><span id="billDiscVal">-₹0</span></div>
+                            <div class="bill-row" id="couponRowUI" style="display:none;"><span>Coupon Discount</span><span class="text-success" id="billCouponVal">-₹0</span></div>
+                            <div class="bill-row"><span>Service Fee</span><span id="billDelFeeVal">₹0</span></div>
+                            <div id="billExtraChargesArea"></div>
+
+                            <div class="bill-row total-row">
+                                <span>Total amount</span>
+                                <span id="billFinalValueFinal">₹0</span>
+                            </div>
+
+                            <div class="mt-4">
+                                <button class="btn btn-hk w-100 py-3 shadow-lg" onclick="processFinalBooking()">CONFIRM & PLACE ORDER</button>
+                            </div>
+                        </div>
+
+                        <!-- EXPLORE COUPONS -->
+                        <div class="hk-card p-3 mt-4 border-dashed" style="border: 2px dashed #ccc; cursor:pointer" data-bs-toggle="modal" data-bs-target="#couponModal" onclick="fetchCouponsForCheckout()">
+                            <div class="d-flex justify-content-between align-items-center">
+                                <div><i class="fas fa-tags text-danger me-2"></i><b>Explore Coupons</b><br><small class="text-muted">Apply and save more</small></div>
+                                <i class="fas fa-chevron-right text-muted"></i>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- 5. HISTORY -->
+        <section id="historyView" class="view-section">
+            <h2 class="fw-800 mb-4">My Bookings History</h2>
+            <div id="historyGridUI" class="row g-4"></div>
+        </section>
+    </div>
+
+    <!-- COUPON MODAL -->
+    <div class="modal fade" id="couponModal" tabindex="-1">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content p-4 shadow-lg">
+                <div class="modal-header border-0 pb-0"><h5 class="fw-800 m-0">Offers & Coupons</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+                <div class="modal-body">
+                    <div class="input-group mb-4 mt-2">
+                        <input type="text" id="manualCouponInput" class="form-control rounded-start-pill ps-3" placeholder="Enter Coupon Code">
+                        <button class="btn btn-dark rounded-end-pill px-4" onclick="applyManualCouponAPI()">APPLY</button>
+                    </div>
+                    <div id="modalCouponListArea" class="scroll-y" style="max-height: 400px;"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- CART SIDEBAR -->
+    <div class="offcanvas offcanvas-end" id="cartSidebar" tabindex="-1" style="width: 430px;">
+        <div class="offcanvas-header border-bottom px-4"><h5 class="fw-800">Your Basket</h5><button class="btn-close" data-bs-dismiss="offcanvas"></button></div>
+        <div class="offcanvas-body p-4">
+            <div id="sidebarLabBox" class="mb-4 d-none">
+                <h6 class="text-primary fw-bold border-bottom pb-2">Lab Services</h6><div id="sidebarLabList"></div>
+                <button class="btn btn-primary w-100 mt-2 py-2 rounded-pill fw-bold" onclick="launchCheckoutFlow('Lab')" data-bs-dismiss="offcanvas">CHECKOUT LAB</button>
+            </div>
+            <div id="sidebarPharmaBox" class="mb-4 d-none">
+                <h6 class="text-success fw-bold border-bottom pb-2">Pharmacy Medicines</h6><div id="sidebarPharmaList"></div>
+                <button class="btn btn-success w-100 mt-2 py-2 rounded-pill fw-bold" onclick="launchCheckoutFlow('Pharmacy')" data-bs-dismiss="offcanvas">CHECKOUT MEDS</button>
+            </div>
+            <div id="sidebarEmpty" class="text-center py-5 d-none"><i class="fas fa-shopping-cart fa-3x text-light mb-3"></i><p>Basket is empty.</p></div>
+        </div>
+        <div class="p-4 border-top bg-light">
+            <div class="d-flex justify-content-between h5 fw-800 m-0"><span>Grand Total</span><span id="sidebarTotalValUI">₹0</span></div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        const API_URL = 'http://localhost:5002';
+        const AUTH_TOKEN = localStorage.getItem('token');
+
+        let userCartState = null, currentLabType = 'test', currentCompCtx = 'Lab', currentChkCtx = 'Lab';
+        let chkPatients = ['Self'], selectedAddr = null, chkSlot = null, ctxCharges = null, couponApplied = null;
+        let pharmaSpeed = 'standard', labCollMode = 'Home Collection', detectedMeds = [];
+
+        async function apiFetch(endpoint, method = 'GET', body = null, isFormData = false) {
+            const headers = { 'Authorization': `Bearer ${AUTH_TOKEN}` };
+            if(!isFormData) headers['Content-Type'] = 'application/json';
+
+            const options = { 
+                method, 
+                headers, 
+                body: isFormData ? body : (body ? JSON.stringify(body) : null) 
+            };
+            
+            const res = await fetch(`${API_URL}${endpoint}`, options);
+            const r = await res.json();
+            
+            if(!res.ok) {
+                const err = new Error(r.message || "Error");
+                err.data = r; 
+                throw err;
+            }
+            return r;
+        }
+
+        function switchView(id) {
+            document.querySelectorAll('.view-section').forEach(s => s.classList.remove('active'));
+            document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+            const el = document.getElementById(id);
+            if(el) el.classList.add('active');
+            const btnMap = { discoveryView:'btn-nav-labs', medicineMarketView:'btn-nav-meds', historyView:'btn-nav-orders' };
+            if(btnMap[id] && document.getElementById(btnMap[id])) document.getElementById(btnMap[id]).classList.add('active');
+            if(id === 'discoveryView') loadLabCatalog();
+            if(id === 'medicineMarketView') loadMedicineMarket();
+            if(id === 'historyView') loadOrderHistory();
+            window.scrollTo(0,0);
+        }
+
+        function setLabType(t) { currentLabType = t; loadLabCatalog(); document.getElementById('btn-lab-test').classList.toggle('active', t==='test'); document.getElementById('btn-lab-pkg').classList.toggle('active', t==='package'); }
+
+        async function loadLabCatalog() {
+            try {
+                const r = await apiFetch(currentLabType === 'test' ? '/user/labs/standard-tests' : '/user/labs/standard-packages');
+                document.getElementById('catalogGrid').innerHTML = (r.data || []).map(i => `<div class="col-md-3"><div class="hk-card p-4" onclick="initComparison('${i._id}', 'Lab')" style="cursor:pointer"><h6 class="fw-800">${i.testName || i.packageName}</h6><small>Verified Price</small><b class="text-success d-block">₹${i.minPrice}</b></div></div>`).join('');
+            } catch(e) {}
+        }
+        async function loadMedicineMarket() {
+            try {
+                const r = await apiFetch('/user/pharmacy/standard-list');
+                document.getElementById('medicineGrid').innerHTML = (r.data || []).map(m => `
+                    <div class="col-md-3">
+                        <div class="hk-card p-4" onclick="initComparison('${m._id}', 'Pharmacy')" style="cursor:pointer">
+                            <div class="text-end">${m.prescription_required === 'YES' || m.prescription_required === 'Yes' ? '<span class="badge bg-danger">Rx Required</span>' : ''}</div>
+                            <img src="${m.image_url[0]}" class="med-img d-block mx-auto">
+                            <h6>${m.name}</h6>
+                            <b class="text-success d-block">₹${m.minPrice || m.mrp}</b>
+                        </div>
+                    </div>`).join('');
+            } catch(e) {}
+        }
+
+        function triggerAIScan() { document.getElementById('aiRxInput').click(); }
+        async function handleAIScan(event) {
+            const file = event.target.files[0];
+            if(!file) return;
+
+            Swal.fire({ title: 'AI Scanning Prescription...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+            const formData = new FormData();
+            formData.append('prescriptionFile', file);
+
+            try {
+                const res = await apiFetch('/user/pharmacy/scan-rx', 'POST', formData, true);
+                Swal.close();
+                detectedMeds = res.data.detectedMedicines;
+
+                document.getElementById('aiDetectionArea').classList.remove('d-none');
+                document.getElementById('detectedMedsList').innerHTML = detectedMeds.map(m => `
+                    <div class="col-md-4 mb-3">
+                        <div class="detected-med-card p-3 h-100">
+                            <h6 class="fw-800 mb-1">${m.name}</h6>
+                            <div class="small text-muted mb-3">Detected Price: ₹${m.mrp}</div>
+                            <button class="btn btn-sm btn-success w-100 rounded-pill" onclick="initComparison('${m.medicineId}', 'Pharmacy')">Find Sellers</button>
+                        </div>
+                    </div>`).join('');
+            } catch(e) { Swal.fire('Error', e.message, 'error'); }
+        }
+
+        function closeAIScan() { document.getElementById('aiDetectionArea').classList.add('d-none'); }
+
+        async function initComparison(id, type) {
+            currentCompCtx = type;
+            try {
+                const endpoint = type === 'Lab' ? `/user/labs/comparison/test/${id}` : `/user/medicine/sellers/${id}`;
+                const res = await apiFetch(endpoint);
+                document.getElementById('masterInfoPanel').innerHTML = `<h5 class="fw-800 text-center text-success">${type} Selection</h5><p class="text-muted small text-center">Available providers near you.</p>`;
+                document.getElementById('comparisonList').innerHTML = res.data.map(s => `
+                    <div class="p-3 border rounded-4 mb-3 d-flex justify-content-between align-items-center bg-white shadow-sm">
+                        <div><b>${(s.labId || s.pharmacyId).name}</b><br><small>${(s.labId || s.pharmacyId).city}</small></div>
+                        <div class="text-end"><h5>₹${s.discountPrice || s.vendor_price}</h5><button class="btn btn-sm btn-success rounded-pill px-4 mt-2" onclick="addToCartEngine('${(s.labId?._id || s.pharmacyId?._id)}', '${type === 'Lab' ? s._id : id}', '${type}')">SELECT</button></div>
+                    </div>`).join('');
+                switchView('comparisonView');
+            } catch(e) { Swal.fire('Error', 'Unable to fetch providers', 'error'); }
+        }
+
+        async function addToCartEngine(vId, itemId, type, forceReplace = false) {
+            try {
+                const endpoint = type === 'Lab' ? '/user/cart/lab/add' : '/user/cart/pharmacy/add';
+                const body = type === 'Lab' 
+                    ? { labId: vId, itemId, productType: (currentLabType === 'test' ? 'LabTest' : 'LabPackage'), forceReplace } 
+                    : { pharmacyId: vId, medicineId: itemId, quantity: 1, forceReplace };
+                await apiFetch(endpoint, 'POST', body);
+                Swal.fire({ icon: 'success', title: 'Added to Basket', timer: 1500, showConfirmButton: false });
+                refreshBadge();
+            } catch(e) {
+                if(e.data && e.data.canReplace) {
+                    Swal.fire({
+                        title: 'Replace Basket Items?', text: e.message, icon: 'warning', showCancelButton: true,
+                        confirmButtonText: 'Yes, Clear & Replace'
+                    }).then(async (result) => {
+                        if (result.isConfirmed) {
+                            const clearEndpoint = type === 'Lab' ? '/user/cart/lab/clear' : '/user/cart/pharmacy/clear';
+                            await apiFetch(clearEndpoint, 'POST');
+                            await addToCartEngine(vId, itemId, type, true);
+                        }
+                    });
+                }
+            }
+        }
+
+        async function launchCheckoutFlow(type) {
+            currentChkCtx = type;
+            document.getElementById('checkoutContextTitle').innerText = type;
+            Swal.fire({ title: 'Preparing Checkout...', didOpen: () => Swal.showLoading() });
+
+            try {
+                const [cartR, profR, addrR] = await Promise.all([
+                    apiFetch('/user/cart'), 
+                    apiFetch('/api/auth/user/profile'), 
+                    apiFetch('/api/auth/user/addresses')
+                ]);
+                
+                userCartState = cartR.data;
+                couponApplied = null;
+                
+                // 1. Set default address if available
+                if(addrR.data && addrR.data.length > 0) {
+                    selectedAddr = addrR.data.find(x => x.isDefault) || addrR.data[0];
+                }
+
+                // 2. Hit Summary API for Pharmacy
+                if(type === 'Pharmacy') {
+                    const summaryRes = await apiFetch('/user/pharmacy/checkout', 'POST', {
+                        collectionType: pharmaSpeed === 'pickup' ? 'Self Pickup' : 'Home Delivery',
+                        isRapid: pharmaSpeed === 'rapid',
+                        address: selectedAddr // 400 Bad Request fix: Address is mandatory in backend
+                    });
+                    document.getElementById('rxMandatorySection').classList.toggle('d-none', !summaryRes.data.rxMandatory);
+                }
+
+                const grid = document.getElementById('chkRecipientGridArea');
+                if(type === 'Lab') {
+                    document.getElementById('labRapidFlowUI').classList.remove('d-none'); 
+                    document.getElementById('pharmaSpeedFlowUI').classList.add('d-none');
+                    grid.innerHTML = `<div class="col-md-3"><div class="patient-card active" onclick="togglePatientSelection('Self', this)"><h6>Self</h6><small>${profR.data.name}</small></div></div>` + (profR.data.familyMember || []).map(m => `<div class="col-md-3"><div class="patient-card" onclick="togglePatientSelection('${m._id}', this)"><h6>${m.memberName}</h6></div></div>`).join('');
+                } else {
+                    document.getElementById('labRapidFlowUI').classList.add('d-none'); 
+                    document.getElementById('pharmaSpeedFlowUI').classList.remove('d-none');
+                    grid.innerHTML = (addrR.data || []).map(a => `<div class="col-md-4">
+                        <div class="address-card ${ (selectedAddr && selectedAddr._id === a._id) ?'active':''}" onclick="setOrderAddress(${JSON.stringify(a).replace(/"/g, '&quot;')}, this)">
+                            <h6>${a.name || 'Recipient'}</h6><span class="badge bg-light text-dark mb-2" style="font-size:0.65rem;">${a.addressType}</span>
+                            <small class="d-block text-muted">${a.houseNo}, ${a.city}</small>
+                        </div>
+                    </div>`).join('');
+                    updatePharmaSpeed('standard');
+                }
+
+                const charges = await apiFetch(type === 'Lab' ? '/user/labs/delivery-charges' : '/user/pharmacy/delivery-charges');
+                ctxCharges = charges.data;
+                updateLiveBill();
+                Swal.close();
+                switchView('checkoutView');
+            } catch(e) { 
+                console.error("CHECKOUT_ERROR:", e);
+                Swal.fire('Error', e.message || 'Error preparing checkout', 'error'); 
+            }
+        }
+
+        async function processFinalBooking() {
+            const isRapidCheck = currentChkCtx === 'Lab' ? document.getElementById('labRapidCheck').checked : pharmaSpeed === 'rapid';
+            
+            if(currentChkCtx === 'Pharmacy') {
+                const rxFiles = document.getElementById('rxCheckoutFiles').files;
+                const rxVisible = !document.getElementById('rxMandatorySection').classList.contains('d-none');
+                if (rxVisible && rxFiles.length === 0) return Swal.fire('Action Required', 'Please upload Prescription images.', 'warning');
+                if (!selectedAddr) return Swal.fire('Address Required', 'Please select a delivery address.', 'warning');
+            }
+
+            if(!chkSlot && !isRapidCheck) return Swal.fire('Error', 'Select slot or choose Express Collection', 'error');
+
+            const body = new FormData();
+            body.append('appointmentDate', document.getElementById('chkDateInp').value || new Date().toISOString().split('T')[0]);
+            
+            let finalTime = 'Immediate';
+            if (chkSlot && chkSlot.time) {
+                finalTime = chkSlot.time;
+            } else if (isRapidCheck) {
+                finalTime = 'Immediate';
+            }
+            body.append('appointmentTime', finalTime);
+
+            body.append('collectionType', currentChkCtx === 'Lab' ? labCollMode : (pharmaSpeed==='pickup'?'Self Pickup':'Home Delivery'));
+            body.append('isRapid', isRapidCheck);
+            body.append('paymentMethod', 'COD');
+            if(couponApplied) body.append('couponCode', couponApplied.couponName);
+            if(selectedAddr) body.append('address', JSON.stringify(selectedAddr));
+            
+            const rxFiles = document.getElementById('rxCheckoutFiles').files;
+            for(let i=0; i<rxFiles.length; i++) body.append('prescriptionImages', rxFiles[i]);
+            if(currentChkCtx === 'Lab') body.append('selectedPatientIds', JSON.stringify(chkPatients));
+
+            Swal.fire({ title: 'Booking your order...', didOpen: () => Swal.showLoading() });
+            try {
+                // Endpoint updated to /place-order for Pharmacy
+                const endpoint = currentChkCtx === 'Lab' ? '/user/labs/checkout' : '/user/pharmacy/place-order';
+                const res = await apiFetch(endpoint, 'POST', body, true);
+                if(res.success) {
+                    Swal.fire('Success!', 'Order placed successfully.', 'success');
+                    switchView('historyView');
+                    refreshBadge();
+                }
+            } catch(e) { Swal.fire('Error', e.message, 'error'); }
+        }
+
+        function previewRxFiles() {
+            const files = document.getElementById('rxCheckoutFiles').files;
+            document.getElementById('rxPreviewArea').innerHTML = Array.from(files).map(f => `<div class="p-2 border rounded-3 bg-light small"><i class="fas fa-file-image me-1"></i>${f.name.slice(0,10)}...</div>`).join('');
+        }
+
+        function setLabCollectionMode(mode) { labCollMode = mode; document.getElementById('labModeHome').classList.toggle('active', mode === 'Home Collection'); document.getElementById('labModeVisit').classList.toggle('active', mode === 'Visit Lab'); updateLiveBill(); }
+
+        function updatePharmaSpeed(mode) { pharmaSpeed = mode; document.querySelectorAll('.delivery-mode-card').forEach(c => c.classList.remove('active')); const el = document.getElementById(`speed-${mode}`); if(el) el.classList.add('active'); if(mode === 'custom') document.getElementById('slotSelectionSection').classList.remove('d-none'); else { document.getElementById('slotSelectionSection').classList.add('d-none'); chkSlot = { time: 'Immediate', fee: 0 }; } updateLiveBill(); }
+
+        async function fetchCheckoutSlots() {
+            const date = document.getElementById('chkDateInp').value;
+            const vId = currentChkCtx === 'Lab' ? userCartState.labCart.labId._id : userCartState.pharmacyCart.pharmacyId._id;
+            if(!date) return;
+            try {
+                const endpoint = currentChkCtx === 'Lab' ? `/user/labs/slots?labId=${vId}&date=${date}` : `/user/pharmacy/slots?pharmacyId=${vId}&date=${date}`;
+                const r = await apiFetch(endpoint);
+                const gridUI = document.getElementById('chkSlotGridUI');
+                if (r.isClosed) { gridUI.innerHTML = '<div class="alert alert-warning w-100">Closed on this date.</div>'; return; }
+                gridUI.innerHTML = (r.slots || []).map(s => {
+                    const isFull = s.isFull || s.currentBookings >= 1;
+                    return `<div class="slot-box ${isFull ? 'full' : ''}" onclick="${isFull ? '' : `setSlotSelection('${s.time}', ${s.extraFee}, this)`}"><b>${s.time}</b>${s.extraFee > 0 ? `<div class="fee-tag">+₹${s.extraFee}</div>` : ''}</div>`;
+                }).join('');
+            } catch(e) {}
+        }
+
+        function setSlotSelection(t, f, el) { document.querySelectorAll('.slot-box').forEach(x => x.classList.remove('selected')); el.classList.add('selected'); chkSlot = { time: t, fee: f }; updateLiveBill(); }
+
+        function togglePatientSelection(id, el) { el.classList.toggle('active'); if(chkPatients.includes(id)) chkPatients = chkPatients.filter(p => p !== id); else chkPatients.push(id); updateLiveBill(); }
+
+        function setOrderAddress(a, el) { document.querySelectorAll('.address-card').forEach(x => x.classList.remove('active')); el.classList.add('active'); selectedAddr = a; }
+
+        function updateLiveBill() {
+            if(!userCartState || !ctxCharges) return;
+            const items = currentChkCtx === 'Lab' ? (userCartState.labCart?.items || []) : (userCartState.pharmacyCart?.items || []);
+            const pCount = chkPatients.length;
+            let mrpTotal = 0, billTotal = 0;
+            document.getElementById('chkItemsListUI').innerHTML = items.map(i => {
+                const qty = currentChkCtx === 'Lab' ? pCount : i.quantity;
+                mrpTotal += (i.price * 1.5) * qty; billTotal += i.price * qty;
+                return `<div class="bill-row"><span>${i.name}</span><b>₹${i.price * qty}</b></div>`;
+            }).join('');
+            let delFee = 0, rapFee = 0;
+            if(currentChkCtx === 'Pharmacy') {
+                if(pharmaSpeed === 'rapid') rapFee = ctxCharges.fastDeliveryExtra || 29;
+                if(pharmaSpeed !== 'standard' || billTotal < 500) delFee = ctxCharges.fixedPrice || 40;
+            } else {
+                if(labCollMode === 'Home Collection') delFee = ctxCharges.fixedPrice || 40;
+                if(document.getElementById('labRapidCheck')?.checked) rapFee = ctxCharges.fastDeliveryExtra || 100;
+            }
+            if(chkSlot?.fee) rapFee += chkSlot.fee;
+            const final = (billTotal - (couponApplied?.amount || 0)) + delFee + rapFee;
+            document.getElementById('billMRPVal').innerText = `₹${mrpTotal.toFixed(0)}`;
+            document.getElementById('billDiscVal').innerText = `-₹${(mrpTotal - billTotal).toFixed(0)}`;
+            document.getElementById('billDelFeeVal').innerText = `₹${delFee}`;
+            document.getElementById('billFinalValueFinal').innerText = `₹${final.toFixed(0)}`;
+            document.getElementById('savingsValueVal').innerText = `₹${(mrpTotal - billTotal + (couponApplied?.amount || 0)).toFixed(0)}`;
+            document.getElementById('billExtraChargesArea').innerHTML = rapFee > 0 ? `<div class="bill-row text-danger"><span>Rapid/Slot Charges</span><span>+₹${rapFee}</span></div>` : '';
+            const coupRow = document.getElementById('couponRowUI'); if(coupRow) coupRow.style.display = couponApplied ? 'flex' : 'none';
+            document.getElementById('billCouponVal').innerText = `-₹${couponApplied?.amount || 0}`;
+        }
+
+        async function fetchCouponsForCheckout() {
+            try {
+                const vId = currentChkCtx === 'Lab' ? userCartState.labCart.labId._id : userCartState.pharmacyCart.pharmacyId._id;
+                const res = await apiFetch(`/user/cart/available-coupons?vendorId=${vId}&vendorType=${currentChkCtx}`);
+                document.getElementById('modalCouponListArea').innerHTML = res.data.map(c => `<div class="coupon-card shadow-sm" onclick="applyCouponPostAPI('${c.couponName}')"><div class="d-flex justify-content-between"><b>${c.couponName}</b><span class="badge bg-success">${c.discountPercentage}% OFF</span></div><small>Min order ₹${c.minOrderAmount}</small></div>`).join('');
+            } catch(e) {}
+        }
+
+        async function applyCouponPostAPI(code) {
+            const vId = currentChkCtx === 'Lab' ? userCartState.labCart.labId._id : userCartState.pharmacyCart.pharmacyId._id;
+            const total = currentChkCtx === 'Lab' ? userCartState.labCartTotal : userCartState.pharmacyCartTotal;
+            try {
+                const res = await apiFetch(currentChkCtx === 'Lab' ? '/user/labs/validate-coupon' : '/user/pharmacy/validate-coupon', 'POST', { couponName: code, pharmacyId: vId, labId: vId, totalAmount: total });
+                couponApplied = { couponName: code, amount: res.discount };
+                bootstrap.Modal.getInstance(document.getElementById('couponModal')).hide();
+                Swal.fire('Success!', `Applied: ₹${res.discount}`, 'success'); updateLiveBill();
+            } catch(e) { Swal.fire('Error', e.message, 'error'); }
+        }
+
+        function applyManualCouponAPI() { const code = document.getElementById('manualCouponInput').value; if(code) applyCouponPostAPI(code.toUpperCase()); }
+
+        async function loadCartDetails() {
+            try {
+                const res = await apiFetch('/user/cart'); const d = res.data; userCartState = d;
+                const hasL = d.labCart?.items.length > 0; const hasP = d.pharmacyCart?.items.length > 0;
+                document.getElementById('sidebarLabBox').classList.toggle('d-none', !hasL);
+                document.getElementById('sidebarPharmaBox').classList.toggle('d-none', !hasP);
+                document.getElementById('sidebarEmpty').classList.toggle('d-none', hasL || hasP);
+                if(hasL) document.getElementById('sidebarLabList').innerHTML = d.labCart.items.map(i => `<div class="d-flex justify-content-between small"><span>${i.name}</span><b>₹${i.price}</b></div>`).join('');
+                if(hasP) document.getElementById('sidebarPharmaList').innerHTML = d.pharmacyCart.items.map(i => `<div class="d-flex justify-content-between small"><span>${i.name} x${i.quantity}</span><b>₹${i.price * i.quantity}</b></div>`).join('');
+                document.getElementById('sidebarTotalValUI').innerText = `₹${(d.labCartTotal || 0) + (d.pharmacyCartTotal || 0)}`;
+            } catch(e) {}
+        }
+
+        async function refreshBadge() { try { const res = await apiFetch('/user/cart'); document.getElementById('navCartBadge').innerText = (res.data.labCart?.items.length || 0) + (res.data.pharmacyCart?.items.length || 0); } catch(e){} }
+        
+        async function loadOrderHistory() {
+            try {
+                const [l, m] = await Promise.all([apiFetch('/user/labs/my-bookings'), apiFetch('/user/pharmacy/order-history')]);
+                const comb = [...(l.data || []).map(x=>({...x, ctx:'Lab'})), ...(m.data || []).map(x=>({...x, ctx:'Pharmacy'}))].sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt));
+                document.getElementById('historyGridUI').innerHTML = comb.map(o => `
+                <div class="col-md-6 mb-3">
+                    <div class="hk-card p-3 border-start border-4 ${o.ctx==='Lab'?'border-primary':'border-success'}">
+                        <div class="d-flex justify-content-between"><b>#${o.orderId || o.bookingId}</b> <span>${o.status}</span></div>
+                        <div class="mt-2 small text-muted">${o.ctx} Order - ${moment(o.createdAt).format('DD MMM, hh:mm A')}</div>
+                    </div>
+                </div>`).join('');
+            } catch(e) {}
+        }
+
+        function handleComparisonBack() { switchView(currentCompCtx === 'Lab' ? 'discoveryView' : 'medicineMarketView'); }
+        window.onload = () => { if(AUTH_TOKEN) { loadLabCatalog(); refreshBadge(); } };
+    </script>
+</body>
+</html>

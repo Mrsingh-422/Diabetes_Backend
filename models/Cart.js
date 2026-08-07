@@ -1,0 +1,55 @@
+const mongoose = require('mongoose');
+
+const cartSchema = new mongoose.Schema({
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, unique: true },
+    
+    // --- LAB SECTION ---
+    labCart: {
+        labId: { type: mongoose.Schema.Types.ObjectId, ref: 'Lab' },
+        categoryType: { type: String, default: null },
+        // 🚨 NEW: Selected Patients tracker to persist selections across app restarts/back navigation
+        selectedPatients: [{
+            patientId: { type: String, required: true }, // 'Self' or family member ID
+            name: { type: String },
+            age: { type: Number },
+            gender: { type: String },
+            relation: { type: String }
+        }],
+        items: [{
+            productType: { 
+                type: String, 
+                enum: ['LabTest', 'LabPackage'], // <--- Inhe Change Karein
+                required: true 
+            },
+            itemId: { 
+                type: mongoose.Schema.Types.ObjectId, 
+                refPath: 'labCart.items.productType', // Dynamic reference path remains intact
+                required: true 
+            },
+            name: String,
+            price: Number,
+            quantity: { type: Number, default: 1 }
+        }]
+    },
+
+    // --- PHARMACY SECTION (Skeleton for future use) ---
+    pharmacyCart: {
+        pharmacyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Pharmacy' },
+        items: [{
+            medicineId: { type: mongoose.Schema.Types.ObjectId, ref: 'Medicine' },
+            name: String,
+            price: Number,
+            quantity: { type: Number, default: 1 },
+            duration: String, // "5 Days"
+            startDate: Date,
+
+            // 🚨 ADDED: To strictly separate normal vs combo items in the same cart [1]
+            isComboApplied: { type: Boolean, default: false },
+            comboOfferId: { type: mongoose.Schema.Types.ObjectId, ref: 'PharmacyComboOffer', default: null }
+
+        }]
+    }
+
+}, { timestamps: true });
+
+module.exports = mongoose.model('Cart', cartSchema);

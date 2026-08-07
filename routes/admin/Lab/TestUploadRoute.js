@@ -1,0 +1,52 @@
+const express = require('express');
+const router = express.Router();
+const { protect, checkRoleAccess } = require('../../../middleware/authMiddleware');
+const { uploadExcel, categoryTestUploads } = require('../../../middleware/multer'); 
+const { uploadMasterTests, getMasterList, uploadMasterPackages, getMasterPackages,deleteMasterData,
+    listMasterData, searchMasterData, createMasterData, editMasterData,
+                    getPendingRequests, approveRequest, updateCategoryImage,updatePharmacyCategoryImage,
+                    getLabCategories, getPharmacyCategories,
+                                        listReportTemplatesAdmin, getReportTemplateDetailsAdmin,
+
+
+                    uploadTemplatesCSV,createReportTemplate, editReportTemplate, deleteReportTemplate
+
+ } = require('../../../controllers/admin/Lab/TestUpload');
+
+// Base URL: /admin/lab/tests
+// checkrRoleAccess 29 = lab vendor
+router.post('/upload', protect('admin'), uploadExcel.single('file'),checkRoleAccess(29), uploadMasterTests);
+router.post('/upload-packages', protect('admin'), uploadExcel.single('file'),checkRoleAccess(29), uploadMasterPackages);
+
+router.get('/list/:type', protect('admin'), checkRoleAccess(29), listMasterData); // type: test/package
+router.post('/search', protect('admin'), checkRoleAccess(29), searchMasterData); // type: test/package
+router.post('/create', protect('admin'), checkRoleAccess(29), createMasterData); // type: test/package
+router.put('/edit/:type/:id', protect('admin'), checkRoleAccess(29), editMasterData);
+router.delete('/delete/:type/:id', protect('admin'), checkRoleAccess(29), deleteMasterData);
+
+// Approval System
+router.get('/requests/pending', protect('admin'), checkRoleAccess(29), getPendingRequests);
+router.put('/requests/approve/:requestId', protect('admin'), checkRoleAccess(29), approveRequest);
+ 
+
+
+// not used
+router.get('/master-tests', protect('admin'),checkRoleAccess(29), getMasterList);
+router.get('/master-packages', protect('admin'),checkRoleAccess(29), getMasterPackages);
+
+router.post('/update-test-category-image', categoryTestUploads, protect('admin'), checkRoleAccess(29), updateCategoryImage);
+router.post('/update-pharmacy-category-image', categoryTestUploads, protect('admin'), checkRoleAccess(29), updatePharmacyCategoryImage);
+
+router.get('/lab-categories', protect('admin'), checkRoleAccess(29), getLabCategories);
+router.get('/pharmacy-categories', protect('admin'), checkRoleAccess(29), getPharmacyCategories);
+
+
+// Report Templates
+router.get('/report-templates', protect('admin'), checkRoleAccess(29), listReportTemplatesAdmin); // List all report templates
+router.get('/report-templates/details/:id', protect('admin'), checkRoleAccess(29), getReportTemplateDetailsAdmin); // Fetch single template details
+router.post('/upload-templates', protect('admin'), uploadExcel.single('file'), checkRoleAccess(29), uploadTemplatesCSV); // CSV Bulk Upload [1]
+router.post('/create-template', protect('admin'), checkRoleAccess(29), createReportTemplate); // Manual Create [1]
+router.put('/edit-template/:id', protect('admin'), checkRoleAccess(29), editReportTemplate); // Manual Edit [1]
+router.delete('/delete-template/:id', protect('admin'), checkRoleAccess(29), deleteReportTemplate); // Manual Delete [1]
+
+module.exports = router;

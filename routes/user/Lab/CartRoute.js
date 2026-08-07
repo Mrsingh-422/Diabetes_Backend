@@ -1,0 +1,45 @@
+const express = require('express');
+const router = express.Router();
+const { protect } = require('../../../middleware/authMiddleware');
+const { updateSelectedPatients,addToLabCart, getMyCart, clearLabCart, removeItem, updateCartQuantity,
+    compareCartOnMap,
+    addToPharmacyCart,
+    updatePharmacyQuantity,checkBetterOptions,
+    clearPharmacyCart, removePharmacyItem,
+updateMedicineDuration,
+
+    getAvailableSlots,
+    getAvailableCoupons
+
+ } = require('../../../controllers/user/Lab/Cart');
+
+// Base URL: /user/cart
+
+router.get('/', protect('user'), getMyCart);
+router.post('/lab/add', protect('user'), addToLabCart);
+router.post('/lab/clear', protect('user'), clearLabCart);
+router.post('/lab/select-patients', protect('user'), updateSelectedPatients);
+router.delete('/item/:itemId', protect('user'), removeItem);// lab cart item removal by itemId (could be test or package)
+router.put('/quantity', protect('user'), updateCartQuantity);
+
+router.post('/compare', protect('user'), compareCartOnMap);
+
+
+// pharmcacy
+// Pharmacy Cart Endpoints
+router.post('/pharmacy/add', protect('user'), addToPharmacyCart);
+router.put('/pharmacy/quantity', protect('user'), updatePharmacyQuantity);
+router.post('/pharmacy/clear', protect('user'), clearPharmacyCart);
+router.delete('/pharmacy/item/:medicineId', protect('user'), removePharmacyItem);
+
+
+router.post('/check-better-options', protect('user'), checkBetterOptions);
+router.put('/update-duration', protect('user'), updateMedicineDuration);
+
+
+
+
+router.get('/available-slots', protect('user'), getAvailableSlots);
+router.get('/available-coupons', protect('user'), getAvailableCoupons);
+
+module.exports = router; 

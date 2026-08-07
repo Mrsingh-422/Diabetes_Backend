@@ -1,0 +1,1162 @@
+<!DOCTYPE html>
+<html lang="hi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Health Kangaroo - Lab Phlebotomist Widescreen Portal</title>
+    
+    <!-- Enterprise UI Frameworks -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.29.4/moment.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    
+    <style>
+        /* ENTERPRISE CORE COLORS */
+        :root { 
+            --brand: #00B377; 
+            --brand-light: #E6F7F1; 
+            --orange: #FF8A00; 
+            --red: #FF4D4D; 
+            --slate: #64748B; 
+        }
+        body { 
+            font-family: 'Plus Jakarta Sans', sans-serif; 
+            background-color: #F8FAFC; 
+            color: #1E293B; 
+            overflow: hidden;
+        }
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background-color: #E2E8F0;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body class="min-h-screen flex overflow-hidden">
+
+    <!-- 1. LEFT SIDEBAR PANEL -->
+    <aside class="w-72 bg-white border-r border-slate-100 flex flex-col justify-between py-8 px-5 shrink-0 h-screen shadow-sm z-50">
+        <div class="space-y-8">
+            <!-- Branding Header -->
+            <div class="flex items-center gap-3 px-2">
+                <div class="w-10 h-10 bg-[#00B377] rounded-xl flex items-center justify-center text-white shadow-md shadow-[#00B377]/10">
+                    <i data-lucide="shield-check" class="w-6 h-6"></i>
+                </div>
+                <div>
+                    <h1 class="font-black text-sm uppercase tracking-wider text-gray-800">Health Kangaroo</h1>
+                    <p class="text-[9px] text-gray-400 font-bold uppercase tracking-widest leading-none mt-0.5">Phlebotomist Web Portal</p>
+                </div>
+            </div>
+
+            <!-- Profile and Status card -->
+            <div class="bg-[#F8FAFC] border border-slate-100 rounded-3xl p-5 space-y-4">
+                <div class="flex items-center gap-3">
+                    <img id="dr-profile-pic" src="https://i.pravatar.cc/100?u=hk_phlebo" class="w-14 h-14 rounded-2xl object-cover shadow-md border-2 border-white">
+                    <div class="truncate">
+                        <h4 id="dr-profile-name" class="font-black text-sm text-gray-800 uppercase leading-none">--</h4>
+                        <p class="text-[9px] text-[#00B377] font-black uppercase tracking-widest mt-1.5">Lab Executive</p>
+                    </div>
+                </div>
+                <div class="flex justify-between items-center bg-white border border-slate-100 rounded-2xl px-4 py-3 shadow-inner">
+                    <span id="hdr-map-status-lbl" class="text-[10px] font-black uppercase text-gray-400">Online</span>
+                    <input type="checkbox" id="hdr-map-status-toggle" checked onchange="toggleAvailabilityStatus()" class="w-5 h-5 accent-[#00B377] rounded cursor-pointer">
+                </div>
+            </div>
+
+            <!-- Navigation Links -->
+            <nav class="space-y-1">
+                <button onclick="navigateTo('home', this)" id="nav-btn-home" class="tab-btn w-full flex items-center gap-4 px-4 py-3.5 rounded-2xl text-xs font-black uppercase tracking-wider transition text-[#00B377] bg-[#E6F7F1]/50"><i data-lucide="home" class="w-4 h-4"></i> Dashboard</button>
+                <button onclick="navigateTo('history', this)" id="nav-btn-history" class="tab-btn w-full flex items-center gap-4 px-4 py-3.5 rounded-2xl text-xs font-black uppercase tracking-wider transition text-gray-400 hover:bg-slate-50"><i data-lucide="history" class="w-4 h-4"></i> History Logs</button>
+                <button onclick="navigateTo('about', this)" id="nav-btn-about" class="tab-btn w-full flex items-center gap-4 px-4 py-3.5 rounded-2xl text-xs font-black uppercase tracking-wider transition text-gray-400 hover:bg-slate-50"><i data-lucide="info" class="w-4 h-4"></i> About Us</button>
+                <button onclick="navigateTo('terms', this)" id="nav-btn-terms" class="tab-btn w-full flex items-center gap-4 px-4 py-3.5 rounded-2xl text-xs font-black uppercase tracking-wider transition text-gray-400 hover:bg-slate-50"><i data-lucide="file-text" class="w-4 h-4"></i> Legal Terms</button>
+                <button onclick="triggerAdminSupportPopup()" class="tab-btn w-full flex items-center gap-4 px-4 py-3.5 rounded-2xl text-xs font-black uppercase tracking-wider transition text-gray-400 hover:bg-slate-50"><i data-lucide="phone" class="w-4 h-4"></i> Support Help</button>
+            </nav>
+        </div>
+
+        <button onclick="triggerLogoutConfirmModal()" class="w-full flex items-center gap-4 px-4 py-3.5 rounded-2xl bg-red-50 hover:bg-red-100 text-red-500 border border-red-100/50 transition text-xs font-black uppercase tracking-wider"><i data-lucide="log-out" class="w-4 h-4"></i> Logout</button>
+    </aside>
+
+    <!-- RIGHT WORKSPACE SCREEN (Main Area) -->
+    <div class="flex-1 flex flex-col h-screen overflow-hidden">
+        
+        <!-- MASTER CONNECTION CONTROL -->
+        <header class="bg-white border-b border-slate-100 px-8 py-4 flex justify-between items-center shadow-sm shrink-0">
+            <div class="flex items-center gap-4">
+                <span class="text-xs font-black text-gray-400 uppercase tracking-widest">Master API Status:</span>
+                <div class="bg-green-50 px-3 py-1.5 rounded-full border border-green-100 flex items-center gap-2">
+                    <div class="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
+                    <span class="text-[9px] font-black text-[#00B377] uppercase">Sync Active</span>
+                </div>
+            </div>
+
+            <!-- Credentials inputs -->
+            <div class="flex gap-3 w-1/2">
+                <input id="api-base-url" type="text" value="http://localhost:5002" placeholder="Base API URL" class="bg-slate-50 border rounded-xl px-4 py-2.5 text-xs font-bold text-gray-800 outline-none w-1/3">
+                <input id="api-jwt-token" type="text" placeholder="JWT Authorization Token" class="flex-1 bg-slate-50 border rounded-xl px-4 py-2.5 text-xs font-mono text-gray-800 outline-none">
+                <button onclick="applyManualCredentialsSync()" class="bg-black text-white px-5 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider">Sync</button>
+            </div>
+        </header>
+
+        <!-- VIEWPORT WORKSPACE AREA -->
+        <div class="flex-1 overflow-y-auto custom-scrollbar p-8">
+            
+            <!-- A. DASHBOARD VIEWPORT -->
+            <div id="home-screen" class="screen active space-y-8">
+                <!-- Dynamic indicators -->
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                    <div class="figma-card p-6 bg-gradient-to-br from-[#00B377] to-[#009e66] text-white space-y-2 shadow-lg shadow-[#00B377]/10 flex flex-col justify-between h-36">
+                        <h4 class="text-[10px] font-black uppercase text-white/80 tracking-widest leading-none">Active Services</h4>
+                        <h1 id="active-services-badge-counter" class="text-5xl font-black tracking-tight leading-none">0</h1>
+                    </div>
+
+                    <div class="figma-card p-6 bg-slate-950 text-white flex flex-col justify-between h-36">
+                        <div>
+                            <h4 class="text-[10px] font-black uppercase text-slate-400 tracking-widest leading-none">Today's Activity</h4>
+                            <p class="text-[8px] text-[#00B377] font-black uppercase tracking-wider mt-1.5">Auto-synced from your tracker</p>
+                        </div>
+                        <div class="grid grid-cols-4 gap-2 text-center text-[10px] font-bold text-slate-400">
+                            <div><p id="tracker-activity-steps">0</p><p class="text-[7px] uppercase mt-1">Steps</p></div>
+                            <div><p id="tracker-activity-calories">0 kcal</p><p class="text-[7px] uppercase mt-1">Calories</p></div>
+                            <div><p id="tracker-activity-heartrate">0 bpm</p><p class="text-[7px] uppercase mt-1">Avg HR</p></div>
+                            <div><p id="tracker-activity-minutes">0 min</p><p class="text-[7px] uppercase mt-1">Active</p></div>
+                        </div>
+                    </div>
+
+                    <div class="figma-card p-6 flex flex-col justify-between h-36 border-brand bg-[#E6F7F1]/30">
+                        <div>
+                            <h4 class="text-[10px] font-black text-gray-400 uppercase tracking-widest leading-none">Health score progress</h4>
+                            <p class="text-xs text-gray-500 font-bold mt-1.5">You are doing better than last week.</p>
+                        </div>
+                        <p class="text-2xl font-black text-[#00B377]" id="tracker-main-healthscore">82%</p>
+                    </div>
+                </div>
+
+                <!-- Today's Schedule assigned list (Screenshots Tab Filters Integration) -->
+                <div class="space-y-6">
+                    <div class="flex justify-between items-center px-1">
+                        <h3 class="font-black text-xl text-gray-800 tracking-tight leading-none">Today's Schedule</h3>
+                        <button onclick="switchTrackerSubview('add-new')" class="bg-[#00B377] text-white px-5 py-3 rounded-2xl font-black text-xs uppercase tracking-wider shadow-lg shadow-brand/10">+ New booking</button>
+                    </div>
+
+                    <!-- Figma Filters Navigation Panel -->
+                    <div class="flex gap-2 p-1 bg-gray-100 rounded-2xl max-w-lg">
+                        <button onclick="changeActiveOrdersListTab('All', this)" class="order-tab-btn flex-1 py-3 text-[10px] font-black rounded-xl bg-white shadow-sm text-gray-800">All</button>
+                        <button onclick="changeActiveOrdersListTab('Active', this)" class="order-tab-btn flex-1 py-3 text-[10px] font-black rounded-xl text-gray-400">Active</button>
+                        <button onclick="changeActiveOrdersListTab('Complete', this)" class="order-tab-btn flex-1 py-3 text-[10px] font-black rounded-xl text-gray-400">Complete</button>
+                        <button onclick="changeActiveOrdersListTab('Cancelled', this)" class="order-tab-btn flex-1 py-3 text-[10px] font-black rounded-xl text-gray-400">Cancelled</button>
+                    </div>
+
+                    <div id="assigned-orders-schedule-list" class="grid grid-cols-1 md:grid-cols-2 gap-6"></div>
+                </div>
+            </div>
+
+            <!-- B. BOOKING DETAIL VIEWS -->
+            <div id="booking-detail-screen" class="screen space-y-6">
+                <div class="flex items-center gap-4">
+                    <button onclick="navigateTo('home')" class="p-3.5 bg-gray-50 border rounded-2xl hover:bg-gray-100 transition"><i data-lucide="chevron-left" class="w-5 h-5 text-gray-700"></i></button>
+                    <h2 class="text-3xl font-black tracking-tight text-gray-800 leading-none">Details</h2>
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-12 gap-6 items-start">
+                    <!-- Left detail cards column (cols: 7) -->
+                    <div class="md:col-span-7 space-y-6">
+                        <div class="figma-card p-6 flex gap-4 items-center">
+                            <img src="https://i.pravatar.cc/100?u=ramesh" class="w-18 h-18 rounded-[24px] object-cover border-2 border-white shadow-md">
+                            <div>
+                                <h4 id="det-patient-name" class="font-black text-lg uppercase text-gray-800">Ramesh Kumar</h4>
+                                <p class="text-[9px] text-gray-400 font-bold uppercase mt-1" id="det-booking-id-tag">Order ID: --</p>
+                                <span class="bg-[#E6F7F1] text-[#00B377] text-[8px] font-black px-2.5 py-1 rounded-lg uppercase mt-2.5 inline-block" id="det-booking-status-tag">--</span>
+                            </div>
+                        </div>
+
+                        <div class="figma-card p-6 space-y-4">
+                            <h3 class="font-black text-xs text-gray-400 uppercase tracking-widest border-b pb-3.5">Parameters Summary</h3>
+                            <div class="space-y-3">
+                                <div class="flex justify-between text-xs font-bold text-slate-400"><span>Address</span><span id="det-address" class="text-gray-800 font-black text-right max-w-[250px] leading-tight">--</span></div>
+                                <div class="flex justify-between text-xs font-bold text-slate-400"><span>Phone</span><span id="det-phone" class="text-gray-800 font-black">--</span></div>
+                                <div class="flex justify-between text-xs font-bold text-slate-400"><span>Order Type</span><span id="det-ordertype" class="text-gray-800 font-black">Home Collection</span></div>
+                                <div class="flex justify-between text-xs font-bold text-slate-400"><span>Delivery Type</span><span id="det-deliverytype" class="text-gray-800 font-black">Fast Report</span></div>
+                                <div class="flex justify-between text-xs font-bold text-slate-400"><span>Date</span><span id="det-date" class="text-gray-800 font-black">--</span></div>
+                                <div class="flex justify-between text-xs font-bold text-slate-400"><span>Time Slot</span><span id="det-timeslot" class="text-gray-800 font-black">--</span></div>
+                                <div class="flex justify-between text-xs font-bold text-slate-400 pt-3 border-t"><span>Price</span><span id="det-price" class="text-[#00B377] font-black text-lg">₹0</span></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Right tests/family grids column -->
+                    <div class="md:col-span-5 space-y-6">
+                        <div class="figma-card p-6 space-y-4">
+                            <h3 class="font-black text-xs text-gray-400 uppercase tracking-widest border-b pb-3 flex justify-between items-center">
+                                <span>Tests Included</span>
+                                <span onclick="openAddNewItemsSelectorPanel()" class="text-[10px] text-brand cursor-pointer font-black">+ Add Tests</span>
+                            </h3>
+                            <div id="det-tests-list-box" class="space-y-2.5"></div>
+                        </div>
+
+                        <div class="figma-card p-6 space-y-4">
+                            <h3 class="font-black text-xs text-gray-400 uppercase tracking-widest border-b pb-3 flex justify-between items-center">
+                                <span>Family Members</span>
+                                <span onclick="triggerAddFamilyMemberPopup()" class="text-[10px] text-brand cursor-pointer font-black">+ Add Family</span>
+                            </h3>
+                            <div id="det-family-members-box" class="space-y-2.5"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Dynamic actions row -->
+                <div id="det-booking-actions-row" class="pt-6 border-t"></div>
+            </div>
+
+            <!-- C. ADD NEW PATIENT DIAGNOSTIC BOOKING AT HOME -->
+            <div id="add-new-screen" class="screen space-y-6">
+                <div class="flex items-center gap-4">
+                    <button onclick="navigateTo('home')" class="p-3.5 bg-gray-50 border rounded-2xl hover:bg-gray-100 transition"><i data-lucide="chevron-left" class="w-5 h-5 text-gray-700"></i></button>
+                    <h2 class="text-3xl font-black tracking-tight text-gray-800 leading-none">Add Patient Profile</h2>
+                </div>
+
+                <div class="figma-card p-8 max-w-2xl mx-auto space-y-6">
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+                        <div class="space-y-2">
+                            <label class="text-[10px] font-black uppercase text-slate-400 tracking-wider">Full Name</label>
+                            <input type="text" id="add-diag-name" placeholder="Enter patient full name" class="w-full p-4 bg-gray-50 border rounded-2xl font-bold text-sm outline-none text-gray-800">
+                        </div>
+                        <div class="space-y-2">
+                            <label class="text-[10px] font-black uppercase text-slate-400 tracking-wider">Date of Birth</label>
+                            <input type="date" id="add-diag-dob" class="w-full p-4 bg-gray-50 border rounded-2xl font-bold text-sm outline-none text-gray-800">
+                        </div>
+                        <div class="space-y-2">
+                            <label class="text-[10px] font-black uppercase text-slate-400 tracking-wider">Phone Number</label>
+                            <input type="tel" id="add-diag-phone" placeholder="Enter contact phone number" class="w-full p-4 bg-gray-50 border rounded-2xl font-bold text-sm outline-none text-gray-800">
+                        </div>
+                        <div class="space-y-2">
+                            <label class="text-[10px] font-black uppercase text-slate-400 tracking-wider">Gender</label>
+                            <div class="flex gap-2">
+                                <button onclick="setAddDiagGender('Male', this)" class="diag-gender-btn flex-1 py-3.5 font-bold text-xs rounded-xl bg-brand text-white shadow-md">Male</button>
+                                <button onclick="setAddDiagGender('Female', this)" class="diag-gender-btn flex-1 py-3.5 font-bold text-xs rounded-xl bg-gray-50 border text-slate-400">Female</button>
+                            </div>
+                        </div>
+                        <div class="space-y-2 md:col-span-2">
+                            <label class="text-[10px] font-black uppercase text-slate-400 tracking-wider">Address Details</label>
+                            <input type="text" id="add-diag-address" placeholder="Enter complete home address" class="w-full p-4 bg-gray-50 border rounded-2xl font-bold text-sm outline-none text-gray-800">
+                        </div>
+                        <div class="space-y-2">
+                            <label class="text-[10px] font-black uppercase text-slate-400 tracking-wider">Town / City</label>
+                            <input type="text" id="add-diag-city" placeholder="Select city name" class="w-full p-4 bg-gray-50 border rounded-2xl font-bold text-sm outline-none text-gray-800">
+                        </div>
+                        <div class="space-y-2">
+                            <label class="text-[10px] font-black uppercase text-slate-400 tracking-wider">Pin Code</label>
+                            <input type="number" id="add-diag-pincode" placeholder="Enter area pincode" class="w-full p-4 bg-gray-50 border rounded-2xl font-bold text-sm outline-none text-gray-800">
+                        </div>
+                    </div>
+
+                    <!-- Test Selection block -->
+                    <div onclick="openAddNewItemsSelectorPanel()" class="py-5 border-2 border-dashed border-[#00B377]/20 rounded-2xl flex items-center justify-center gap-3 text-brand text-xs font-black uppercase cursor-pointer hover:bg-emerald-50/10">
+                        <span class="text-lg">+</span> Add Tests & Packages Selection
+                    </div>
+                    <div id="add-diag-selected-summary" class="hidden text-xs font-bold text-gray-400 uppercase tracking-wide">Selected: <span id="add-diag-selected-summary-count" class="text-brand">0</span> items</div>
+
+                    <button onclick="submitDiagnosticsAtPatientHome()" class="btn-brand w-full py-5 text-sm font-black">Register Patient Booking</button>
+                </div>
+            </div>
+
+            <!-- E. DIAGNOSTIC SELECTION -->
+            <div id="add-items-screen" class="screen space-y-6">
+                <div class="flex items-center justify-between">
+                    <div class="flex items-center gap-4">
+                        <button onclick="closeAddNewItemsSelectorPanel()" class="p-3.5 bg-gray-50 border rounded-2xl hover:bg-gray-100 transition"><i data-lucide="chevron-left" class="w-5 h-5 text-gray-700"></i></button>
+                        <h2 class="text-3xl font-black tracking-tight text-gray-800 leading-none">Diagnostic List</h2>
+                    </div>
+                    <button onclick="saveSelectedItemsToSetupCache()" class="bg-[#00B377] text-white px-6 py-3.5 rounded-2xl font-black text-xs uppercase shadow-md shadow-brand/20">Apply Selection</button>
+                </div>
+
+                <div class="relative bg-white border rounded-2xl p-4 flex items-center gap-3 max-w-xl shadow-inner">
+                    <i data-lucide="search" class="w-5 h-5 text-slate-400"></i>
+                    <input type="text" id="diag-items-search-input" oninput="syncAvailableDiagnosticItems()" placeholder="Search active test profiles (e.g. Complete Blood Count)..." class="bg-transparent font-bold text-xs outline-none w-full text-gray-700">
+                </div>
+
+                <div class="flex gap-2 p-1 bg-gray-100 rounded-2xl max-w-md">
+                    <button onclick="switchSelectionListType('test', this)" class="select-type-btn flex-1 py-2.5 text-[10px] font-black rounded-xl bg-white shadow-sm border text-gray-800">Tests</button>
+                    <button onclick="switchSelectionListType('package', this)" class="select-type-btn flex-1 py-2.5 text-[10px] font-black rounded-xl text-gray-400">Packages</button>
+                </div>
+
+                <div id="available-diagnostic-items-list" class="grid grid-cols-1 md:grid-cols-2 gap-4"></div>
+            </div>
+
+            <!-- F. HISTORY LOGS -->
+            <div id="history-screen" class="screen space-y-6">
+                <div class="flex items-center gap-4">
+                    <button onclick="navigateTo('home')" class="p-3.5 bg-gray-50 border rounded-2xl hover:bg-gray-100 transition"><i data-lucide="chevron-left" class="w-5 h-5 text-gray-700"></i></button>
+                    <h2 class="text-3xl font-black tracking-tight text-gray-800 leading-none">My Orders History</h2>
+                </div>
+
+                <div class="figma-card p-6 bg-gradient-to-br from-emerald-50/20 to-brand-light/10 border border-brand/10 flex items-center gap-4 w-max pr-12">
+                    <div class="p-3.5 bg-[#00B377] text-white rounded-2xl shadow-md"><i data-lucide="package" class="w-6 h-6"></i></div>
+                    <div>
+                        <h3 class="font-black text-xs text-gray-400 uppercase tracking-wider leading-none">Total Completed Orders</h3>
+                        <h1 id="history-total-orders-count" class="text-3xl font-black text-gray-800 tracking-tight leading-none mt-2">-- Orders</h1>
+                    </div>
+                </div>
+
+                <div id="history-bookings-list" class="grid grid-cols-1 md:grid-cols-2 gap-6"></div>
+            </div>
+
+            <!-- G. LEGAL TERMS -->
+            <div id="terms-screen" class="screen space-y-6">
+                <div class="flex items-center gap-4">
+                    <button onclick="navigateTo('home')" class="p-3.5 bg-gray-50 border rounded-2xl hover:bg-gray-100 transition"><i data-lucide="chevron-left" class="w-5 h-5 text-gray-700"></i></button>
+                    <h2 class="text-3xl font-black tracking-tight text-gray-800 leading-none">Terms</h2>
+                </div>
+                <div class="figma-card p-8 text-xs font-semibold text-slate-500 leading-relaxed max-h-[500px] overflow-y-auto border-2 border-dashed border-gray-100" id="terms-content-box">
+                    Loading terms content...
+                </div>
+            </div>
+
+            <!-- H. ABOUT US -->
+            <div id="about-screen" class="screen space-y-6">
+                <div class="flex items-center gap-4">
+                    <button onclick="navigateTo('home')" class="p-3.5 bg-gray-50 border rounded-2xl hover:bg-gray-100 transition"><i data-lucide="chevron-left" class="w-5 h-5 text-gray-700"></i></button>
+                    <h2 class="text-3xl font-black tracking-tight text-gray-800 leading-none">About Us</h2>
+                </div>
+                <div class="figma-card p-8 text-xs font-semibold text-slate-500 leading-relaxed max-h-[500px] overflow-y-auto border-2 border-dashed border-gray-100" id="about-content-box">
+                    Loading about content...
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <!-- OVERLAYS AND MODALS FOR DYNAMIC ALERTS -->
+    
+    <!-- Widescreen Navigation Map Modal -->
+    <div id="widescreen-navigation-modal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-[2200] flex items-center justify-center p-8 animate-fade-in">
+        <div class="bg-white rounded-[40px] w-full max-w-[900px] h-[550px] flex overflow-hidden shadow-2xl border border-gray-100 relative">
+            <button onclick="closeNavigationMapModal()" class="absolute top-6 right-6 text-gray-400 hover:text-gray-600 z-50">
+                <i data-lucide="x" class="w-6 h-6"></i>
+            </button>
+            
+            <div class="w-1/2 bg-slate-900 relative p-8 flex flex-col justify-between text-white">
+                <div class="bg-[#00B377] p-5 rounded-2xl flex items-center gap-4 shadow-lg z-10">
+                    <div class="w-10 h-10 bg-white/20 rounded-full flex items-center justify-center text-white">
+                        <i data-lucide="arrow-up-left" class="w-6 h-6"></i>
+                    </div>
+                    <div>
+                        <h4 class="font-black text-sm uppercase leading-none">300 m</h4>
+                        <p class="text-[10px] text-white/80 uppercase mt-1">Turn left onto Sector 6 Main Rd</p>
+                    </div>
+                </div>
+
+                <div class="absolute inset-0 z-0 opacity-40">
+                    <div class="w-full h-full bg-cover bg-center" style="background-image: url('https://images.unsplash.com/photo-1524661135-423995f22d0b?q=80&w=600');"></div>
+                </div>
+                
+                <div class="bg-slate-950/80 backdrop-blur-md p-6 rounded-3xl z-10 border border-white/5 flex justify-between items-center">
+                    <div>
+                        <h3 class="text-3xl font-black text-white leading-none">12 min</h3>
+                        <p class="text-[9px] text-[#00B377] font-black uppercase tracking-wider mt-1.5">4.5 km • 10:42 AM arrival</p>
+                    </div>
+                    <div class="w-10 h-10 bg-white/10 rounded-full flex items-center justify-center"><i data-lucide="navigation" class="w-5 h-5 text-[#00B377]"></i></div>
+                </div>
+            </div>
+
+            <div class="w-1/2 p-8 flex flex-col justify-between bg-white overflow-y-auto custom-scrollbar">
+                <div class="space-y-6">
+                    <div class="flex items-center gap-4 border-b pb-4">
+                        <img id="nav-modal-profile-pic" src="https://i.pravatar.cc/100?u=ramesh" class="w-16 h-16 rounded-2xl object-cover border shadow-sm">
+                        <div>
+                            <h3 id="nav-modal-patient-name" class="font-black text-lg text-gray-800 uppercase">--</h3>
+                            <p class="text-[10px] text-gray-400 font-bold uppercase mt-1">Phlebotomist Collection</p>
+                        </div>
+                    </div>
+
+                    <div class="space-y-3.5">
+                        <div class="flex justify-between text-xs font-bold text-gray-400"><span>Target Distance</span><span class="text-gray-800 font-black">2.5 KM</span></div>
+                        <div class="flex justify-between text-xs font-bold text-gray-400"><span>Estimate Duration</span><span class="text-gray-800 font-black">8 minutes</span></div>
+                    </div>
+
+                    <div class="bg-gray-50 border rounded-2xl p-5 space-y-4">
+                        <div class="space-y-1">
+                            <h4 class="text-[9px] font-black text-gray-400 uppercase tracking-widest">Phone Number</h4>
+                            <p id="nav-modal-phone" class="text-sm font-black text-gray-800">--</p>
+                        </div>
+                        <div class="space-y-1">
+                            <h4 class="text-[9px] font-black text-gray-400 uppercase tracking-widest">Special Notes</h4>
+                            <p id="nav-modal-notes" class="text-xs font-bold text-gray-500 leading-normal">--</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="space-y-3 pt-4">
+                    <a id="nav-modal-google-maps-btn" href="#" target="_blank" class="w-full py-4 bg-white border-2 border-brand text-brand font-black text-xs uppercase rounded-3xl flex items-center justify-center gap-2 hover:bg-brand-light/10 transition">
+                        <i data-lucide="map"></i> Open in Google Maps
+                    </a>
+                    <a id="nav-modal-call-btn" href="#" class="w-full py-4 bg-[#00B377] text-white font-black text-xs uppercase rounded-3xl flex items-center justify-center gap-2 shadow-lg shadow-brand/20 transition">
+                        <i data-lucide="phone"></i> Call Patient
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Support Contact Admin Popup -->
+    <div id="admin-support-modal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-[2500] flex items-center justify-center p-6">
+        <div class="bg-white rounded-[36px] w-full max-w-[380px] p-8 space-y-6 shadow-2xl relative border">
+            <h3 class="font-black text-center text-gray-800 text-lg">Contact with Admin</h3>
+            <div class="space-y-3">
+                <a href="tel:+919876543210" class="flex items-center gap-4 p-4 border rounded-2xl text-xs font-bold text-gray-700 hover:bg-gray-50"><i data-lucide="phone" class="text-brand"></i> +91 9876543210</a>
+                <a href="mailto:help@gmail.com" class="flex items-center gap-4 p-4 border rounded-2xl text-xs font-bold text-gray-700 hover:bg-gray-50"><i data-lucide="mail" class="text-brand"></i> help@gmail.com</a>
+            </div>
+            <button onclick="toggleAdminSupportModal()" class="btn-brand w-full py-4.5 text-xs bg-brand">Close</button>
+        </div>
+    </div>
+
+    <!-- OTP Verification Modal Popups -->
+    <div id="otp-verification-modal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-[2500] flex items-center justify-center p-6">
+        <div class="bg-white rounded-[36px] w-full max-w-[380px] p-8 space-y-6 shadow-2xl relative text-center">
+            <h3 class="font-black text-gray-800 text-lg leading-tight">Please enter the OTP to complete order</h3>
+            <div class="flex justify-center gap-3 py-4">
+                <input type="text" id="otp-1" maxlength="1" class="otp-box-cell w-14 h-14 bg-gray-50 border rounded-2xl text-center text-xl font-black text-gray-800 focus:ring-2 focus:ring-brand outline-none" value="2">
+                <input type="text" id="otp-2" maxlength="1" class="otp-box-cell w-14 h-14 bg-gray-50 border rounded-2xl text-center text-xl font-black text-gray-800 focus:ring-2 focus:ring-brand outline-none" value="4">
+                <input type="text" id="otp-3" maxlength="1" class="otp-box-cell w-14 h-14 bg-gray-50 border rounded-2xl text-center text-xl font-black text-gray-800 focus:ring-2 focus:ring-brand outline-none" value="6">
+                <input type="text" id="otp-4" maxlength="1" class="otp-box-cell w-14 h-14 bg-gray-50 border rounded-2xl text-center text-xl font-black text-gray-800 focus:ring-2 focus:ring-brand outline-none" value="8">
+            </div>
+            <button onclick="submitVerifySampleCollectionOTP()" class="btn-brand w-full py-4.5 text-xs">Verify OTP</button>
+        </div>
+    </div>
+
+    <!-- Doorstep Razorpay QR & Cash Payment Popup Modal -->
+    <div id="doorstep-payment-modal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-[2500] flex items-center justify-center p-6 animate-fade-in">
+        <div class="bg-white rounded-[40px] w-full max-w-[380px] p-8 space-y-6 shadow-2xl relative border">
+            <div class="text-center space-y-1">
+                <h3 class="font-black text-xs text-gray-400 uppercase tracking-widest">Doorstep Payment</h3>
+                <h2 id="payment-modal-amount" class="text-3xl font-black text-[#00B377]">₹--</h2>
+                <p class="text-[9px] text-gray-400 font-bold uppercase tracking-wider">Including all dynamic parameters and taxes</p>
+            </div>
+            <div class="space-y-3.5">
+                <button onclick="triggerDoorstepRazorpayQRFlow()" class="w-full p-5 bg-gradient-to-r from-emerald-500 to-[#00B377] text-white rounded-3xl font-black text-xs uppercase flex justify-between items-center shadow-lg shadow-brand/20">
+                    <span>Scan Razorpay QR</span> <i data-lucide="qr-code"></i>
+                </button>
+                <button onclick="triggerCashCollectionFlow()" class="w-full p-5 bg-white border border-gray-100 text-gray-600 rounded-3xl font-black text-xs uppercase flex justify-between items-center hover:bg-gray-50">
+                    <span>Collect via Cash</span> <i data-lucide="banknote"></i>
+                </button>
+            </div>
+            <button onclick="toggleDoorstepPaymentModal()" class="w-full py-4 bg-gray-100 rounded-2xl font-black text-[10px] uppercase text-gray-500">Cancel</button>
+        </div>
+    </div>
+
+    <!-- Complete Sample Lab Deposited Popup -->
+    <div id="lab-deposit-modal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-[2500] flex items-center justify-center p-6">
+        <div class="bg-white rounded-[36px] w-full max-w-[380px] p-8 space-y-6 shadow-2xl relative">
+            <h3 class="font-black text-[#00B377] text-base uppercase text-center tracking-wide">Delivered sample to Lab</h3>
+            <div class="space-y-1.5">
+                <label class="text-[9px] font-black text-gray-400 uppercase tracking-widest">Laboratory Name</label>
+                <input type="text" id="lab-deposit-input-name" value="HK Lab" class="w-full p-4 bg-gray-50 border rounded-2xl font-bold text-xs outline-none text-gray-800">
+            </div>
+            <button onclick="submitSampleLabDeposit()" class="btn-brand w-full py-4.5 text-xs">Submit</button>
+        </div>
+    </div>
+
+    <!-- Dynamic Logout Confirm Popup -->
+    <div id="logout-confirm-modal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-[2500] flex items-center justify-center p-6">
+        <div class="bg-white rounded-[36px] w-full max-w-[360px] p-8 space-y-6 text-center shadow-2xl relative border">
+            <div class="w-16 h-14 bg-red-50 rounded-2xl flex items-center justify-center text-red-500 mx-auto">
+                <i data-lucide="log-out" class="w-8 h-8"></i>
+            </div>
+            <div>
+                <h3 class="font-black text-gray-800 text-lg">Logout</h3>
+                <p class="text-xs text-gray-400 mt-2">Are you sure you want to logout? You will need to login again to access your account.</p>
+            </div>
+            <div class="flex gap-3">
+                <button onclick="toggleLogoutModal()" class="flex-1 py-4 bg-gray-50 border rounded-2xl font-bold text-xs text-gray-500">Cancel</button>
+                <button onclick="executeLogoutAction()" class="flex-1 py-4 bg-red-500 text-white font-bold text-xs rounded-2xl shadow-md">Logout</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- FAMILY POPUP MODAL -->
+    <div id="add-family-popup-modal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-[2500] flex items-center justify-center p-6">
+        <div class="bg-white rounded-[36px] w-full max-w-[380px] p-8 space-y-6 shadow-2xl relative border text-center">
+            <h3 class="font-black text-gray-800 text-lg">Add Family Member</h3>
+            <div class="space-y-4 text-left">
+                <div class="space-y-1">
+                    <label class="text-[9px] font-black text-gray-400 uppercase tracking-widest">Full Name</label>
+                    <input type="text" id="m-family-name-input" placeholder="e.g. Yash Sharma" class="w-full p-4 bg-gray-50 border rounded-2xl font-bold text-xs outline-none">
+                </div>
+                <div class="grid grid-cols-2 gap-3">
+                    <div class="space-y-1">
+                        <label class="text-[9px] font-black text-gray-400 uppercase tracking-widest">Age</label>
+                        <input type="number" id="m-family-age-input" placeholder="e.g. 32" class="w-full p-4 bg-gray-50 border rounded-2xl font-bold text-xs outline-none">
+                    </div>
+                    <div class="space-y-1">
+                        <label class="text-[9px] font-black text-gray-400 uppercase tracking-widest">Gender</label>
+                        <select id="m-family-gender-input" class="w-full p-4 bg-gray-50 border rounded-2xl font-bold text-xs outline-none text-gray-800">
+                            <option value="Male">Male</option>
+                            <option value="Female">Female</option>
+                            <option value="Other">Other</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+            <button onclick="submitFamilyMemberLogAction()" class="btn-brand w-full py-4.5 text-xs bg-brand">Submit</button>
+        </div>
+    </div>
+
+<script>
+    // 💡 INJECTED PRE-LOADED PROVIDER JWT TOKEN 
+    const DEFAULT_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjY5YmJmNmZjNTNjZTU2MzYwNTY4NDRkNCIsInJvbGUiOiJkcml2ZXIiLCJpYXQiOjE3NzM5MjY3ODAsImV4cCI6MTc3NjUxODc4MH0.WJGTHUrRMKD7bpI56EnsjKRp-9NEUXAi9z71Umno-9o";
+    
+    // Dynamic Cache reference for navigation updates
+    let activeBookingDetailCache = null;
+    let activeOrdersListTabState = "All"; // Standard dynamic filter state (Figma Screenshot 16)
+
+    let MASTER_HK_STORE = {
+        token: DEFAULT_TOKEN,
+        selectedBookingId: null,
+        diagGender: "Male",
+        activeSelectionType: "test", 
+        availableTests: [],
+        availablePackages: [],
+        selectedTestIds: [],
+        selectedPackageIds: []
+    };
+
+    let menstrualCalendarMonth = moment().format('YYYY-MM'); 
+    let mSelectedDate = null; 
+    let currentTrackerSubview = "main"; 
+    let trackerPeriodState = "weekly";
+
+    // --- CORE API HANDLER (DYNAMIC BASE_URL RESOLUTION) ---
+    async function apiRequest(path, method = 'GET', data = null) {
+        const baseUrlVal = document.getElementById('api-base-url') ? document.getElementById('api-base-url').value : "http://localhost:5002";
+        
+        const conf = { 
+            method, 
+            headers: { 
+                'Content-Type': 'application/json', 
+                'Authorization': `Bearer ${MASTER_HK_STORE.token}` 
+            } 
+        };
+        if(data) conf.body = JSON.stringify(data);
+        try {
+            const res = await fetch(`${baseUrlVal}${path}`, conf);
+            return await res.json();
+        } catch (e) { 
+            return { success: false, message: "Sync Failure" }; 
+        }
+    }
+
+    function navigateTo(id, trigger) {
+        document.querySelectorAll('.screen').forEach(s => s.classList.add('hidden'));
+        const screenElement = document.getElementById(`${id}-screen`);
+        if (screenElement) screenElement.classList.remove('hidden');
+
+        if(trigger) {
+            document.querySelectorAll('.tab-btn').forEach(b => b.className = "tab-btn w-full flex items-center gap-4 px-4 py-3.5 rounded-2xl text-xs font-black uppercase tracking-wider transition text-gray-400 hover:bg-slate-50");
+            trigger.className = "tab-btn w-full flex items-center gap-4 px-4 py-3.5 rounded-2xl text-xs font-black uppercase tracking-wider transition text-[#00B377] bg-[#E6F7F1]/50";
+        }
+        
+        if(id === 'home') syncHome();
+        if(id === 'history') syncHistory();
+        if(id === 'about') syncAbout();
+        if(id === 'terms') syncTerms();
+        
+        lucide.createIcons();
+    }
+
+    function toggleAppSidebar() {
+        const drawer = document.getElementById('app-sidebar');
+        if (drawer) drawer.classList.toggle('hidden');
+    }
+
+    function applyManualCredentialsSync() {
+        const mainVal = document.getElementById('api-jwt-token') ? document.getElementById('api-jwt-token').value : null;
+        if(mainVal) { 
+            MASTER_HK_STORE.token = mainVal; 
+            localStorage.setItem('token', mainVal); 
+        }
+        syncHome();
+        alert("Credentials updated. Active Token synced!");
+    }
+
+    // --- 1. HOME DASHBOARD LOADER ---
+    async function syncHome() {
+        const queryPath = activeOrdersListTabState === 'All' ? '/driver/lab/orders/list' : `/driver/lab/orders/list?tab=${activeOrdersListTabState}`;
+        
+        const [dash, list] = await Promise.all([
+            apiRequest('/driver/lab/dashboard'),
+            apiRequest(queryPath)
+        ]);
+
+        if (dash.success && dash.data) {
+            const dr = dash.data.driver;
+            
+            const mapName = document.getElementById('hdr-map-name');
+            const mapAddr = document.getElementById('hdr-map-addr');
+            const picMaster = document.getElementById('hdr-pic-master');
+            const mapPic = document.getElementById('hdr-map-pic');
+            const profileName = document.getElementById('dr-profile-name');
+            const profilePic = document.getElementById('dr-profile-pic');
+            const statusToggle = document.getElementById('hdr-map-status-toggle');
+            const statusLbl = document.getElementById('hdr-map-status-lbl');
+            const badgeCounter = document.getElementById('active-services-badge-counter');
+
+            if (mapName) mapName.innerText = dr.name;
+            if (mapAddr) mapAddr.innerText = dr.address;
+            if (picMaster) picMaster.src = dr.profilePic || "https://i.pravatar.cc/100?u=hk_phlebo";
+            if (mapPic) mapPic.src = dr.profilePic || "https://i.pravatar.cc/100?u=hk_phlebo";
+            
+            if (profileName) profileName.innerText = dr.name;
+            if (profilePic) profilePic.src = dr.profilePic || "https://i.pravatar.cc/150?u=hk_phlebo";
+
+            if (statusToggle) statusToggle.checked = dr.isOnline;
+            if (statusLbl) statusLbl.innerText = dr.isOnline ? "Online" : "Offline";
+
+            if (badgeCounter) badgeCounter.innerText = dash.data.activeServicesCount;
+        }
+
+        if (list.success) {
+            const container = document.getElementById('assigned-orders-schedule-list');
+            if (container) {
+                if (!list.data || list.data.length === 0) {
+                    container.innerHTML = `
+                        <div class="text-center py-10 bg-white border border-slate-200 rounded-[28px] p-6 col-span-2 shadow-sm border-dashed">
+                            <p class="text-slate-400 font-bold text-xs uppercase">No Assigned orders in this filter</p>
+                        </div>
+                    `;
+                } else {
+                    container.innerHTML = list.data.map(item => `
+                        <div onclick="openOrderDetailsPage('${item._id}')" class="figma-card p-6 border flex gap-5 items-center cursor-pointer hover:shadow-lg transition bg-white animate-fade-in">
+                            <img src="https://i.pravatar.cc/100?u=${item.bookingId}" class="w-16 h-16 rounded-[24px] object-cover border-2 border-white shadow-sm">
+                            <div class="flex-1">
+                                <div class="flex justify-between items-start">
+                                    <h4 class="font-black text-sm text-gray-800 uppercase">${item.address ? item.address.name : 'Patient Record'}</h4>
+                                    <span class="text-[7px] font-black px-2 py-0.5 rounded bg-[#E6F7F1] text-[#00B377] uppercase">${item.status}</span>
+                                </div>
+                                <p class="text-[10px] text-gray-400 font-bold uppercase mt-1.5">${moment(item.appointmentDate).format('DD MMM')} • ${item.appointmentTime || 'Morning Slot'}</p>
+                                <p class="text-[8px] text-[#00B377] font-black uppercase mt-1">${item.collectionType || 'Home Collection'}</p>
+                            </div>
+                        </div>
+                    `).join('');
+                }
+            }
+        }
+        lucide.createIcons();
+    }
+
+    async function toggleAvailabilityStatus() {
+        const toggle = document.getElementById('hdr-map-status-toggle');
+        const statusStr = toggle ? (toggle.checked ? 'Available' : 'Offline') : 'Available';
+        
+        const res = await apiRequest('/driver/lab/toggle-status', 'PATCH', { status: statusStr });
+        if(res.success) {
+            const statusLbl = document.getElementById('hdr-map-status-lbl');
+            if (statusLbl) statusLbl.innerText = statusStr === 'Available' ? "Online" : "Offline";
+            syncHome();
+        }
+    }
+
+    // Dynamic list page tab switching filter (Figma Screenshot 16 tab configuration)
+    function changeActiveOrdersListTab(tabName, btn) {
+        activeOrdersListTabState = tabName;
+        document.querySelectorAll('.order-tab-btn').forEach(b => {
+            b.className = "order-tab-btn flex-1 py-3 text-[10px] font-black rounded-xl text-gray-400";
+        });
+        btn.className = "order-tab-btn flex-1 py-3 text-[10px] font-black rounded-xl bg-white shadow-sm border text-gray-800";
+        syncHome();
+    }
+
+    // --- 2. SINGLE BOOKING DETAIL VIEWS ---
+    async function openOrderDetailsPage(id) {
+        MASTER_HK_STORE.selectedBookingId = id;
+        navigateTo('booking-detail');
+        const res = await apiRequest(`/driver/lab/orders/detail/${id}`);
+        
+        if (res.success && res.data) {
+            const b = res.data;
+            activeBookingDetailCache = b; 
+
+            document.getElementById('det-patient-name').innerText = b.patients && b.patients.length > 0 ? b.patients[0].name : "Self";
+            document.getElementById('det-booking-id-tag').innerText = `Order ID: ${b.bookingId}`;
+            document.getElementById('det-booking-status-tag').innerText = b.status;
+
+            document.getElementById('det-address').innerText = b.address ? `${b.address.houseNo}, ${b.address.city}, ${b.address.pincode}` : "N/A";
+            
+            document.getElementById('det-phone').innerText = b.address && b.address.phone ? b.address.phone : (b.userId && b.userId.phone ? b.userId.phone : "N/A");
+            
+            document.getElementById('det-date').innerText = moment(b.appointmentDate).format('DD MMMM, YYYY');
+            document.getElementById('det-timeslot').innerText = b.appointmentTime || "Morning Collection";
+            document.getElementById('det-price').innerText = b.billSummary ? `₹${b.billSummary.totalAmount}` : "₹0";
+
+            const testsBox = document.getElementById('det-tests-list-box');
+            if (b.items && b.items.tests && b.items.tests.length > 0) {
+                testsBox.innerHTML = b.items.tests.map(t => {
+                    const testItem = t.testId;
+                    if(!testItem) return '';
+                    return `
+                        <div class="flex justify-between items-center py-1.5 border-b border-dashed border-gray-100 text-xs font-bold text-gray-500">
+                            <span>${testItem.testName || testItem.name}</span>
+                            <span class="text-gray-800">₹${testItem.discountPrice || testItem.amount}</span>
+                        </div>
+                    `;
+                }).join('');
+            } else {
+                testsBox.innerHTML = `<p class="text-xs text-slate-400 font-bold uppercase">No specific tests selected</p>`;
+            }
+
+            const familyBox = document.getElementById('det-family-members-box');
+            if (b.patients && b.patients.length > 1) {
+                familyBox.innerHTML = b.patients.slice(1).map(p => `
+                    <div class="flex justify-between items-center py-1.5 border-b border-dashed border-gray-100 text-xs font-bold text-gray-500">
+                        <span>${p.name} (${p.relation})</span>
+                        <span class="text-gray-800">${p.gender} • ${p.age !== undefined ? p.age : 30} years</span>
+                    </div>
+                `).join('');
+            } else {
+                familyBox.innerHTML = `<p class="text-xs text-slate-400 font-bold uppercase">No family members logged</p>`;
+            }
+
+            const actionsBox = document.getElementById('det-booking-actions-row');
+            if (b.status === 'Confirmed' || b.status === 'Placed') {
+                actionsBox.innerHTML = `
+                    <div class="flex gap-4 max-w-lg">
+                        <button onclick="submitBookingAssignmentResponse('Reject')" class="flex-1 py-4 bg-white border-2 border-red-500 text-red-500 font-black text-sm rounded-3xl">Reject</button>
+                        <button onclick="submitBookingAssignmentResponse('Accept')" class="flex-1 py-4 bg-[#00B377] text-white font-black text-sm rounded-3xl shadow-lg shadow-brand/20">Accept</button>
+                    </div>
+                `;
+            } else if (b.status === 'Phlebotomist Assigned') {
+                actionsBox.innerHTML = `
+                    <div class="flex gap-4 max-w-lg">
+                        <button onclick="triggerNavigationMapSimModal()" class="flex-1 py-4 bg-white border-2 border-brand text-brand font-black text-sm rounded-3xl">Navigation</button>
+                        <button onclick="triggerArrivePatientLocation()" class="flex-1 py-4 bg-brand text-white font-black text-sm rounded-3xl shadow-lg shadow-brand/20">Arrive & Collect</button>
+                    </div>
+                `;
+            } else if (b.status === 'Arrived') {
+                actionsBox.innerHTML = `
+                    <button onclick="triggerSampleOTPVerifyModal()" class="w-full py-5 bg-[#00B377] text-white font-black text-xs rounded-3xl shadow-lg shadow-brand/20 uppercase max-w-md">Verify OTP</button>
+                `;
+            } else if (b.status === 'Sample Collected') {
+                actionsBox.innerHTML = `
+                    <div class="flex gap-4 max-w-lg">
+                        <button onclick="triggerDynamicPaymentModal()" class="flex-1 py-5 bg-[#00B377] text-white font-black text-xs rounded-3xl shadow-lg shadow-brand/20 uppercase">Trigger Doorstep Payment</button>
+                        <button onclick="triggerLabDepositInputModal()" class="flex-1 py-5 bg-orange-500 text-white font-black text-xs rounded-3xl shadow-lg shadow-orange-200 uppercase">Deposit to HK Lab</button>
+                    </div>
+                `;
+            } else {
+                actionsBox.innerHTML = `
+                    <p class="text-xs text-gray-400 font-bold uppercase py-2">Job is completed. Status: ${b.status}.</p>
+                `;
+            }
+        }
+    }
+
+    async function submitBookingAssignmentResponse(action) {
+        const res = await apiRequest(`/driver/lab/orders/respond/${MASTER_HK_STORE.selectedBookingId}`, 'POST', {
+            action
+        });
+        if(res.success) {
+            alert(`Booking successfully ${action}ed!`);
+            openOrderDetailsPage(MASTER_HK_STORE.selectedBookingId);
+        } else {
+            alert(res.message || "Failed response trigger");
+        }
+    }
+
+    // --- DYNAMIC INTERACTIVE WIDESCREEN NAVIGATION VIEW ---
+    function triggerNavigationMapSimModal() {
+        if(!activeBookingDetailCache) return;
+        const b = activeBookingDetailCache;
+
+        document.getElementById('nav-modal-patient-name').innerText = b.patients && b.patients.length > 0 ? b.patients[0].name : "Self";
+        
+        const finalPhone = b.address && b.address.phone ? b.address.phone : (b.userId && b.userId.phone ? b.userId.phone : "N/A");
+        document.getElementById('nav-modal-phone').innerText = finalPhone;
+        document.getElementById('nav-modal-notes').innerText = b.notes || "feeling normal after walking walk";
+
+        document.getElementById('nav-modal-call-btn').href = `tel:${finalPhone}`;
+        
+        const mapQuery = b.address ? `${b.address.houseNo}, ${b.address.city}` : "Panchkula";
+        document.getElementById('nav-modal-google-maps-btn').href = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(mapQuery)}`;
+
+        document.getElementById('widescreen-navigation-modal').classList.remove('hidden');
+        lucide.createIcons();
+    }
+
+    function closeNavigationMapModal() {
+        document.getElementById('widescreen-navigation-modal').classList.add('hidden');
+    }
+
+    async function triggerArrivePatientLocation() {
+        const res = await apiRequest(`/driver/lab/orders/arrive/${MASTER_HK_STORE.selectedBookingId}`, 'PATCH');
+        if(res.success) {
+            alert(`Arrived at patient's location! Verification OTP generated.`);
+            openOrderDetailsPage(MASTER_HK_STORE.selectedBookingId);
+        } else {
+            alert(res.message || "Operation failed");
+        }
+    }
+
+    function triggerSampleOTPVerifyModal() {
+        document.getElementById('otp-verification-modal').classList.remove('hidden');
+    }
+
+    async function submitVerifySampleCollectionOTP() {
+        const o1 = document.getElementById('otp-1').value;
+        const o2 = document.getElementById('otp-2').value;
+        const o3 = document.getElementById('otp-3').value;
+        const o4 = document.getElementById('otp-4').value;
+        const otpCode = `${o1}${o2}${o3}${o4}`;
+
+        const res = await apiRequest('/driver/lab/orders/verify-otp', 'POST', {
+            orderId: MASTER_HK_STORE.selectedBookingId,
+            otp: otpCode
+        });
+
+        if(res.success) {
+            alert("Verification success! Samples collected.");
+            document.getElementById('otp-verification-modal').classList.add('hidden');
+            openOrderDetailsPage(MASTER_HK_STORE.selectedBookingId);
+        } else {
+            alert(res.message || "Incorrect OTP");
+        }
+    }
+
+    function triggerLabDepositInputModal() {
+        document.getElementById('lab-deposit-modal').classList.remove('hidden');
+    }
+
+    async function submitSampleLabDeposit() {
+        const labName = document.getElementById('lab-deposit-input-name').value;
+        const res = await apiRequest(`/driver/lab/orders/deliver-lab/${MASTER_HK_STORE.selectedBookingId}`, 'POST', {
+            labDepositName: labName
+        });
+
+        if(res.success) {
+            alert("Sample deposited and phlebotomist released successfully!");
+            document.getElementById('lab-deposit-modal').classList.add('hidden');
+            navigateTo('home');
+        } else {
+            alert(res.message || "Failed to submit");
+        }
+    }
+
+    // --- 3. DYNAMIC ADD PATIENT HOUSE BOOKINGS ---
+    function setAddDiagGender(gen, btn) {
+        MASTER_HK_STORE.diagGender = gen;
+        document.querySelectorAll('.diag-gender-btn').forEach(b => {
+            b.className = "diag-gender-btn flex-1 py-3.5 font-bold text-xs rounded-xl bg-gray-50 border text-slate-400";
+        });
+        btn.className = "diag-gender-btn flex-1 py-3.5 font-bold text-xs rounded-xl bg-brand text-white shadow-md shadow-brand/20";
+    }
+
+    function switchTrackerSubview(id) {
+        navigateTo(id);
+    }
+
+    async function submitDiagnosticsAtPatientHome() {
+        const name = document.getElementById('add-diag-name').value;
+        const dob = document.getElementById('add-diag-dob').value;
+        const phone = document.getElementById('add-diag-phone').value;
+        const address = document.getElementById('add-diag-address').value;
+        const city = document.getElementById('add-diag-city').value;
+        const pincode = document.getElementById('add-diag-pincode').value;
+
+        if(!name || !phone || !address) {
+            alert("Kripya patient Name, Phone, and Address parameters provide karein!");
+            return;
+        }
+
+        const res = await apiRequest('/driver/lab/orders/create', 'POST', {
+            name, dob, phone, gender: MASTER_HK_STORE.diagGender, address, city, pincode,
+            testsSelected: MASTER_HK_STORE.selectedTestIds,
+            packagesSelected: MASTER_HK_STORE.selectedPackageIds
+        });
+
+        if (res.success) {
+            alert("Fresh home diagnostic booking registered!");
+            MASTER_HK_STORE.selectedTestIds = [];
+            MASTER_HK_STORE.selectedPackageIds = [];
+            document.getElementById('add-diag-selected-summary').classList.add('hidden');
+            
+            document.getElementById('add-diag-name').value = "";
+            document.getElementById('add-diag-phone').value = "";
+            document.getElementById('add-diag-address').value = "";
+            
+            navigateTo('home');
+        } else {
+            alert(res.message || "Booking failed");
+        }
+    }
+
+    // --- 4. SEARCH LISTINGS ---
+    function openAddNewItemsSelectorPanel() {
+        switchTrackerSubview('add-items');
+        syncAvailableDiagnosticItems();
+    }
+
+    function closeAddNewItemsSelectorPanel() {
+        if(MASTER_HK_STORE.selectedBookingId) {
+            openOrderDetailsPage(MASTER_HK_STORE.selectedBookingId);
+        } else {
+            switchTrackerSubview('add-new');
+        }
+    }
+
+    function switchSelectionListType(type, btn) {
+        MASTER_HK_STORE.activeSelectionType = type;
+        document.querySelectorAll('.select-type-btn').forEach(b => {
+            b.className = "select-type-btn flex-1 py-2.5 text-[10px] font-black rounded-xl";
+        });
+        btn.className = "select-type-btn flex-1 py-2.5 text-[10px] font-black rounded-xl bg-white shadow-sm text-gray-800 border";
+        syncAvailableDiagnosticItems();
+    }
+
+    async function syncAvailableDiagnosticItems() {
+        const queryStr = document.getElementById('diag-items-search-input').value;
+        const typePath = MASTER_HK_STORE.activeSelectionType === 'test' ? '/driver/lab/tests' : '/driver/lab/packages';
+        const url = queryStr ? `${typePath}?search=${queryStr}` : typePath;
+        
+        const res = await apiRequest(url);
+        const container = document.getElementById('available-diagnostic-items-list');
+
+        if(res.success && res.data) {
+            if(MASTER_HK_STORE.activeSelectionType === 'test') {
+                container.innerHTML = res.data.map(t => {
+                    const isChecked = MASTER_HK_STORE.selectedTestIds.includes(t._id);
+                    return `
+                        <div onclick="toggleSelectDiagnosticId('${t._id}', 'test')" class="figma-card p-5 border flex justify-between items-center cursor-pointer transition hover:border-brand/20 bg-white">
+                            <div class="flex items-center gap-3">
+                                <div class="w-5 h-5 border-2 rounded flex items-center justify-center transition ${isChecked ? 'bg-brand border-brand text-white' : 'border-gray-300'}">
+                                    ${isChecked ? '✓' : ''}
+                                </div>
+                                <div>
+                                    <h4 class="font-black text-xs text-gray-800 uppercase">${t.testName}</h4>
+                                    <p class="text-[9px] text-gray-400 font-bold uppercase mt-1">${t.sampleType || 'EDTA Whole Blood'}</p>
+                                </div>
+                            </div>
+                            <div class="text-right">
+                                <span class="text-[8px] font-black text-red-500 uppercase bg-red-50 border border-red-100 px-2 py-0.5 rounded-md">${t.discountPercent}% off</span>
+                                <p class="text-sm font-black text-[#00B377] mt-1">₹${t.discountPrice || t.amount}</p>
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+            } else {
+                container.innerHTML = res.data.map(p => {
+                    const isChecked = MASTER_HK_STORE.selectedPackageIds.includes(p._id);
+                    return `
+                        <div onclick="toggleSelectDiagnosticId('${p._id}', 'package')" class="figma-card p-5 border flex justify-between items-center cursor-pointer transition hover:border-brand/20 bg-white">
+                            <div class="flex items-center gap-3">
+                                <div class="w-5 h-5 border-2 rounded flex items-center justify-center transition ${isChecked ? 'bg-brand border-brand text-white' : 'border-gray-300'}">
+                                    ${isChecked ? '✓' : ''}
+                                </div>
+                                <div>
+                                    <h4 class="font-black text-xs text-gray-800 uppercase">${p.packageName}</h4>
+                                    <p class="text-[9px] text-gray-400 font-bold uppercase mt-1">${p.reportTime || '48 Hours Expected'}</p>
+                                </div>
+                            </div>
+                            <div class="text-right">
+                                <span class="text-[8px] font-black text-red-500 uppercase bg-red-50 border border-red-100 px-2 py-0.5 rounded-md">${p.discountPercent}% off</span>
+                                <p class="text-sm font-black text-[#00B377] mt-1">₹${p.offerPrice || p.mrp}</p>
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+            }
+        }
+    }
+
+    function toggleSelectDiagnosticId(id, type) {
+        if(type === 'test') {
+            const idx = MASTER_HK_STORE.selectedTestIds.indexOf(id);
+            if(idx === -1) MASTER_HK_STORE.selectedTestIds.push(id);
+            else MASTER_HK_STORE.selectedTestIds.splice(idx, 1);
+        } else {
+            const idx = MASTER_HK_STORE.selectedPackageIds.indexOf(id);
+            if(idx === -1) MASTER_HK_STORE.selectedPackageIds.push(id);
+            else MASTER_HK_STORE.selectedPackageIds.splice(idx, 1);
+        }
+        syncAvailableDiagnosticItems();
+    }
+
+    async function saveSelectedItemsToSetupCache() {
+        if(MASTER_HK_STORE.selectedBookingId) {
+            const res = await apiRequest(`/driver/lab/orders/add-items/${MASTER_HK_STORE.selectedBookingId}`, 'PATCH', {
+                testIds: MASTER_HK_STORE.selectedTestIds,
+                packageIds: MASTER_HK_STORE.selectedPackageIds
+            });
+            if(res.success) {
+                alert("New items added to booking!");
+                MASTER_HK_STORE.selectedTestIds = [];
+                MASTER_HK_STORE.selectedPackageIds = [];
+                openOrderDetailsPage(MASTER_HK_STORE.selectedBookingId);
+            }
+        } else {
+            const totalCount = MASTER_HK_STORE.selectedTestIds.length + MASTER_HK_STORE.selectedPackageIds.length;
+            document.getElementById('add-diag-selected-summary-count').innerText = totalCount;
+            document.getElementById('add-diag-selected-summary').classList.remove('hidden');
+            switchTrackerSubview('add-new');
+        }
+    }
+
+    // --- 5. DOORSTEP PAYMENT PATHS ---
+    async function triggerDynamicPaymentModal() {
+        const res = await apiRequest(`/driver/lab/orders/detail/${MASTER_HK_STORE.selectedBookingId}`);
+        if(res.success && res.data) {
+            document.getElementById('payment-modal-amount').innerText = `₹${res.data.totalPrice}`;
+            document.getElementById('doorstep-payment-modal').classList.remove('hidden');
+            lucide.createIcons();
+        }
+    }
+
+    function toggleDoorstepPaymentModal() {
+        document.getElementById('doorstep-payment-modal').classList.add('hidden');
+    }
+
+    async function triggerDoorstepRazorpayQRFlow() {
+        const orderRes = await apiRequest(`/driver/lab/orders/doorstep-payment/${MASTER_HK_STORE.selectedBookingId}`, 'POST');
+        if(orderRes.success) {
+            alert(`QR Code generated for Razorpay Order: ${orderRes.orderId}.\nProceeding to verify dynamic payment payload...`);
+            
+            const verifyRes = await apiRequest(`/driver/lab/orders/verify-doorstep-payment/${MASTER_HK_STORE.selectedBookingId}`, 'POST', {
+                razorpay_order_id: orderRes.orderId,
+                razorpay_payment_id: "pay_OkWL9dka92jd82", 
+                razorpay_signature: "5285785a6a685c2763265893d9" 
+            });
+
+            if(verifyRes.success) {
+                alert("Doorstep QR Payment captured and verified successfully!");
+                toggleDoorstepPaymentModal();
+                openOrderDetailsPage(MASTER_HK_STORE.selectedBookingId);
+            }
+        } else {
+            alert(orderRes.message || "Failed to create payment order");
+        }
+    }
+
+    async function triggerCashCollectionFlow() {
+        const res = await apiRequest(`/driver/lab/orders/collect-cash/${MASTER_HK_STORE.selectedBookingId}`, 'POST');
+        if(res.success) {
+            alert("Cash payment collected and marked Paid!");
+            toggleDoorstepPaymentModal();
+            openOrderDetailsPage(MASTER_HK_STORE.selectedBookingId);
+        } else {
+            alert(res.message || "Cash collection failed");
+        }
+    }
+
+    // --- 6. HISTORY, LEGAL DOCUMENTS DRAWER ---
+    async function syncHistory() {
+        const res = await apiRequest('/driver/lab/orders/history');
+        if(res.success) {
+            document.getElementById('history-total-orders-count').innerText = `${res.totalOrders} Orders`;
+            const container = document.getElementById('history-bookings-list');
+            
+            if(container) {
+                if(!res.data || res.data.length === 0) {
+                    container.innerHTML = `
+                        <div class="text-center py-10 bg-white border border-dashed rounded-[28px] p-6 col-span-2 shadow-sm border-dashed">
+                            <p class="text-slate-400 font-bold text-xs uppercase">No historical logs recorded</p>
+                        </div>
+                    `;
+                } else {
+                    container.innerHTML = res.data.map(item => `
+                        <div class="figma-card p-6 border space-y-4">
+                            <div class="flex justify-between items-center">
+                                <h4 class="text-[9px] font-black uppercase text-gray-400">Order Reference</h4>
+                                <span class="text-[8px] font-black px-2.5 py-1 rounded bg-[#E6F7F1] text-brand border border-brand/10 uppercase">${item.status}</span>
+                            </div>
+                            <div class="grid grid-cols-2 gap-y-3.5 text-xs font-bold text-gray-400 pt-2 border-t border-dashed">
+                                <div>Patient Name:</div><div class="text-gray-800 text-right">${item.patientName}</div>
+                                <div>Order ID:</div><div class="text-gray-800 text-right">${item.orderId}</div>
+                                <div>Mobile No:</div><div class="text-gray-800 text-right">${item.mobileNo}</div>
+                                <div>Location:</div><div class="text-gray-800 text-right text-[10px] truncate max-w-[150px] leading-tight">${item.location}</div>
+                                <div>Date:</div><div class="text-gray-800 text-right">${item.date}</div>
+                                <div>Time:</div><div class="text-gray-800 text-right">${item.time}</div>
+                            </div>
+                        </div>
+                    `).join('');
+                }
+            }
+        }
+    }
+
+    async function syncTerms() {
+        const res = await apiRequest('/driver/lab/terms');
+        if (res.success) {
+            document.getElementById('terms-content-box').innerText = res.content;
+        }
+    }
+
+    async function syncAbout() {
+        const res = await apiRequest('/driver/lab/about');
+        if (res.success) {
+            document.getElementById('about-content-box').innerText = res.content;
+        }
+    }
+
+    function triggerAddFamilyMemberPopup() {
+        document.getElementById('add-family-popup-modal').classList.remove('hidden');
+    }
+
+    async function submitFamilyMemberLogAction() {
+        const name = document.getElementById('m-family-name-input').value;
+        const age = parseInt(document.getElementById('m-family-age-input').value);
+        const gender = document.getElementById('m-family-gender-input').value;
+
+        if(!name || isNaN(age)) {
+            alert("Kripya family member detail complete karein");
+            return;
+        }
+
+        const res = await apiRequest(`/driver/lab/orders/add-family/${MASTER_HK_STORE.selectedBookingId}`, 'POST', {
+            familyList: [{ name, age, gender, relation: "Family" }]
+        });
+
+        if (res.success) {
+            alert("Family member added. Price recalculated.");
+            document.getElementById('add-family-popup-modal').classList.add('hidden');
+            
+            document.getElementById('m-family-name-input').value = "";
+            document.getElementById('m-family-age-input').value = "";
+            
+            openOrderDetailsPage(MASTER_HK_STORE.selectedBookingId);
+        } else {
+            alert("Operation failed: " + res.message);
+        }
+    }
+
+    function triggerAdminSupportPopup() {
+        document.getElementById('admin-support-modal').classList.remove('hidden');
+        lucide.createIcons();
+    }
+
+    function toggleAdminSupportModal() {
+        document.getElementById('admin-support-modal').classList.add('hidden');
+    }
+
+    function triggerLogoutConfirmModal() {
+        toggleAppSidebar();
+        document.getElementById('logout-confirm-modal').classList.remove('hidden');
+        lucide.createIcons();
+    }
+
+    function toggleLogoutModal() {
+        document.getElementById('logout-confirm-modal').classList.add('hidden');
+    }
+
+    function executeLogoutAction() {
+        localStorage.removeItem('token');
+        alert("Logout successful!");
+        toggleLogoutModal();
+        location.reload();
+    }
+
+    // Default startup initialization
+    syncHome();
+</script>
+</body>
+</html>
+
