@@ -272,7 +272,8 @@ const resetPassword = async (req, res) => {
 // endpoint: GET /api/auth/user/profile
 const getUserProfile = async (req, res) => {
     try {
-        const user = await User.findById(req.user.id).select('-password');
+        const user = await User.findById(req.user.id).select('-password -emergencyContact -userAddress -familyMember')
+        ;
 
         if (!user) {
             return res.status(404).json({ success: false, message: 'User not found' });
@@ -649,6 +650,62 @@ const getAddressList = async (req, res) => {
         res.json({ success: true, data: user.userAddress });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
+
+// --- UPDATE ADDRESS ---
+// endpoint: PUT /api/auth/user/update-address/:itemId
+const updateToUserAddress = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const { itemId } = req.params;
+        const { 
+            name, addressType, phone, pincode, 
+            houseNo, sector, landmark, city, state, country, isDefault 
+        } = req.body;
+
+        const user = await User.findById(userId);
+        if (!user) {
+            return res.status(404).json({ success: false, message: "User not found" });
+        }
+
+        // Locate the target sub-document within the userAddress array
+        const address = user.userAddress.id(itemId);
+        if (!address) {
+            return res.status(404).json({ success: false, message: "Address not found" });
+        }
+
+        // Manage default toggling logic if isDefault is updated
+        if (isDefault === true || isDefault === 'true') {
+            user.userAddress.forEach(addr => addr.isDefault = false);
+            address.isDefault = true;
+        } else if (isDefault === false || isDefault === 'false') {
+            address.isDefault = false;
+        }
+
+        // Apply field updates safely
+        if (name !== undefined) address.name = name;
+        if (addressType !== undefined) address.addressType = addressType;
+        if (phone !== undefined) address.phone = phone;
+        if (pincode !== undefined) address.pincode = pincode;
+        if (houseNo !== undefined) address.houseNo = houseNo;
+        if (sector !== undefined) address.sector = sector;
+        if (landmark !== undefined) address.landmark = landmark;
+        if (city !== undefined) address.city = city;
+        if (state !== undefined) address.state = state;
+        if (country !== undefined) address.country = country;
+
+        await user.save();
+
+        res.status(200).json({ 
+            success: true, 
+            message: "Address updated successfully", 
+            data: address 
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
 
 // --- GET EMERGENCY CONTACTS LIST ---
 // endpoint: GET /api/auth/user/emergency-contacts
@@ -1094,5 +1151,6 @@ module.exports = {
     getEmergencyList,
     removeAddress,
     removeEmergency,
-    getUserDashboard
+    getUserDashboard,
+    updateToUserAddress
 };

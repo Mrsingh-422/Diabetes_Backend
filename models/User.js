@@ -136,8 +136,7 @@ const userSchema = new mongoose.Schema({
     profileStatus: { type: String, default: 'Approved' },
 
     healthLockerPin: { type: String, select: false }, // 4-6 Digit PIN
-    referralCode: { type: String, unique: true },     // User's unique code
-    // --- OTP Fields for Forgot Password ---
+    referralCode: { type: String, unique: true, sparse: true },    // --- OTP Fields for Forgot Password ---
     resetPasswordOtp: { type: String, select: false },
     resetPasswordExpires: { type: Date, select: false },
     token: {
