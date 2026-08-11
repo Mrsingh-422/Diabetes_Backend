@@ -2,8 +2,8 @@ const Driver = require('../../../models/Driver');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 
-// Register Driver
-// 
+// Register Driver of Lab, Pharmacy, or Food Vendor
+
 const registerDriver = async (req, res) => {
     try {
         const vendorId = req.user.id; 
