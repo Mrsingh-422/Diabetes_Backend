@@ -20,23 +20,31 @@ const docFileFilter = (req, file, cb) => {
 };
 
 // ==========================================
-// 2. HOSPITAL CONFIGURATION
+// 2. CLINIC CONFIGURATION (Replaced hospitalUploads)
 // ==========================================
-const hospitalDir = 'public/uploads/hospitals';
-ensureDir(hospitalDir);
-const hospitalUploads = multer({
+const clinicDir = 'public/uploads/clinics';
+ensureDir(clinicDir);
+
+const clinicUploads = multer({
     storage: multer.diskStorage({
-        destination: (req, file, cb) => cb(null, hospitalDir),
-        filename: (req, file, cb) => cb(null, `hospital-${Date.now()}${path.extname(file.originalname)}`)
+        destination: (req, file, cb) => cb(null, clinicDir),
+        filename: (req, file, cb) => cb(null, `clinic-${Date.now()}${path.extname(file.originalname)}`)
     }),
     fileFilter: docFileFilter,
-    limits: { fileSize: 5 * 1024 * 1024 }
+    limits: { fileSize: 5 * 1024 * 1024 } // 5MB limit per file
 }).fields([
-    { name: 'hospitalImage', maxCount: 5 },
-    { name: 'licenseDocument', maxCount: 5 },
-    { name: 'otherDocuments', maxCount: 10 }
+    // Humne saare possible clinic files fields ko define kar diya hai taaki unexpected field error kabhi na aaye:
+    { name: 'image', maxCount: 1 },                 // Profile Image
+    { name: 'posterimage', maxCount: 1 },           // Poster Image
+    { name: 'certificateImage', maxCount: 1 },      // Certificate Image (Figma: Registration Certificate)
+    { name: 'licenceCertificate', maxCount: 1 },    // Licence Certificate (Figma: Licence Certificate)
+    { name: 'clinicImages', maxCount: 10 },         // Figma: Clinic Photos (Max 10)
+    { name: 'achievementImages', maxCount: 10 },    // Figma: Achievement Images (Max 10)
+    
+    // Safety ke liye niche ke fields bhi rehne diye hain agar kabhi use ho skein:
+    { name: 'licenseDocument', maxCount: 5 },  
+    { name: 'otherDocuments', maxCount: 10 }   
 ]);
-
 // ==========================================
 // 3. DOCTOR CONFIGURATION
 // ==========================================
@@ -1044,8 +1052,29 @@ const aboutUsUploads = multer({
     { name: 'image', maxCount: 1 } // Support for single upload route
 ]);
 
+// ==========================================
+// 6. FOOD CONFIGURATION (Replaced nurseDocUploads) - [1]
+// ==========================================
+const foodDir = 'public/uploads/foods';
+ensureDir(foodDir);
+
+const foodDocUploads = multer({
+    storage: multer.diskStorage({
+        destination: (req, file, cb) => cb(null, foodDir),
+        filename: (req, file, cb) => cb(null, `food-${Date.now()}${path.extname(file.originalname)}`)
+    }),
+    fileFilter: docFileFilter,
+    limits: { fileSize: 5 * 1024 * 1024 }
+}).fields([
+    { name: 'profileImage', maxCount: 1 },
+    { name: 'kitchenImages', maxCount: 10 },        // Figma: Kitchen image uploads
+    { name: 'fssaiCertificates', maxCount: 10 },    // FSSAI license image uploads
+    { name: 'gstCertificates', maxCount: 5 },       // GST Certificate
+    { name: 'otherCertificates', maxCount: 10 }     // Other auxiliary documents
+]);
+
 module.exports = { 
-    hospitalUploads,
+    clinicUploads,
     contentUploads,
     doctorDocUploads,
     userReportUploads,
@@ -1092,5 +1121,6 @@ module.exports = {
     nursingPrescriptionUploads,
     labReportUpload,
     docPrescriptionUpload,hospitalPrescriptionUploads,hospitalDischargeFieldsUpload,blogUploads,
-    videoUploads,videoUpdateUploads ,footerUploads,aboutUsUploads
+    videoUploads,videoUpdateUploads ,footerUploads,aboutUsUploads,
+    foodDocUploads
 };  

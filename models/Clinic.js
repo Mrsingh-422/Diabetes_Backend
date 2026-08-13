@@ -8,7 +8,7 @@ const clinicSchema = new Schema(
     },
     image: {
       type: String,
-      default: null, // Unified default as null matching Pharmacy/Lab models
+      default: null,
     },
     posterimage: {
       type: String,
@@ -18,10 +18,8 @@ const clinicSchema = new Schema(
       type: String,
       default: "",
     },
-    phoneNumber: {
-      type: String,
-      default: "",
-    },
+    phoneNumber: { type: String, unique: true, sparse: true },
+
     alternatePhoneNumber: {
       type: String,
       default: "",
@@ -58,7 +56,14 @@ const clinicSchema = new Schema(
       type: String,
       default: "",
     },
-    licenceNumber: {
+
+    
+    // 👈 1. ADDED EXTRA KEYS REQUESTED BY YOU
+    licenseNumber: {
+      type: String,
+      default: "",
+    },
+    councilName: {
       type: String,
       default: "",
     },
@@ -66,6 +71,7 @@ const clinicSchema = new Schema(
       type: String,
       default: "",
     },
+    
     clinicName: {
       type: String,
       default: "",
@@ -74,17 +80,13 @@ const clinicSchema = new Schema(
       type: String,
       default: "",
     },
-    // Updated to use the professional enum pattern
     CertificateStatus: {
       type: String,
       enum: ['Incomplete', 'Pending', 'Approved', 'Rejected'],
       default: 'Incomplete'
     },
-    licenceCertificate: {
-      type: String,
-      default: "",
-    },
-    // Updated to use the professional enum pattern
+    licenseDocument: [{ type: String }], // Array as seen in DB document
+    otherDocuments: [{ type: String }], 
     licenceCertificateStatus: {
       type: String,
       enum: ['Incomplete', 'Pending', 'Approved', 'Rejected'],
@@ -107,7 +109,8 @@ const clinicSchema = new Schema(
       type: String,
       default: "",
     },
-    // Aligned to act as the global profile status
+    
+    // Kept original Accountverify
     Accountverify: {
       type: String,
       enum: ['Incomplete', 'Pending', 'Approved', 'Rejected'],
@@ -118,10 +121,8 @@ const clinicSchema = new Schema(
       ref: "ConsultationFees",
       default: null,
     },
-    rejectReason: {
-      type: String,
-      default: "",
-    },
+    rejectionReason: { type: String, default: null }, // 🚨 Database se matched rejection field
+
     regId: {
       type: String,
       default: "",
@@ -129,6 +130,14 @@ const clinicSchema = new Schema(
     chatStatus: {
       type: String,
       default: ""
+    },
+    isActive: {
+      type: Boolean,
+      default: true
+    },
+    isOnline: {
+      type: Boolean,
+      default: true
     },
     location: {
       type: {
@@ -138,7 +147,7 @@ const clinicSchema = new Schema(
         default: 'Point',
       },
       coordinates: {
-        type: [Number], // [longitude, latitude]
+        type: [Number],
         required: true,
         default: [0, 0],
         validate: {
@@ -175,7 +184,7 @@ const clinicSchema = new Schema(
         default: null,
       },
     ],
-    About: {
+    About: { // Kept original About
       type: String,
       default: ""
     },

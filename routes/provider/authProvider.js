@@ -1,19 +1,15 @@
+// routes/provider/authProvider.js
+
 const express = require('express');
 const router = express.Router();
 const { protect } = require('../../middleware/authMiddleware');
-const { labDocUploads, pharmacyDocUploads,   } = require('../../middleware/multer'); // Multer import
-
+const { labDocUploads, pharmacyDocUploads, foodDocUploads } = require('../../middleware/multer'); // 🚀 Imported foodDocUploads instead of nurseDocUploads
 const { 
     registerProvider, 
-    loginProvider, 
-    toggleProviderOnlineStatus,
-    uploadLabDocs, 
-    uploadPharmacyDocs, 
-    uploadFoodDocs, // <-- Now cleanly imported!
-    forgotPasswordProvider, 
-    resetPasswordProvider, 
-    getProviderProfile 
-} = require('../../controllers/provider/authProvider.js'); // Fixed Broken Destructuring
+    loginProvider, toggleProviderOnlineStatus,
+    uploadLabDocs, uploadPharmacyDocs, uploadFoodDocs, // 🚀 Imported uploadFoodDocs instead of uploadNurseDocs
+    forgotPasswordProvider, resetPasswordProvider ,getProviderProfile
+} = require('../../controllers/provider/authProvider.js');
 
 // Base route: /api/auth/provider
 
@@ -30,12 +26,10 @@ router.post('/reset-password', resetPasswordProvider);
 // 3. Step 3: Complete Profile (Upload Documents)
 // Lab
 router.put('/upload-docs/lab', protect('lab'), labDocUploads, uploadLabDocs);
-
 // Pharmacy
 router.put('/upload-docs/pharmacy', protect('pharmacy'), pharmacyDocUploads, uploadPharmacyDocs);
-
-// Food (Added as per request)
-// router.put('/upload-docs/food', protect('food'), foodDocUploads, uploadFoodDocs);
+// Food
+router.put('/upload-docs/food', protect('food'), foodDocUploads, uploadFoodDocs); // 🚀 Replaced nurse with food upload route
 
 // 4. Get Profile (For Dashboard)
 router.get('/profile', protect('provider'), getProviderProfile);

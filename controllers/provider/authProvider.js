@@ -1,32 +1,29 @@
+// controllers/provider/authProvider.js
+
 const Lab = require('../../models/Lab');
 const Pharmacy = require('../../models/Pharmacy');
-const Food = require('../../models/Food'); // <-- Imported as 'Food' exactly as requested
-
+const Food = require('../../models/Food'); // 🚀 Imported Food instead of Nurse
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto'); 
 const sendEmailOTP = require('../../utils/emailService'); 
 const { deleteFile } = require('../../utils/fileHandler');
 
-// Helper: Token Generation (Lifetime for Dev, 30d for Prod)
+// Helper: Token Generation
 const generateToken = (id, role) => {
     const expiry = process.env.NODE_ENV === 'development' ? '36500d' : '30d';
     return jwt.sign({ id, role }, process.env.JWT_SECRET, { expiresIn: expiry });
 };
 
-// Helper: Category to Model Mapping
+// Helper: Category to Model Mapping (Nurse replaced with Food)
 const getModelByCategory = (category) => {
-    const map = { 
-        'Lab': Lab, 
-        'Pharmacy': Pharmacy,
-        'Food': Food // <-- Food mapped
-    };
+    const map = { 'Lab': Lab, 'Pharmacy': Pharmacy, 'Food': Food };
     return map[category];
 };
 
 // Helper: Global Duplicate Check
 const checkGlobalExists = async (query) => {
-    const models = [Lab, Pharmacy, Food]; // Food Added
+    const models = [Lab, Pharmacy, Food];
     for (let Model of models) {
         const exists = await Model.findOne(query);
         if (exists) return true;
@@ -34,15 +31,13 @@ const checkGlobalExists = async (query) => {
     return false;
 };
 
-// ==========================================
-// 1. REGISTER PROVIDER
-// ==========================================
+// --- 1. REGISTER PROVIDER (Unified API) ---
 const registerProvider = async (req, res) => {
     try {
         const { name, email, phone, password, category, country, state, city } = req.body;
 
         const Model = getModelByCategory(category);
-        if (!Model) return res.status(400).json({ message: "Invalid category. Choose Lab, Pharmacy, or Food" });
+        if (!Model) return res.status(400).json({ message: "Invalid category. Choose Lab, Pharmacy or Food." });
 
         const isDuplicate = await checkGlobalExists({ $or: [{ email: email?.toLowerCase() }, { phone }] });
         if (isDuplicate) return res.status(400).json({ message: 'Email or Phone already registered' });
@@ -76,9 +71,7 @@ const registerProvider = async (req, res) => {
     }
 };
 
-// ==========================================
-// 2. LOGIN PROVIDER
-// ==========================================
+// --- 2. LOGIN PROVIDER ---
 const loginProvider = async (req, res) => {
     try {
         const { email, phone, password, category } = req.body;
@@ -169,9 +162,7 @@ const loginProvider = async (req, res) => {
     }
 };
 
-// ==========================================
-// 3. STATUS TOGGLE API
-// ==========================================
+// --- 3. TOGGLE ONLINE STATUS ---
 const toggleProviderOnlineStatus = async (req, res) => {
     try {
         const { isOnline } = req.body;
@@ -202,9 +193,7 @@ const toggleProviderOnlineStatus = async (req, res) => {
     }
 };
 
-// ==========================================
-// 4. SEPARATE UPLOAD DOCS: LAB
-// ==========================================
+// --- 4. UPLOAD DOCS: LAB ---
 const uploadLabDocs = async (req, res) => {
     try {
         const labId = req.user.id;
@@ -212,9 +201,7 @@ const uploadLabDocs = async (req, res) => {
         const files = req.files;
 
         const existingLab = await Lab.findById(labId);
-        if (!existingLab) {
-            return res.status(404).json({ success: false, message: "Lab not found." });
-        }
+        if (!existingLab) return res.status(404).json({ success: false, message: "Lab not found." });
 
         const documentsObj = {
             documentState,
@@ -235,17 +222,11 @@ const uploadLabDocs = async (req, res) => {
         }
 
         if (existingLab.documents) {
-            const documentFields = [
-                'labImages', 'labCertificates', 'labLicenses', 
-                'gstCertificates', 'drugLicenses', 'otherCertificates'
-            ];
-
+            const documentFields = ['labImages', 'labCertificates', 'labLicenses', 'gstCertificates', 'drugLicenses', 'otherCertificates'];
             documentFields.forEach(field => {
                 const oldFileList = existingLab.documents[field];
                 if (Array.isArray(oldFileList)) {
-                    oldFileList.forEach(filePath => {
-                        if (filePath) deleteFile(filePath);
-                    });
+                    oldFileList.forEach(filePath => { if (filePath) deleteFile(filePath); });
                 }
             });
         }
@@ -270,9 +251,7 @@ const uploadLabDocs = async (req, res) => {
     }
 };
 
-// ==========================================
-// 5. SEPARATE UPLOAD DOCS: PHARMACY
-// ==========================================
+// --- 5. UPLOAD DOCS: PHARMACY ---
 const uploadPharmacyDocs = async (req, res) => {
     try {
         const pharmacyId = req.user.id;
@@ -280,9 +259,7 @@ const uploadPharmacyDocs = async (req, res) => {
         const files = req.files;
 
         const existingPharmacy = await Pharmacy.findById(pharmacyId);
-        if (!existingPharmacy) {
-            return res.status(404).json({ success: false, message: "Pharmacy not found." });
-        }
+        if (!existingPharmacy) return res.status(404).json({ success: false, message: "Pharmacy not found." });
 
         const documentsObj = {
             documentState,
@@ -302,17 +279,11 @@ const uploadPharmacyDocs = async (req, res) => {
         }
 
         if (existingPharmacy.documents) {
-            const documentFields = [
-                'pharmacyImages', 'pharmacyCertificates', 'pharmacyLicenses', 
-                'gstCertificates', 'drugLicenses', 'otherCertificates'
-            ];
-
+            const documentFields = ['pharmacyImages', 'pharmacyCertificates', 'pharmacyLicenses', 'gstCertificates', 'drugLicenses', 'otherCertificates'];
             documentFields.forEach(field => {
                 const oldFileList = existingPharmacy.documents[field];
                 if (Array.isArray(oldFileList)) {
-                    oldFileList.forEach(filePath => {
-                        if (filePath) deleteFile(filePath);
-                    });
+                    oldFileList.forEach(filePath => { if (filePath) deleteFile(filePath); });
                 }
             });
         }
@@ -333,40 +304,29 @@ const uploadPharmacyDocs = async (req, res) => {
             { new: true, runValidators: true }
         );
 
-        res.json({ success: true, message: "Pharmacy documents submitted for review.", data: updatedPharmacy });
+        res.json({ success: true, message: "Pharmacy documents submitted.", data: updatedPharmacy });
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
 };
 
-// ==========================================
-// 6. SEPARATE UPLOAD DOCS: FOOD (Added Newly for Food Flow)
-// ==========================================
+// --- 6. UPLOAD DOCS: FOOD (Replaced uploadNurseDocs) ---
 const uploadFoodDocs = async (req, res) => {
     try {
         const foodId = req.user.id;
-        const { 
-            documentState, issuingAuthority, gstNumber, foodLicenseType, foodLicenseNumber, foodLicenseExpiry,
-            about, businessType, dietaryPreference, cuisines, isDeliveryAvailable, isDineInAvailable,
-            isTakeawayAvailable, isPureVeg, isHalalCertified, is24x7, deliveryRadiusKm, minOrderAmount,
-            averageCostForTwo, packagingCharges 
-        } = req.body;
+        const { documentState, issuingAuthority, gstNumber, about, fssaiNumber } = req.body;
         const files = req.files;
 
         const existingFood = await Food.findById(foodId);
-        if (!existingFood) {
-            return res.status(404).json({ success: false, message: "Food business partner not found." });
-        }
+        if (!existingFood) return res.status(404).json({ success: false, message: "Food partner not found." });
 
         const documentsObj = {
             documentState,
             issuingAuthority,
             gstNumber,
-            foodLicenseType,
-            foodLicenseNumber,
-            foodLicenseExpiry: foodLicenseExpiry ? new Date(foodLicenseExpiry) : null,
-            outletImages: files?.outletImages ? files.outletImages.map(f => f.path) : [],
-            foodSafetyCertificates: files?.foodSafetyCertificates ? files.foodSafetyCertificates.map(f => f.path) : [],
+            fssaiNumber,
+            kitchenImages: files?.kitchenImages ? files.kitchenImages.map(f => f.path) : [],
+            fssaiCertificates: files?.fssaiCertificates ? files.fssaiCertificates.map(f => f.path) : [],
             gstCertificates: files?.gstCertificates ? files.gstCertificates.map(f => f.path) : [],
             otherCertificates: files?.otherCertificates ? files.otherCertificates.map(f => f.path) : []
         };
@@ -374,29 +334,15 @@ const uploadFoodDocs = async (req, res) => {
         if (files?.profileImage && existingFood.profileImage) {
             deleteFile(existingFood.profileImage);
         }
-        if (files?.bannerImage && existingFood.bannerImage) {
-            deleteFile(existingFood.bannerImage);
-        }
 
         if (existingFood.documents) {
-            const documentFields = ['outletImages', 'foodSafetyCertificates', 'gstCertificates', 'otherCertificates'];
+            const documentFields = ['kitchenImages', 'fssaiCertificates', 'gstCertificates', 'otherCertificates'];
             documentFields.forEach(field => {
                 const oldFileList = existingFood.documents[field];
                 if (Array.isArray(oldFileList)) {
-                    oldFileList.forEach(filePath => {
-                        if (filePath) deleteFile(filePath);
-                    });
+                    oldFileList.forEach(filePath => { if (filePath) deleteFile(filePath); });
                 }
             });
-        }
-
-        let parsedDietary = dietaryPreference;
-        if (typeof dietaryPreference === 'string') {
-            try { parsedDietary = JSON.parse(dietaryPreference); } catch(e) {}
-        }
-        let parsedCuisines = cuisines;
-        if (typeof cuisines === 'string') {
-            try { parsedCuisines = JSON.parse(cuisines); } catch(e) {}
         }
 
         const updatedFood = await Food.findByIdAndUpdate(
@@ -404,36 +350,21 @@ const uploadFoodDocs = async (req, res) => {
             { 
                 $set: { 
                     about,
-                    businessType,
-                    dietaryPreference: parsedDietary,
-                    cuisines: parsedCuisines,
-                    isDeliveryAvailable,
-                    isDineInAvailable,
-                    isTakeawayAvailable,
-                    isPureVeg,
-                    isHalalCertified,
-                    is24x7,
-                    deliveryRadiusKm,
-                    minOrderAmount,
-                    averageCostForTwo,
-                    packagingCharges,
                     profileStatus: 'Pending',
                     rejectionReason: null,
-                    documents: documentsObj,
-                    ...(files?.profileImage && { profileImage: files.profileImage[0].path }),
-                    ...(files?.bannerImage && { bannerImage: files.bannerImage[0].path })
+                    documents: documentsObj, 
+                    ...(files?.profileImage && { profileImage: files.profileImage[0].path })
                 } 
             }, 
             { new: true, runValidators: true }
         );
 
-        res.json({ success: true, message: "Food business documents submitted for review.", data: updatedFood });
+        res.json({ success: true, message: "Food documents submitted for review.", data: updatedFood });
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
 };
 
-// Helper to find provider across any model by Email
 const findProviderByEmail = async (email) => {
     const models = [Lab, Pharmacy, Food];
     for (let Model of models) {
@@ -443,16 +374,13 @@ const findProviderByEmail = async (email) => {
     return null;
 };
 
-// ==========================================
-// FORGOT PASSWORD
-// ==========================================
+// --- FORGOT PASSWORD ---
 const forgotPasswordProvider = async (req, res) => {
     try {
         const { email } = req.body;
         const result = await findProviderByEmail(email);
 
         if (!result) return res.status(404).json({ message: 'Provider not found' });
-
         const { provider } = result;
 
         let otp = process.env.NODE_ENV === 'development' ? '1111' : Math.floor(100000 + Math.random() * 900000).toString();
@@ -469,9 +397,7 @@ const forgotPasswordProvider = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// ==========================================
-// RESET PASSWORD
-// ==========================================
+// --- RESET PASSWORD ---
 const resetPasswordProvider = async (req, res) => {
     try {
         const { email, otp, newPassword } = req.body;
@@ -493,9 +419,7 @@ const resetPasswordProvider = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// ==========================================
-// 7. GET PROVIDER PROFILE
-// ==========================================
+// --- GET PROVIDER PROFILE ---
 const getProviderProfile = async (req, res) => {
     try {
         const { id, role } = req.user; 
@@ -504,13 +428,9 @@ const getProviderProfile = async (req, res) => {
         if (!Model) return res.status(400).json({ message: "Invalid Provider Role" });
 
         const profile = await Model.findById(id);
-
         if (!profile) return res.status(404).json({ message: "Profile not found" });
 
-        res.json({ 
-            success: true, 
-            data: profile 
-        });
+        res.json({ success: true, data: profile });
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
@@ -518,10 +438,11 @@ const getProviderProfile = async (req, res) => {
 
 module.exports = { 
     registerProvider, 
-    loginProvider, toggleProviderOnlineStatus,
+    loginProvider, 
+    toggleProviderOnlineStatus,
     uploadLabDocs, 
     uploadPharmacyDocs, 
-    uploadFoodDocs, // <-- Exported
+    uploadFoodDocs, // 🚀 Updated
     forgotPasswordProvider, 
     resetPasswordProvider, 
     getProviderProfile 

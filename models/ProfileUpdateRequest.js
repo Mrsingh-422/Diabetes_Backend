@@ -8,7 +8,7 @@ const profileUpdateRequestSchema = new mongoose.Schema({
     },
     vendorModel: { 
         type: String, 
-        enum: [ 'Doctor', 'Food', 'Pharmacy', 'Lab', 'Ambulance', 'Driver','PoliceHQ', 'FireHQ'  ], 
+        enum: [ 'Doctor', 'Food', 'Pharmacy', 'Lab', 'Ambulance', 'Driver', 'Clinic' ], 
         required: true 
     },
     updatedFields: { 

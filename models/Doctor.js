@@ -1,13 +1,13 @@
 const mongoose = require('mongoose');
 
 const doctorSchema = new mongoose.Schema({
-    hospitalId: { type: mongoose.Schema.Types.ObjectId, ref: 'Hospital', default: null },
+    clinicId: { type: mongoose.Schema.Types.ObjectId, ref: 'Clinic', default: null },
     name: { type: String, required: true },
     email: { type: String, unique: true, sparse: true, lowercase: true },
     countryCode: { type: String, default: null },
     phone: { type: String, unique: true, sparse: true },
     password: { type: String, required: true, select: false },
-    role: { type: String, enum: ['doctor', 'hospital-doctor'], default: 'doctor' },
+    role: { type: String, enum: ['doctor', 'clinic-doctor'], default: 'doctor' },
 
     // Location
     country: { type: String, default: null },
@@ -15,20 +15,13 @@ const doctorSchema = new mongoose.Schema({
     city: { type: String, default: null },
     address: { type: String, default: null },
 
-    dutyStatus: { type: String, enum: ['On Duty', 'Off Duty', 'On Leave', 'Busy'], default: 'Off Duty' }, // For hospital doctors to toggle availability for appointments
-    // Verification & Auth
+    dutyStatus: { type: String, enum: ['On Duty', 'Off Duty', 'On Leave', 'Busy'], default: 'Off Duty' },
     isPhoneVerified: { type: Boolean, default: false },
     resetOTP: { type: String, default: null },
     token: { type: String, default: null },
-    fcmToken: {
-        type: String,
-        default: null
-    },
+    fcmToken: { type: String, default: null },
     isActive: { type: Boolean, default: true },
-    isOnline: {
-        type: Boolean,
-        default: true
-    },
+    isOnline: { type: Boolean, default: true },
     alternatePhone: { type: String, default: null },
 
     // Professional Info
@@ -39,13 +32,12 @@ const doctorSchema = new mongoose.Schema({
     councilName: { type: String, default: null },
     about: { type: String, default: null },
     experienceYears: { type: Number, default: 0 },
-    languages: [{ type: String }], // Figma: Speaks (English, Hindi, etc.)
+    languages: [{ type: String }],
 
-    // --- Figma: Select Consultation Type & Fees ---
     fees: {
-        online: { type: Number, default: 0 }, // Video Consult
-        clinic: { type: Number, default: 0 }, // Clinic Visit
-        home: { type: Number, default: 0 }    // Home Visit
+        online: { type: Number, default: 0 },
+        clinic: { type: Number, default: 0 },
+        home: { type: Number, default: 0 }
     },
     consultationStatus: {
         online: { type: Boolean, default: true },
@@ -57,18 +49,17 @@ const doctorSchema = new mongoose.Schema({
         lng: { type: Number, default: 0 }
     },
 
-    // --- Figma: Dynamic Slot Management ---
-    slotDuration: { type: Number, default: 30 }, // 30 mins per patient
+    slotDuration: { type: Number, default: 30 },
     availability: [{
         day: { type: String, enum: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] },
-        startTime: String, // "09:00"
-        endTime: String,   // "18:00"
+        startTime: String,
+        endTime: String,
         isLiveTrackingAvailable: { type: Boolean, default: false }
     }],
-    treatedConditions: [{ type: String }], // Figma: "I can help you with"
-    competencies: [{ type: String }],      // Figma: "Competencies"
+    treatedConditions: [{ type: String }],
+    competencies: [{ type: String }],
 
-    // System Stats
+    // Stats
     averageRating: { type: Number, default: 0 },
     totalReviews: { type: Number, default: 0 },
     profileImage: { type: String, default: null },
@@ -90,7 +81,6 @@ const doctorSchema = new mongoose.Schema({
         upiId: { type: String, default: "" },
         isVerified: { type: Boolean, default: false }
     }
-
 }, { timestamps: true });
 
 module.exports = mongoose.model('Doctor', doctorSchema);

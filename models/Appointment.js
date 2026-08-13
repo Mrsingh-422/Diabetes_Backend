@@ -4,7 +4,7 @@ const mongoose = require('mongoose');
 const appointmentSchema = new mongoose.Schema({
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     doctorId: { type: mongoose.Schema.Types.ObjectId, ref: 'Doctor' },
-    hospitalId: { type: mongoose.Schema.Types.ObjectId, ref: 'Hospital', default: null },
+    clinicId: { type: mongoose.Schema.Types.ObjectId, ref: 'Clinic', default: null },
     bedId: { type: mongoose.Schema.Types.ObjectId, ref: 'Bed', default: null }, // For hospital admissions
 
     ambulanceId: { type: mongoose.Schema.Types.ObjectId, ref: 'Ambulance', default: null }, // Link to Ambulance if brought by driver
@@ -77,7 +77,7 @@ const appointmentSchema = new mongoose.Schema({
     // System Fields
     status: {
         type: String,
-        enum: ['Pending', 'Hospital-Pending', 'Confirmed', 'In-Progress', 'Discharge-Pending', 'Completed', 'Cancelled-By-User', 'Cancelled-By-Doctor', 'Cancelled-By-Hospital', 'No-Show', 'Rescheduled'],
+        enum: ['Pending', 'Clinic-Pending', 'Confirmed', 'In-Progress', 'Discharge-Pending', 'Completed', 'Cancelled-By-User', 'Cancelled-By-Doctor', 'Cancelled-By-Clinic', 'No-Show', 'Rescheduled'],
         default: 'Pending'
     },
     stayDuration: { type: Number, default: 0 }, // For Bed Booking (Number of days)

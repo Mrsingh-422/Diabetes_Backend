@@ -254,13 +254,10 @@ app.use('/doctor/video-call', require('./routes/doctor/VideoCallRoute')); // Doc
 
  
 
-//////////////// Hospital Routes /////////////////////
+//////////////// Clinic Routes /////////////////////
 
-// app.use('/api/hospital/doctors', require('./routes/hospital/hospitalDoctor/hosDoctorRoute')); // Hospital Doctor Management
-// app.use('/hospital/doctor/appointments', require('./routes/hospital/hospitalDoctor/hosAppointment')); // Hospital Doctor Appointments Route
-// app.use('/api/hospital/ambulance', require('./routes/hospital/hospitalAmbulance/hosAmbulanceRoute')); // Hospital Ambulance Management
-// //--------- Hospital Doctor Panel (Separate routes for doctor-specific actions within hospital) ---------
-// app.use('/hospital-doctor/panel', require('./routes/hospital/Doctor/hosDocPanelRoute')); // Hospital Doctor Panel Route (Dashboard, Prescriptions, etc.)
+app.use('/api/auth/clinic', require('./routes/clinic/authClinicRoute')); 
+
 
 
 

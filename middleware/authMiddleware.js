@@ -2,6 +2,7 @@ const jwt = require('jsonwebtoken');
 const Admin = require('../models/Admin');
 const User = require('../models/User');
 const Doctor = require('../models/Doctor');
+const Clinic = require('../models/Clinic');
 
 const Lab = require('../models/Lab');
 const Pharmacy = require('../models/Pharmacy');
@@ -10,8 +11,7 @@ const Driver = require('../models/Driver');
 const Tab = require('../models/Tab'); // Tab model for global tab status check
 
 
-
-1. // Verify Token & Identify User Type
+// Verify Token & Identify User Type
 
 const protect = (modelType) => async (req, res, next) => {
     let token;
@@ -43,9 +43,11 @@ const protect = (modelType) => async (req, res, next) => {
                     user = await User.findById(decoded.id);
                     break;
                 case 'doctor':
-                case 'hospital-doctor':
+                case 'clinic-doctor':
                     user = await Doctor.findById(decoded.id);
-                
+                    break;
+                case 'clinic': // 👈 Added Clinic case here
+                    user = await Clinic.findById(decoded.id);
                     break;
                 case 'lab':
                     user = await Lab.findById(decoded.id);
@@ -53,7 +55,7 @@ const protect = (modelType) => async (req, res, next) => {
                 case 'pharmacy':
                     user = await Pharmacy.findById(decoded.id);
                     break;
-                case 'Food':
+                case 'food':
                     user = await Food.findById(decoded.id);
                     break;
                 case 'driver':
@@ -63,10 +65,6 @@ const protect = (modelType) => async (req, res, next) => {
                     user = await Lab.findById(decoded.id) || 
                            await Pharmacy.findById(decoded.id) || 
                            await Food.findById(decoded.id);
-                    break;
-                
-                    
-                
                     break;
 
                 default:
