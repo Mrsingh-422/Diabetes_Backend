@@ -92,22 +92,26 @@ const labDocUploads = multer({
 // ==========================================
 // 5. PHARMACY CONFIGURATION (Specific)
 // ==========================================
+const pharmacyDir = 'public/uploads/pharmacies';
+ensureDir(pharmacyDir); //  Automatically creates folder if missing
+
 const pharmacyDocUploads = multer({
     storage: multer.diskStorage({
-        destination: (req, file, cb) => cb(null, 'public/uploads/pharmacies'),
+        destination: (req, file, cb) => cb(null, pharmacyDir), //  Replaced string path with pharmacyDir
         filename: (req, file, cb) => cb(null, `pharma-${Date.now()}${path.extname(file.originalname)}`)
     }),
     fileFilter: docFileFilter,
     limits: { fileSize: 5 * 1024 * 1024 }
 }).fields([
     { name: 'profileImage', maxCount: 1 },
-    { name: 'pharmacyImages', maxCount: 10 },       // Matches Figma
-    { name: 'pharmacyCertificates', maxCount: 10 }, // Matches Figma
-    { name: 'pharmacyLicenses', maxCount: 10 },     // Matches Figma
-    { name: 'gstCertificates', maxCount: 5 },       // Matches Figma
-    { name: 'drugLicenses', maxCount: 5 },          // Matches Figma
-    { name: 'otherCertificates', maxCount: 10 }     // Matches Figma
+    { name: 'pharmacyImages', maxCount: 10 },       
+    { name: 'pharmacyCertificates', maxCount: 10 }, 
+    { name: 'pharmacyLicenses', maxCount: 10 },     
+    { name: 'gstCertificates', maxCount: 5 },       
+    { name: 'drugLicenses', maxCount: 5 },          
+    { name: 'otherCertificates', maxCount: 10 }     
 ]);
+
 
 // ==========================================
 // 6. NURSE CONFIGURATION (Specific)

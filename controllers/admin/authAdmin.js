@@ -238,6 +238,27 @@ const updateAdminProfile = async (req, res) => {
         res.status(500).json({ message: error.message });
     }
 };
+
+// --- 5. GET MY ADMIN PROFILE ---
+// Endpoint: GET /api/auth/admin/profile
+const getMyAdminProfile = async (req, res) => {
+    try {
+        // Logged-in admin ka data fetch karein (password ko exclude kiya gaya hai)
+        const admin = await Admin.findById(req.user.id).select('-password').populate('roleType');
+        
+        if (!admin) {
+            return res.status(404).json({ success: false, message: "Admin profile not found." });
+        }
+
+        res.json({
+            success: true,
+            data: admin
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 const getAdminsList = async (req, res) => {
     try {
         const loggedInAdminId = req.user.id; // Login admin ki ID
@@ -330,4 +351,4 @@ const editSubadmin = async (req, res) => {
  
 
 
-module.exports = { registerSuperAdmin, loginAdmin, createSubAdmin, updateAdminProfile ,getAdminsList, editSubadmin  };
+module.exports = { registerSuperAdmin, loginAdmin, createSubAdmin, updateAdminProfile ,getAdminsList, editSubadmin ,getMyAdminProfile };

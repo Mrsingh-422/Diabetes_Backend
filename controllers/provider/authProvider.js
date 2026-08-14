@@ -203,18 +203,19 @@ const uploadLabDocs = async (req, res) => {
         const existingLab = await Lab.findById(labId);
         if (!existingLab) return res.status(404).json({ success: false, message: "Lab not found." });
 
+        // 🚨 Fixed: Mapped files path using f.filename to bypass public folder and backslashes
         const documentsObj = {
             documentState,
             issuingAuthority,
             gstNumber,
             experience,
             drugLicenseType,
-            labImages: files?.labImages ? files.labImages.map(f => f.path) : [],
-            labCertificates: files?.labCertificates ? files.labCertificates.map(f => f.path) : [],
-            labLicenses: files?.labLicenses ? files.labLicenses.map(f => f.path) : [],
-            gstCertificates: files?.gstCertificates ? files.gstCertificates.map(f => f.path) : [],
-            drugLicenses: files?.drugLicenses ? files.drugLicenses.map(f => f.path) : [],
-            otherCertificates: files?.otherCertificates ? files.otherCertificates.map(f => f.path) : []
+            labImages: files?.labImages ? files.labImages.map(f => `/uploads/labs/${f.filename}`) : [],
+            labCertificates: files?.labCertificates ? files.labCertificates.map(f => `/uploads/labs/${f.filename}`) : [],
+            labLicenses: files?.labLicenses ? files.labLicenses.map(f => `/uploads/labs/${f.filename}`) : [],
+            gstCertificates: files?.gstCertificates ? files.gstCertificates.map(f => `/uploads/labs/${f.filename}`) : [],
+            drugLicenses: files?.drugLicenses ? files.drugLicenses.map(f => `/uploads/labs/${f.filename}`) : [],
+            otherCertificates: files?.otherCertificates ? files.otherCertificates.map(f => `/uploads/labs/${f.filename}`) : []
         };
 
         if (files?.profileImage && existingLab.profileImage) {
@@ -239,7 +240,7 @@ const uploadLabDocs = async (req, res) => {
                     profileStatus: 'Pending',
                     rejectionReason: null,
                     documents: documentsObj,
-                    ...(files?.profileImage && { profileImage: files.profileImage[0].path })
+                    ...(files?.profileImage && { profileImage: `/uploads/labs/${files.profileImage[0].filename}` })
                 } 
             }, 
             { new: true, runValidators: true }
@@ -261,17 +262,18 @@ const uploadPharmacyDocs = async (req, res) => {
         const existingPharmacy = await Pharmacy.findById(pharmacyId);
         if (!existingPharmacy) return res.status(404).json({ success: false, message: "Pharmacy not found." });
 
+        // 🚨 Fixed: Mapped files path using f.filename to bypass public folder and backslashes
         const documentsObj = {
             documentState,
             issuingAuthority,
             gstNumber,
             drugLicenseType,
-            pharmacyImages: files?.pharmacyImages ? files.pharmacyImages.map(f => f.path) : [],
-            pharmacyCertificates: files?.pharmacyCertificates ? files.pharmacyCertificates.map(f => f.path) : [],
-            pharmacyLicenses: files?.pharmacyLicenses ? files.pharmacyLicenses.map(f => f.path) : [],
-            gstCertificates: files?.gstCertificates ? files.gstCertificates.map(f => f.path) : [],
-            drugLicenses: files?.drugLicenses ? files.drugLicenses.map(f => f.path) : [],
-            otherCertificates: files?.otherCertificates ? files.otherCertificates.map(f => f.path) : []
+            pharmacyImages: files?.pharmacyImages ? files.pharmacyImages.map(f => `/uploads/pharmacies/${f.filename}`) : [],
+            pharmacyCertificates: files?.pharmacyCertificates ? files.pharmacyCertificates.map(f => `/uploads/pharmacies/${f.filename}`) : [],
+            pharmacyLicenses: files?.pharmacyLicenses ? files.pharmacyLicenses.map(f => `/uploads/pharmacies/${f.filename}`) : [],
+            gstCertificates: files?.gstCertificates ? files.gstCertificates.map(f => `/uploads/pharmacies/${f.filename}`) : [],
+            drugLicenses: files?.drugLicenses ? files.drugLicenses.map(f => `/uploads/pharmacies/${f.filename}`) : [],
+            otherCertificates: files?.otherCertificates ? files.otherCertificates.map(f => `/uploads/pharmacies/${f.filename}`) : []
         };
 
         if (files?.profileImage && existingPharmacy.profileImage) {
@@ -298,7 +300,7 @@ const uploadPharmacyDocs = async (req, res) => {
                     profileStatus: 'Pending',
                     rejectionReason: null,
                     documents: documentsObj,
-                    ...(files?.profileImage && { profileImage: files.profileImage[0].path })
+                    ...(files?.profileImage && { profileImage: `/uploads/pharmacies/${files.profileImage[0].filename}` })
                 } 
             }, 
             { new: true, runValidators: true }
@@ -310,7 +312,7 @@ const uploadPharmacyDocs = async (req, res) => {
     }
 };
 
-// --- 6. UPLOAD DOCS: FOOD (Replaced uploadNurseDocs) ---
+// --- 6. UPLOAD DOCS: FOOD ---
 const uploadFoodDocs = async (req, res) => {
     try {
         const foodId = req.user.id;
@@ -320,15 +322,16 @@ const uploadFoodDocs = async (req, res) => {
         const existingFood = await Food.findById(foodId);
         if (!existingFood) return res.status(404).json({ success: false, message: "Food partner not found." });
 
+        // 🚨 Fixed: Mapped files path using f.filename to bypass public folder and backslashes
         const documentsObj = {
             documentState,
             issuingAuthority,
             gstNumber,
             fssaiNumber,
-            kitchenImages: files?.kitchenImages ? files.kitchenImages.map(f => f.path) : [],
-            fssaiCertificates: files?.fssaiCertificates ? files.fssaiCertificates.map(f => f.path) : [],
-            gstCertificates: files?.gstCertificates ? files.gstCertificates.map(f => f.path) : [],
-            otherCertificates: files?.otherCertificates ? files.otherCertificates.map(f => f.path) : []
+            kitchenImages: files?.kitchenImages ? files.kitchenImages.map(f => `/uploads/foods/${f.filename}`) : [],
+            fssaiCertificates: files?.fssaiCertificates ? files.fssaiCertificates.map(f => `/uploads/foods/${f.filename}`) : [],
+            gstCertificates: files?.gstCertificates ? files.gstCertificates.map(f => `/uploads/foods/${f.filename}`) : [],
+            otherCertificates: files?.otherCertificates ? files.otherCertificates.map(f => `/uploads/foods/${f.filename}`) : []
         };
 
         if (files?.profileImage && existingFood.profileImage) {
@@ -353,7 +356,7 @@ const uploadFoodDocs = async (req, res) => {
                     profileStatus: 'Pending',
                     rejectionReason: null,
                     documents: documentsObj, 
-                    ...(files?.profileImage && { profileImage: files.profileImage[0].path })
+                    ...(files?.profileImage && { profileImage: `/uploads/foods/${files.profileImage[0].filename}` })
                 } 
             }, 
             { new: true, runValidators: true }

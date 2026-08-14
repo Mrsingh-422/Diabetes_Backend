@@ -257,6 +257,7 @@ app.use('/doctor/video-call', require('./routes/doctor/VideoCallRoute')); // Doc
 //////////////// Clinic Routes /////////////////////
 
 app.use('/api/auth/clinic', require('./routes/clinic/authClinicRoute')); 
+app.use('/api/admin/clinic/', require('./routes/admin/Clinic/ClinicAdminRoute')); // Clinic Admin Management Route
 
 
 
