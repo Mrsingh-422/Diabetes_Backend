@@ -128,14 +128,38 @@ const rejectPharmacy = async (req, res) => {
 const getFoodsList = (req, res) => getPaginatedList(Food, req, res, ['name', 'email']);
 
 const approveFood = async (req, res) => {
-    const Food = await Food.findByIdAndUpdate(req.params.id, { profileStatus: 'Approved', rejectionReason: null }, { new: true });
-    res.json({ success: true, message: 'Food approved', data: Food });
+    try {
+        // FIXED: Renamed the return variable to 'updatedFood' to prevent ReferenceErrors
+        const updatedFood = await Food.findByIdAndUpdate(
+            req.params.id, 
+            { profileStatus: 'Approved', rejectionReason: null }, 
+            { new: true }
+        );
+        if (!updatedFood) return res.status(404).json({ success: false, message: 'Food partner not found' });
+        
+        res.json({ success: true, message: 'Food approved', data: updatedFood });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
 };
 
 const rejectFood = async (req, res) => {
-    const { reason } = req.body;
-    const Food = await Food.findByIdAndUpdate(req.params.id, { profileStatus: 'Rejected', rejectionReason: reason }, { new: true });
-    res.json({ success: true, message: 'Food rejected', data: Food });
+    try {
+        const { reason } = req.body;
+        if (!reason) return res.status(400).json({ success: false, message: 'Rejection reason is required' });
+
+        // FIXED: Renamed the return variable to 'updatedFood' to prevent ReferenceErrors
+        const updatedFood = await Food.findByIdAndUpdate(
+            req.params.id, 
+            { profileStatus: 'Rejected', rejectionReason: reason }, 
+            { new: true }
+        );
+        if (!updatedFood) return res.status(404).json({ success: false, message: 'Food partner not found' });
+
+        res.json({ success: true, message: 'Food rejected', data: updatedFood });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
 };
 
 

@@ -198,6 +198,7 @@ app.use('/admin/pharmacy/medicine', require('./routes/admin/Pharmacy/MedicineUpl
 app.use('/admin/lab', require('./routes/admin/Lab/LabAdminRoute')); // Lab Management Route
 app.use('/admin/lab/tests', require('./routes/admin/Lab/TestUploadRoute')); // Master Lab Test Upload & List Route
 
+app.use('/admin/food', require('./routes/admin/Food/foodAdminRoute')); // Lab Management Route
 
 // --- Admin Doctor Routes ---
 app.use('/admin/doctor', require('./routes/admin/Doctor/DoctorAdminRoute')); // Doctor Management Route

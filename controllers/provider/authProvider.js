@@ -322,28 +322,44 @@ const uploadFoodDocs = async (req, res) => {
         const existingFood = await Food.findById(foodId);
         if (!existingFood) return res.status(404).json({ success: false, message: "Food partner not found." });
 
-        // 🚨 Fixed: Mapped files path using f.filename to bypass public folder and backslashes
+        // Maintain old values if new files/data are not provided
         const documentsObj = {
-            documentState,
-            issuingAuthority,
-            gstNumber,
-            fssaiNumber,
-            kitchenImages: files?.kitchenImages ? files.kitchenImages.map(f => `/uploads/foods/${f.filename}`) : [],
-            fssaiCertificates: files?.fssaiCertificates ? files.fssaiCertificates.map(f => `/uploads/foods/${f.filename}`) : [],
-            gstCertificates: files?.gstCertificates ? files.gstCertificates.map(f => `/uploads/foods/${f.filename}`) : [],
-            otherCertificates: files?.otherCertificates ? files.otherCertificates.map(f => `/uploads/foods/${f.filename}`) : []
+            documentState: documentState !== undefined ? documentState : existingFood.documents?.documentState,
+            issuingAuthority: issuingAuthority !== undefined ? issuingAuthority : existingFood.documents?.issuingAuthority,
+            gstNumber: gstNumber !== undefined ? gstNumber : existingFood.documents?.gstNumber,
+            fssaiNumber: fssaiNumber !== undefined ? fssaiNumber : existingFood.documents?.fssaiNumber,
+            
+            kitchenImages: files?.kitchenImages 
+                ? files.kitchenImages.map(f => `/uploads/foods/${f.filename}`) 
+                : (existingFood.documents?.kitchenImages || []),
+            
+            fssaiCertificates: files?.fssaiCertificates 
+                ? files.fssaiCertificates.map(f => `/uploads/foods/${f.filename}`) 
+                : (existingFood.documents?.fssaiCertificates || []),
+            
+            gstCertificates: files?.gstCertificates 
+                ? files.gstCertificates.map(f => `/uploads/foods/${f.filename}`) 
+                : (existingFood.documents?.gstCertificates || []),
+                
+            otherCertificates: files?.otherCertificates 
+                ? files.otherCertificates.map(f => `/uploads/foods/${f.filename}`) 
+                : (existingFood.documents?.otherCertificates || [])
         };
 
+        // Delete old profile image if a new one is uploaded
         if (files?.profileImage && existingFood.profileImage) {
             deleteFile(existingFood.profileImage);
         }
 
+        // Only delete old certificate files if new files are actively uploaded for that specific array
         if (existingFood.documents) {
             const documentFields = ['kitchenImages', 'fssaiCertificates', 'gstCertificates', 'otherCertificates'];
             documentFields.forEach(field => {
-                const oldFileList = existingFood.documents[field];
-                if (Array.isArray(oldFileList)) {
-                    oldFileList.forEach(filePath => { if (filePath) deleteFile(filePath); });
+                if (files && files[field]) { // Check if new files exist for this field
+                    const oldFileList = existingFood.documents[field];
+                    if (Array.isArray(oldFileList)) {
+                        oldFileList.forEach(filePath => { if (filePath) deleteFile(filePath); });
+                    }
                 }
             });
         }
@@ -352,7 +368,7 @@ const uploadFoodDocs = async (req, res) => {
             foodId, 
             { 
                 $set: { 
-                    about,
+                    about: about !== undefined ? about : existingFood.about,
                     profileStatus: 'Pending',
                     rejectionReason: null,
                     documents: documentsObj, 

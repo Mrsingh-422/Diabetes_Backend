@@ -1065,16 +1065,20 @@ ensureDir(foodDir);
 const foodDocUploads = multer({
     storage: multer.diskStorage({
         destination: (req, file, cb) => cb(null, foodDir),
-        filename: (req, file, cb) => cb(null, `food-${Date.now()}${path.extname(file.originalname)}`)
+        filename: (req, file, cb) => {
+            // Added a random suffix to prevent identical millisecond collisions
+            const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
+            cb(null, `food-${uniqueSuffix}${path.extname(file.originalname)}`);
+        }
     }),
     fileFilter: docFileFilter,
-    limits: { fileSize: 5 * 1024 * 1024 }
+    limits: { fileSize: 5 * 1024 * 1024 } // 5MB limit
 }).fields([
     { name: 'profileImage', maxCount: 1 },
-    { name: 'kitchenImages', maxCount: 10 },        // Figma: Kitchen image uploads
-    { name: 'fssaiCertificates', maxCount: 10 },    // FSSAI license image uploads
-    { name: 'gstCertificates', maxCount: 5 },       // GST Certificate
-    { name: 'otherCertificates', maxCount: 10 }     // Other auxiliary documents
+    { name: 'kitchenImages', maxCount: 10 },        // Matches controller
+    { name: 'fssaiCertificates', maxCount: 10 },    // Matches controller
+    { name: 'gstCertificates', maxCount: 5 },       // Matches controller
+    { name: 'otherCertificates', maxCount: 10 }     // Matches controller
 ]);
 
 module.exports = { 
