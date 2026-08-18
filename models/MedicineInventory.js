@@ -30,6 +30,12 @@ const medicineInventorySchema = new mongoose.Schema({
     expiry_date: {
         type: Date
     },
+    hsn_number: {
+        type: String,
+        required: false, // 🚨 Made strictly compulsory [1]
+        trim: true,
+        default: null
+    },
     is_available: {
         type: Boolean,
         default: true

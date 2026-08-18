@@ -389,48 +389,88 @@ const startPrescriptionReview = async (req, res) => {
 const submitPharmacistReview = async (req, res) => {
     try {
         const { requestId } = req.params;
-        const { items, deliveryCharge } = req.body; 
-
+        const { items, deliveryCharge } = req.body;
+ 
         const request = await PharmacyPrescriptionRequest.findOne({ requestId });
         if (!request) {
             return res.status(404).json({ success: false, message: "Review request not found" });
         }
-
+ 
         let itemTotal = 0;
+        let taxableTotal = 0;
+        let cgstTotal = 0;
+        let sgstTotal = 0;
         const verifiedItems = [];
-
+ 
         for (const item of items) {
-            const subtotal = Number(item.pricePerUnit || 0) * Number(item.quantity || 1);
+            const qty = Number(item.quantity || 1);
+            const subtotal = Number(item.pricePerUnit || 0) * qty;
             itemTotal += subtotal;
-
-            // Safe database fallback check for true admin MRP
+ 
             let verifiedMrp = Number(item.mrp || 0);
-            if (!verifiedMrp && mongoose.isValidObjectId(item.medicineId)) {
-                const dbMed = await Medicine.findById(item.medicineId).select('mrp').lean();
-                if (dbMed) verifiedMrp = Number(dbMed.mrp || 0);
+            let verifiedHsn = null;
+ 
+            if (mongoose.isValidObjectId(item.medicineId)) {
+                const inventory = await MedicineInventory.findOne({
+                    pharmacyId: request.pharmacyId,
+                    medicineId: item.medicineId
+                }).select('mrp hsn_number').lean();
+ 
+                if (inventory) {
+                    if (!verifiedMrp) verifiedMrp = Number(inventory.mrp || 0);
+                    if (inventory.hsn_number) verifiedHsn = inventory.hsn_number;
+                }
             }
-
+ 
+            // Dynamic GST Verification
+            let cgstPercent = 0;
+            let sgstPercent = 0;
+            if (verifiedHsn && verifiedHsn.trim() !== "" && verifiedHsn.toUpperCase() !== "N/A") {
+                const isSupplement = verifiedHsn.trim().startsWith('21');
+                cgstPercent = isSupplement ? 9 : 6;
+                sgstPercent = isSupplement ? 9 : 6;
+            }
+ 
+            const totalGstPercent = cgstPercent + sgstPercent;
+            const itemTaxableAmount = subtotal / (1 + (totalGstPercent / 100));
+            const itemCgstAmount = itemTaxableAmount * (cgstPercent / 100);
+            const itemSgstAmount = itemTaxableAmount * (sgstPercent / 100);
+ 
+            taxableTotal += itemTaxableAmount;
+            cgstTotal += itemCgstAmount;
+            sgstTotal += itemSgstAmount;
+ 
             verifiedItems.push({
                 medicineId: mongoose.isValidObjectId(item.medicineId) ? item.medicineId : null,
                 name: item.name,
                 mrp: verifiedMrp,
                 pricePerUnit: Number(item.pricePerUnit || 0),
-                quantity: Number(item.quantity || 1),
-                totalPrice: subtotal
+                quantity: qty,
+                totalPrice: subtotal,
+                
+                hsn_number: verifiedHsn || "",
+                taxableAmount: Number(itemTaxableAmount.toFixed(2)),
+                cgstPercent,
+                sgstPercent,
+                cgstAmount: Number(itemCgstAmount.toFixed(2)),
+                sgstAmount: Number(itemSgstAmount.toFixed(2))
             });
         }
-
+ 
         const totalAmount = itemTotal + Number(deliveryCharge || 0);
-
+ 
         request.verifiedBill = {
             items: verifiedItems,
             itemTotal,
+            taxableTotal: Number(taxableTotal.toFixed(2)),
+            cgstTotal: Number(cgstTotal.toFixed(2)),       
+            sgstTotal: Number(sgstTotal.toFixed(2)),       
             deliveryCharge: Number(deliveryCharge || 0),
             totalAmount: Math.round(totalAmount)
         };
         request.status = 'Bill Generated';
         await request.save();
-
+ 
         res.json({
             success: true,
             message: "Invoice successfully sent to client",
@@ -440,6 +480,7 @@ const submitPharmacistReview = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+ 
 const rejectPrescriptionRequest = async (req, res) => {
     try {
         const { requestId } = req.params;

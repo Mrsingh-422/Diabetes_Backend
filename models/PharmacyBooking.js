@@ -28,7 +28,15 @@ const pharmacyBookingSchema = new mongoose.Schema({
          // 🚨 NEW COMBO / BOGO TRACKING FIELDS
         isComboApplied: { type: Boolean, default: false },
         comboOfferId: { type: mongoose.Schema.Types.ObjectId, ref: 'PharmacyComboOffer', default: null },
-        freeQuantity: { type: Number, default: 0 } // Saved units (Y)
+        freeQuantity: { type: Number, default: 0 },// Saved units (Y)
+        // 🚨 NEW GST KEYS FOR BILL GENERATION
+        hsn_number: { type: String, required: false, default: "" },
+        taxableAmount: { type: Number, default: 0 },
+        cgstPercent: { type: Number, default: 6 },
+        sgstPercent: { type: Number, default: 6 },
+        cgstAmount: { type: Number, default: 0 },
+        sgstAmount: { type: Number, default: 0 }
+ 
     }],
 
     // --- LOGISTICS & SLOTS ---

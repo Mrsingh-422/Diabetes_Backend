@@ -29,7 +29,7 @@ router.post('/compare', protect('user'), compareCartOnMap);
 // pharmcacy
 // Pharmacy Cart Endpoints
 router.get('/pharmacy', protect('user'), getPharmacyCart); // GET Pharmacy Cart
-router.post('/pharmacy/add', protect('user'), addToPharmacyCart);
+router.post('/pharmacy/add', protect('user'), addToPharmacyCart); 
 router.put('/pharmacy/quantity', protect('user'), updatePharmacyQuantity);
 router.post('/pharmacy/clear', protect('user'), clearPharmacyCart);
 router.delete('/pharmacy/item/:medicineId', protect('user'), removePharmacyItem);
