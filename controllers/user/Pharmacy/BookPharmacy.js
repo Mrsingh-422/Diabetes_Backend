@@ -945,8 +945,8 @@ const getTrendingMedicinesNearUser = async (req, res) => {
     }
 };
 
-// // 1. GET STANDARD LIST (Dawaiyan jinke sabse zyada vendors hain wo pehle)
-// // endpoint: GET /user/medicine/standard-list
+
+
 // const getStandardMedicineCatalog = async (req, res) => {
 //     try {
 //         const page = parseInt(req.query.page) || 1;
@@ -1272,7 +1272,7 @@ const getMedicineVendors = async (req, res) => {
         if (!masterMedicine) return res.status(404).json({ success: false, message: "Medicine not found" });
 
         const limitConfig = await VendorKMLimit.findOne({ vendorType: 'Pharmacy', isActive: true });
-        const maxRadius = limitConfig ? limitConfig.kmLimit : 100;
+        const maxRadius = limitConfig ? limitConfig.kmLimit : 2000;
 
         const inventoryRecords = await MedicineInventory.find({
             $or: [{ medicineId: medObjectId }, { name: masterMedicine.name }],
@@ -1385,6 +1385,7 @@ const getMedicineVendors = async (req, res) => {
         res.status(500).json({ success: false, message: error.message }); 
     }
 };
+
 
 
 
