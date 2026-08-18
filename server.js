@@ -237,7 +237,7 @@ app.use('/api/chat', require('./routes/user/Doctor/ChatRoutes')); // Doctor-User
 app.use('/user/cart', require('./routes/user/Lab/CartRoute'));
 
 // --- user pharmacy ---
-// app.use('/user/pharmacy', require('./routes/user/Pharmacy/BookPharmacyRoute'));
+app.use('/user/pharmacy', require('./routes/user/Pharmacy/BookPharmacyRoute'));
 app.use('/user/medicine', require('./routes/user/Pharmacy/MedicineInventoryUserRoute'));
 // --- user ambulance ---
 // app.use('/user/ambulance', require('./routes/user/Ambulance/AmbulanceBookRoute'));

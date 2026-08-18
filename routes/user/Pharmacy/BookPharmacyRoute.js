@@ -23,18 +23,18 @@ router.post('/scan-rx',
 router.post('/search-suggestions', getMedicineSuggestions);
 router.get('/full-details/:id', getMedicineFullDetails);
 
-router.get('/categories', getMedicineCategories);
+router.get('/categories', getMedicineCategories);  //  6
 router.get('/sub-categories', getPharmacySubCategories);
-router.get('/category-details', getMedicineCategoryDetails);
+router.get('/category-details', getMedicineCategoryDetails);  // 2
 
-router.get('/standard-list', getStandardMedicineCatalog); // get all list medicine
+router.get('/standard-list', getStandardMedicineCatalog); // get all list medicine   7
 router.post('/trending-medicines', getTrendingMedicinesNearUser); // Get trending medicines near user
-router.get('/medicine-details/:medicineId', getMedicineVendors); // Get medcine by id
+router.get('/medicine-details/:medicineId', getMedicineVendors); // Get medcine by id   3
 
 router.get('/search-suggestions', getPharmacySearchSuggestions);
-router.get('/pharmacy-suggestions', getPharmacyNameSuggestions);
-router.post('/list', getPharmacies); // Search & Filter
-router.get('/details/:id', getPharmacyDetails); // Profile Detail
+router.get('/pharmacy-suggestions', getPharmacyNameSuggestions);   // 5
+router.post('/list', getPharmacies); // Search & Filter     1
+router.get('/details/:id', getPharmacyDetails); // Profile Detail  4
 
 
 

@@ -7,15 +7,16 @@ const { updateSelectedPatients,addToLabCart, getMyCart, clearLabCart, removeItem
     updatePharmacyQuantity,checkBetterOptions,
     clearPharmacyCart, removePharmacyItem,
 updateMedicineDuration,
-
+   getLabCart, getPharmacyCart,
     getAvailableSlots,
     getAvailableCoupons
 
  } = require('../../../controllers/user/Lab/Cart');
 
-// Base URL: /user/cart
+// Base URL Endpoint: /user/cart
 
-router.get('/', protect('user'), getMyCart);
+router.get('/', protect('user'), getMyCart);  //  Get User's Cart (Lab + Pharmacy)  8
+router.get('/lab', protect('user'), getLabCart); // GET Lab Cart
 router.post('/lab/add', protect('user'), addToLabCart);
 router.post('/lab/clear', protect('user'), clearLabCart);
 router.post('/lab/select-patients', protect('user'), updateSelectedPatients);
@@ -27,6 +28,7 @@ router.post('/compare', protect('user'), compareCartOnMap);
 
 // pharmcacy
 // Pharmacy Cart Endpoints
+router.get('/pharmacy', protect('user'), getPharmacyCart); // GET Pharmacy Cart
 router.post('/pharmacy/add', protect('user'), addToPharmacyCart);
 router.put('/pharmacy/quantity', protect('user'), updatePharmacyQuantity);
 router.post('/pharmacy/clear', protect('user'), clearPharmacyCart);

@@ -462,6 +462,105 @@ const getPharmacySubCategories = async (req, res) => {
         });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
+// const getMedicineCategoryDetails = async (req, res) => {
+//     try {
+//         const { category, subCategory, page = 1 } = req.query;
+//         const limit = 20;
+//         const skip = (parseInt(page) - 1) * limit;
+
+//         let breadcrumbRegex = subCategory 
+//             ? new RegExp(`^${category}\\s*>\\s*${subCategory}`, 'i')
+//             : new RegExp(`^${category}\\s*>`, 'i');
+
+//         const pipeline = [
+//             { $match: { bread_crumb: breadcrumbRegex } },
+//             {
+//                 // 1. Inventory check (Lowest Vendor Price)
+//                 $lookup: {
+//                     from: "medicineinventories",
+//                     localField: "_id",
+//                     foreignField: "medicineId",
+//                     as: "inventory",
+//                     pipeline: [
+//                         { $match: { is_available: true, stock_quantity: { $gt: 0 } } },
+//                         { $sort: { vendor_price: 1 } },
+//                         { $limit: 1 }
+//                     ]
+//                 }
+//             },
+//             {
+//                 $addFields: {
+//                     // Pre-calculate numeric values for fallback and calculation
+//                     numMRP: { $toDouble: { $ifNull: ["$mrp", 0] } },
+//                     numDocBestPrice: { $toDouble: { $ifNull: ["$best_price", 0] } },
+//                     numInventoryPrice: { $toDouble: { $arrayElemAt: ["$inventory.vendor_price", 0] } },
+//                     isInventoryAvailable: { $gt: [{ $size: "$inventory" }, 0] }
+//                 }
+//             },
+//             {
+//                 $addFields: {
+//                     // --- MINIMUM PRICE FALLBACK ---
+//                     // Agar inventory mein sasta vendor hai toh wo, warna medicine ka 'best_price'
+//                     minimumPrice: {
+//                         $cond: [
+//                             "$isInventoryAvailable",
+//                             "$numInventoryPrice",
+//                             "$numDocBestPrice"
+//                         ]
+//                     },
+//                     isAvailable: "$isInventoryAvailable"
+//                 }
+//             },
+//             {
+//                 $addFields: {
+//                     // --- DISCOUNT PERCENTAGE FALLBACK ---
+//                     // Logic: ((MRP - SelectedPrice) / MRP) * 100
+//                     discountPercentage: {
+//                         $cond: {
+//                             if: { $gt: ["$numMRP", 0] },
+//                             then: {
+//                                 $round: [
+//                                     {
+//                                         $multiply: [
+//                                             { $divide: [{ $subtract: ["$numMRP", "$minimumPrice"] }, "$numMRP"] },
+//                                             100
+//                                         ]
+//                                     },
+//                                     0
+//                                 ]
+//                             },
+//                             else: 0
+//                         }
+//                     }
+//                 }
+//             },
+//             { 
+//                 $project: { 
+//                     inventory: 0, numMRP: 0, numDocBestPrice: 0, numInventoryPrice: 0, isInventoryAvailable: 0 
+//                 } 
+//             },
+//             {
+//                 $facet: {
+//                     metadata: [{ $count: "total" }],
+//                     data: [{ $skip: skip }, { $limit: limit }]
+//                 }
+//             }
+//         ];
+
+//         const result = await Medicine.aggregate(pipeline);
+//         const total = result[0].metadata[0]?.total || 0;
+
+//         res.json({
+//             success: true,
+//             total,
+//             currentPage: parseInt(page),
+//             totalPages: Math.ceil(total / limit),
+//             data: result[0].data
+//         });
+//     } catch (error) { 
+//         res.status(500).json({ success: false, message: error.message }); 
+//     }
+// };
 const getMedicineCategoryDetails = async (req, res) => {
     try {
         const { category, subCategory, page = 1 } = req.query;
@@ -536,7 +635,31 @@ const getMedicineCategoryDetails = async (req, res) => {
             },
             { 
                 $project: { 
-                    inventory: 0, numMRP: 0, numDocBestPrice: 0, numInventoryPrice: 0, isInventoryAvailable: 0 
+                    inventory: 0, 
+                    numMRP: 0, 
+                    numDocBestPrice: 0, 
+                    numInventoryPrice: 0, 
+                    isInventoryAvailable: 0,
+
+                    // Excluded clinical and metadata fields
+                    primary_use: 0,
+                    description: 0,
+                    salt_synonmys: 0,
+                    storage: 0,
+                    introduction: 0,
+                    use_of: 0,
+                    benefits: 0,
+                    side_effect: 0,
+                    how_crop_side_effects: 0,
+                    how_to_use: 0,
+                    how_works: 0,
+                    safety_advise: 0,
+                    if_miss: 0,
+                    alternate_brand: 0,
+                    manufaturer_address: 0,
+                    __v: 0,
+                    createdAt: 0,
+                    updatedAt: 0
                 } 
             },
             {
@@ -561,6 +684,7 @@ const getMedicineCategoryDetails = async (req, res) => {
         res.status(500).json({ success: false, message: error.message }); 
     }
 };
+
 
 
 // Default Location: Delhi (Coordinates)
@@ -821,6 +945,152 @@ const getTrendingMedicinesNearUser = async (req, res) => {
     }
 };
 
+// // 1. GET STANDARD LIST (Dawaiyan jinke sabse zyada vendors hain wo pehle)
+// // endpoint: GET /user/medicine/standard-list
+// const getStandardMedicineCatalog = async (req, res) => {
+//     try {
+//         const page = parseInt(req.query.page) || 1;
+//         const limit = 20;
+//         const skip = (page - 1) * limit;
+        
+//         const { category, subCategory } = req.query;
+
+//         let filter = {};
+//         if (category) {
+//             const breadcrumbRegex = subCategory 
+//                 ? new RegExp(`^${category}\\s*>\\s*${subCategory}`, 'i')
+//                 : new RegExp(`^${category}\\s*>`, 'i');
+//             filter.bread_crumb = breadcrumbRegex;
+//         }
+
+//         const pipeline = [];
+
+//         if (category) {
+//             pipeline.push({ $match: filter });
+//         }
+
+//         pipeline.push(
+//             {
+//                 $lookup: {
+//                     from: "medicineinventories",
+//                     localField: "_id",
+//                     foreignField: "medicineId",
+//                     as: "sellers"
+//                 }
+//             },
+//             {
+//                 $addFields: {
+//                     // Filter only those sellers who actually have active stock [1]
+//                     activeSellers: {
+//                         $filter: {
+//                             input: "$sellers",
+//                             as: "seller",
+//                             cond: {
+//                                 $and: [
+//                                     { $eq: ["$$seller.is_available", true] },
+//                                     { $gt: ["$$seller.stock_quantity", 0] }
+//                                 ]
+//                             }
+//                         }
+//                     }
+//                 }
+//             },
+//             {
+//                 $addFields: {
+//                     vendorCount: { $size: "$sellers" },
+//                     // Calculate the lowest active vendor price strictly [cite: 1.1.2]
+//                     lowestVendorPrice: {
+//                         $cond: {
+//                             if: { $gt: [{ $size: "$activeSellers" }, 0] },
+//                             then: { $min: "$activeSellers.vendor_price" },
+//                             else: null 
+//                         }
+//                     },
+//                     isAvailable: { $gt: [{ $size: "$activeSellers" }, 0] }
+//                 }
+//             },
+//             {
+//                 $addFields: {
+//                     // 🚨 OVERWRITE best_price with lowest active vendor price [cite: 1.1.2]
+//                     best_price: {
+//                         $cond: {
+//                             if: { $ne: ["$lowestVendorPrice", null] },
+//                             then: { $toString: "$lowestVendorPrice" }, // Convert to string to match Medicine Schema type
+//                             else: "$best_price" // fallback to master best_price if no active vendor
+//                         }
+//                     },
+//                     // 🚨 OVERWRITE discont_percent dynamically based on live minimum vendor price [cite: 1.1.2]
+//                     discont_percent: {
+//                         $cond: {
+//                             if: {
+//                                 $and: [
+//                                     { $ne: ["$lowestVendorPrice", null] },
+//                                     { $gt: [{ $toDouble: { $ifNull: ["$mrp", "0"] } }, 0] }
+//                                 ]
+//                             },
+//                             then: {
+//                                 $concat: [
+//                                     {
+//                                         $toString: {
+//                                             $round: [
+//                                                 {
+//                                                     $multiply: [
+//                                                         {
+//                                                             $divide: [
+//                                                                 { $subtract: [{ $toDouble: "$mrp" }, "$lowestVendorPrice"] },
+//                                                                 { $toDouble: "$mrp" }
+//                                                             ]
+//                                                         },
+//                                                         100
+//                                                     ]
+//                                                 },
+//                                                 0
+//                                             ]
+//                                         }
+//                                     },
+//                                     "%"
+//                                 ]
+//                             },
+//                             else: "$discont_percent" // fallback to master discount
+//                         }
+//                     }
+//                 }
+//             },
+//             { 
+//                 $project: {
+//                     sellers: 0,
+//                     activeSellers: 0,
+//                     lowestVendorPrice: 0 // Keep clean project payload
+//                 }
+//             },
+//             { 
+//                 $sort: { vendorCount: -1, name: 1 } 
+//             },
+//             { 
+//                 $skip: skip 
+//             },
+//             { 
+//                 $limit: limit 
+//             }
+//         );
+
+//         const [aggregate, total] = await Promise.all([
+//             Medicine.aggregate(pipeline),
+//             Medicine.countDocuments(filter)
+//         ]);
+
+//         res.json({
+//             success: true,
+//             total,
+//             currentPage: page,
+//             totalPages: Math.ceil(total / limit),
+//             data: aggregate
+//         });
+//     } catch (error) { 
+//         res.status(500).json({ success: false, message: error.message }); 
+//     }
+// };
+
 // 1. GET STANDARD LIST (Dawaiyan jinke sabse zyada vendors hain wo pehle)
 // endpoint: GET /user/medicine/standard-list
 const getStandardMedicineCatalog = async (req, res) => {
@@ -856,7 +1126,7 @@ const getStandardMedicineCatalog = async (req, res) => {
             },
             {
                 $addFields: {
-                    // Filter only those sellers who actually have active stock [1]
+                    // Filter only those sellers who actually have active stock
                     activeSellers: {
                         $filter: {
                             input: "$sellers",
@@ -874,7 +1144,7 @@ const getStandardMedicineCatalog = async (req, res) => {
             {
                 $addFields: {
                     vendorCount: { $size: "$sellers" },
-                    // Calculate the lowest active vendor price strictly [cite: 1.1.2]
+                    // Calculate the lowest active vendor price strictly
                     lowestVendorPrice: {
                         $cond: {
                             if: { $gt: [{ $size: "$activeSellers" }, 0] },
@@ -887,7 +1157,7 @@ const getStandardMedicineCatalog = async (req, res) => {
             },
             {
                 $addFields: {
-                    // 🚨 OVERWRITE best_price with lowest active vendor price [cite: 1.1.2]
+                    // OVERWRITE best_price with lowest active vendor price
                     best_price: {
                         $cond: {
                             if: { $ne: ["$lowestVendorPrice", null] },
@@ -895,7 +1165,7 @@ const getStandardMedicineCatalog = async (req, res) => {
                             else: "$best_price" // fallback to master best_price if no active vendor
                         }
                     },
-                    // 🚨 OVERWRITE discont_percent dynamically based on live minimum vendor price [cite: 1.1.2]
+                    // OVERWRITE discont_percent dynamically based on live minimum vendor price
                     discont_percent: {
                         $cond: {
                             if: {
@@ -936,7 +1206,27 @@ const getStandardMedicineCatalog = async (req, res) => {
                 $project: {
                     sellers: 0,
                     activeSellers: 0,
-                    lowestVendorPrice: 0 // Keep clean project payload
+                    lowestVendorPrice: 0, // Keep clean project payload
+
+                    // Excluded the requested clinical and metadata fields
+                    primary_use: 0,
+                    description: 0,
+                    salt_synonmys: 0,
+                    storage: 0,
+                    introduction: 0,
+                    use_of: 0,
+                    benefits: 0,
+                    side_effect: 0,
+                    how_crop_side_effects: 0,
+                    how_to_use: 0,
+                    how_works: 0,
+                    safety_advise: 0,
+                    if_miss: 0,
+                    alternate_brand: 0,
+                    manufaturer_address: 0,
+                    __v: 0,
+                    createdAt: 0,
+                    updatedAt: 0
                 }
             },
             { 
@@ -966,7 +1256,6 @@ const getStandardMedicineCatalog = async (req, res) => {
         res.status(500).json({ success: false, message: error.message }); 
     }
 };
-
 
 // 2. GET medicine with all VENDORS FOR A SPECIFIC MEDICINE
 // endpoint: GET /user/medicine/vendors/:medicineId?lat=28.6&lng=77.2
@@ -1096,6 +1385,7 @@ const getMedicineVendors = async (req, res) => {
         res.status(500).json({ success: false, message: error.message }); 
     }
 };
+
 
 
 // --- NEW: GET PHARMACY SLOTS (Mirroring Lab) ---
@@ -1894,7 +2184,7 @@ const getNonPrescriptionMedicines = async (req, res) => {
         const pipeline = [
             { $match: filter },
             {
-                // Dynamic inventory check for lowest seller price [cite: 1.1.2]
+                // Dynamic inventory check for lowest seller price
                 $lookup: {
                     from: "medicineinventories",
                     localField: "_id",
@@ -1929,7 +2219,7 @@ const getNonPrescriptionMedicines = async (req, res) => {
             },
             {
                 $addFields: {
-                    // Dynamic discount calculation based on minimum price [cite: 1.1.2]
+                    // Dynamic discount calculation based on minimum price
                     discountPercentage: {
                         $cond: {
                             if: { $gt: ["$numMRP", 0] },
@@ -1950,7 +2240,7 @@ const getNonPrescriptionMedicines = async (req, res) => {
                 }
             },
             {
-                // 🚨 OVERWRITE best_price and discont_percent with live values to clear static admin data [cite: 1.1.2]
+                // OVERWRITE best_price and discont_percent with live values to clear static admin data
                 $addFields: {
                     best_price: { $toString: "$minimumPrice" },
                     discont_percent: {
@@ -1970,7 +2260,27 @@ const getNonPrescriptionMedicines = async (req, res) => {
                     numInventoryPrice: 0, 
                     isInventoryAvailable: 0,
                     minimumPrice: 0,
-                    discountPercentage: 0
+                    discountPercentage: 0,
+
+                    // Excluded the requested clinical and metadata fields
+                    primary_use: 0,
+                    description: 0,
+                    salt_synonmys: 0,
+                    storage: 0,
+                    introduction: 0,
+                    use_of: 0,
+                    benefits: 0,
+                    side_effect: 0,
+                    how_crop_side_effects: 0,
+                    how_to_use: 0,
+                    how_works: 0,
+                    safety_advise: 0,
+                    if_miss: 0,
+                    alternate_brand: 0,
+                    manufaturer_address: 0,
+                    __v: 0,
+                    createdAt: 0,
+                    updatedAt: 0
                 } 
             },
             { $skip: skip },

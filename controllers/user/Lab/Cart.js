@@ -333,6 +333,110 @@ const getMyCart = async (req, res) => {
     }
 };
 
+// ================================================================
+// ---  GET LAB CART ONLY ---
+const getLabCart = async (req, res) => {
+    try {
+        const cart = await Cart.findOne({ userId: req.user.id })
+            .populate('labCart.labId', 'name city address profileImage');
+
+        if (!cart || !cart.labCart || cart.labCart.items.length === 0) {
+            return res.json({ 
+                success: true, 
+                data: { 
+                    labId: null,
+                    categoryType: null,
+                    selectedPatients: [],
+                    items: [],
+                    labCartTotal: 0
+                } 
+            });
+        }
+
+        let labTotal = cart.labCart.items.reduce((acc, i) => acc + (i.price * i.quantity), 0);
+
+        // Injected dynamic preparationGuide & mainCategory on-the-fly
+        const mappedLabItems = await Promise.all(cart.labCart.items.map(async (item) => {
+            let precaution = "No special preparation required.";
+            let itemCategory = "Pathology";
+
+            if (item.productType === 'LabTest') {
+                const test = await LabTest.findById(item.itemId).select('precaution mainCategory');
+                if (test) {
+                    if (test.precaution) precaution = test.precaution;
+                    if (test.mainCategory) itemCategory = test.mainCategory;
+                }
+            } else if (item.productType === 'LabPackage') {
+                const pkg = await LabPackage.findById(item.itemId)
+                    .select('precaution')
+                    .populate({
+                        path: 'tests',
+                        model: 'MasterLabTest',
+                        select: 'mainCategory'
+                    });
+                if (pkg) {
+                    if (pkg.precaution) precaution = pkg.precaution;
+                    const hasRadiology = pkg.tests && pkg.tests.some(t => t.mainCategory && t.mainCategory.toLowerCase() === 'radiology');
+                    itemCategory = hasRadiology ? 'Radiology' : 'General';
+                }
+            }
+
+            return {
+                ...item.toObject(),
+                preparationGuide: precaution,
+                mainCategory: itemCategory
+            };
+        }));
+
+        res.json({
+            success: true,
+            data: {
+                labId: cart.labCart.labId,
+                categoryType: cart.labCart.categoryType,
+                selectedPatients: cart.labCart.selectedPatients,
+                items: mappedLabItems,
+                labCartTotal: labTotal
+            }
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// ---  GET PHARMACY CART ONLY ---
+const getPharmacyCart = async (req, res) => {
+    try {
+        const cart = await Cart.findOne({ userId: req.user.id })
+            .populate('pharmacyCart.pharmacyId', 'name address rating city')
+            .populate('pharmacyCart.items.medicineId', 'image_url manufacturers name mrp prescription_required');
+
+        if (!cart || !cart.pharmacyCart || cart.pharmacyCart.items.length === 0) {
+            return res.json({ 
+                success: true, 
+                data: { 
+                    pharmacyId: null,
+                    items: [],
+                    pharmacyCartTotal: 0
+                } 
+            });
+        }
+
+        let medTotal = cart.pharmacyCart.items.reduce((acc, i) => acc + (i.price * i.quantity), 0);
+
+        res.json({
+            success: true,
+            data: {
+                pharmacyId: cart.pharmacyCart.pharmacyId,
+                items: cart.pharmacyCart.items,
+                pharmacyCartTotal: medTotal
+            }
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// =========================================================================
 // 3. REMOVE ITEM / CLEAR LAB CART
 // endpoint: /user/cart/lab/clear
 const clearLabCart = async (req, res) => {
@@ -788,7 +892,7 @@ module.exports = { updateSelectedPatients,addToLabCart,updateCartQuantity, getMy
     addToPharmacyCart, updatePharmacyQuantity , checkBetterOptions,
     clearPharmacyCart, removePharmacyItem,
     updateMedicineDuration,
-
+     getLabCart, getPharmacyCart,
 
     getAvailableSlots, getAvailableCoupons
  };
