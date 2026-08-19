@@ -48,6 +48,62 @@ const cartSchema = new mongoose.Schema({
             comboOfferId: { type: mongoose.Schema.Types.ObjectId, ref: 'PharmacyComboOffer', default: null }
 
         }]
+    },
+
+    // --- FOOD (KITCHEN & DIET TILES) SECTION ---
+    foodCart: {
+        foodId: { 
+            type: mongoose.Schema.Types.ObjectId, 
+            ref: 'Food',
+            default: null
+        },
+        bookingType: { 
+            type: String, 
+            enum: ['One day One Time', 'For Multiple Days', 'Acc. To Per/Hours'],
+            default: 'One day One Time' 
+        },
+        items: [{
+            productType: {
+                type: String,
+                enum: ['MealItem', 'Combo'],
+                required: true,
+                default: 'MealItem'
+            },
+            itemId: { 
+                type: mongoose.Schema.Types.ObjectId,
+                required: true 
+            },
+            name: { 
+                type: String, 
+                required: true 
+            },
+            price: { 
+                type: Number, 
+                required: true 
+            },
+            quantity: { 
+                type: Number, 
+                default: 1 
+            },
+            mealType: { 
+                type: String, 
+                enum: ['Single Meal', 'Weekly Subscription', 'Monthly Subscription'],
+                required: true 
+            },
+            isComboApplied: { 
+                type: Boolean, 
+                default: false 
+            },
+            comboOfferId: { 
+                type: mongoose.Schema.Types.ObjectId, 
+                ref: 'FoodComboOffer', 
+                default: null 
+            },
+            startDate: { type: Date, default: null },
+            endDate: { type: Date, default: null },
+            preferredTime: { type: String, default: null },
+            daysMultiplier: { type: Number, default: 1 }
+        }]
     }
 
 }, { timestamps: true });
