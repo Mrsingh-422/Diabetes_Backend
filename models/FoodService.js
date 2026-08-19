@@ -10,7 +10,7 @@ const foodServiceSchema = new mongoose.Schema({
     },
     categoryId: { 
         type: mongoose.Schema.Types.ObjectId, 
-        ref: 'Category', // References Category model (e.g., Oats, Shakes, Bowls)
+        ref: 'FoodCategory', 
         default: null,
         index: true
     },
