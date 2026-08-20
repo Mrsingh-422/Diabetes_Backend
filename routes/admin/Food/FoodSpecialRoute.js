@@ -1,30 +1,26 @@
-// routes/admin/user/home/FoodPageRoute.js
+// routes/admin/Food/FoodSpecialRoute.js
 
 const express = require('express');
 const router = express.Router();
+const { protect, checkRoleAccess } = require('../../../middleware/authMiddleware');
 
-const { 
-    getFoodPageLayout,
-    getTodaySpecialById,
-    getUserWeeklyMenu,
-    getWeeklySpecialById
-} = require('../../../controllers/admin/user/Home/FoodPageController');
+const {
+    getTodaySpecials,
+    publishTodaySpecials,
+    removeTodaySpecial,
+    getWeeklyTemplateMenu,
+    updateDayMenuTemplate
+} = require('../../../controllers/admin/Food/FoodSpecial');
 
-// Base URL : /api/foodpage
+// Base URL: /admin/food/special
 
-// --- 1. TODAY'S SPECIALS APIS ---
-// Get paginated list of Today's Specials (Default Limit: 20)
-router.get('/daywise', getFoodPageLayout);
+// --- TODAY'S SPECIALS APIS ---
+router.get('/today', getTodaySpecials); // Public / Admin list load
+router.post('/today/publish', protect('admin'), checkRoleAccess(36), publishTodaySpecials); // Close & Publish Specials Button
+router.delete('/today/delete/:id', protect('admin'), checkRoleAccess(36), removeTodaySpecial); // Remove Special Button
 
-// Get single Today's Special meal details
-router.get('/daywise/:id', getTodaySpecialById);
-
-
-// --- 2. WEEKLY PLANNERS APIS ---
-// Get weekly calendar structure
-router.get('/weekly', getUserWeeklyMenu);
-
-// Get single Weekly menu plan meal details
-router.get('/weekly/:id', getWeeklySpecialById);
+// --- WEEKLY PLANNERS APIS ---
+router.get('/weekly', getWeeklyTemplateMenu); // Dashboard Planner list load
+router.put('/weekly/update/:day', protect('admin'), checkRoleAccess(36), updateDayMenuTemplate); // Edit Day Menu Save Button
 
 module.exports = router;

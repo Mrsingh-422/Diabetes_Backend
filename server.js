@@ -202,6 +202,7 @@ app.use('/admin/food', require('./routes/admin/Food/foodAdminRoute'));
 app.use('/admin/food/category', require('./routes/admin/Food/FoodCategoryRoute')); 
 app.use('/admin/food/manage', require('./routes/admin/Food/FoodManageRoute')); 
 app.use('/admin/food/special', require('./routes/admin/Food/FoodSpecialRoute')); 
+app.use('/admin/food/manage/combo', require('./routes/admin/Food/foodComboControllerRoute')); 
 // =========================== Admin Food Routes End =============================================
 
 // --- Admin Doctor Routes ---
@@ -275,6 +276,9 @@ app.use('/provider/coupons', require('./routes/provider/Common/CouponRoute')); /
 // app.use('/provider/availability', require('./routes/provider/Common/AvailabilityRoute')); // Availability Management Route (Doctors, Labs, Ambulances)
 app.use('/provider/driver', require('./routes/provider/Common/DriverRoute')); // Availability Management Route (Doctors, Labs, Ambulances)
 app.use('/provider/delivery-charges', require('./routes/provider/Common/DeliveryRoute')); // Delivery Charges Management Route
+// =================== Food Provider Routes =========================
+app.use('/provider/food/inventory', require('./routes/provider/Food/FoodInventoryRoute')); // Food Inventory Management
+// =================== Food Provider Routes END=========================
 
 // --- Provider Lab Routes ---
 app.use('/provider/labs/profile', require('./routes/provider/Lab/LabProfileRoute'));

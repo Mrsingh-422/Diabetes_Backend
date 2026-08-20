@@ -69,4 +69,5 @@ router.get('/banner/get', getHeroBanners);
 // Full Path: GET /admin/food/manage/banner/get/:id
 router.get('/banner/get/:id', getHeroBannerById);
 
+
 module.exports = router;
