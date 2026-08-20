@@ -1057,7 +1057,7 @@ const aboutUsUploads = multer({
 ]);
 
 // ==========================================
-// 6. FOOD CONFIGURATION (Replaced nurseDocUploads) - [1]
+//  FOOD CONFIGURATION (Replaced nurseDocUploads) - [1]
 // ==========================================
 const foodDir = 'public/uploads/foods';
 ensureDir(foodDir);
@@ -1080,6 +1080,51 @@ const foodDocUploads = multer({
     { name: 'gstCertificates', maxCount: 5 },       // Matches controller
     { name: 'otherCertificates', maxCount: 10 }     // Matches controller
 ]);
+// ==========================================
+//  SINGLE FOOD DISH IMAGE CONFIGURATION (For Manage Foods Form)
+// ==========================================
+const foodServiceDir = 'public/uploads/foods/services';
+ensureDir(foodServiceDir);
+
+const foodServiceImageUpload = multer({
+    storage: multer.diskStorage({
+        destination: (req, file, cb) => cb(null, foodServiceDir),
+        filename: (req, file, cb) => {
+            const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
+            cb(null, `dish-${uniqueSuffix}${path.extname(file.originalname)}`);
+        }
+    }),
+    fileFilter: docFileFilter,
+    limits: { fileSize: 5 * 1024 * 1024 } // 5MB limit
+}).single('imageUrl'); 
+
+// ==========================================
+// 52. BANNER IMAGE & VIDEO CONFIGURATION (For Food landing dynamic sliders)
+// ==========================================
+const bannerDir1 = 'public/uploads/banners';
+ensureDir(bannerDir1);
+
+const bannerUploadParser = multer({
+    storage: multer.diskStorage({
+        destination: (req, file, cb) => cb(null, bannerDir1),
+        filename: (req, file, cb) => {
+            const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
+            cb(null, `banner-${uniqueSuffix}${path.extname(file.originalname)}`);
+        }
+    }),
+    limits: { fileSize: 20 * 1024 * 1024 }, // Max 20MB limit (Video and image support)
+    fileFilter: (req, file, cb) => {
+        const allowedMimes = [
+            'image/png', 'image/jpeg', 'image/jpg', 'image/webp',
+            'video/mp4', 'video/webm'
+        ];
+        if (allowedMimes.includes(file.mimetype)) {
+            cb(null, true);
+        } else {
+            cb(new Error('Only PNG, JPG, JPEG, WEBP, MP4, and WEBM video files are allowed!'), false);
+        }
+    }
+}).single('file'); // Key for Postman/Figma upload: 'file'
 
 module.exports = { 
     clinicUploads,
@@ -1130,5 +1175,6 @@ module.exports = {
     labReportUpload,
     docPrescriptionUpload,hospitalPrescriptionUploads,hospitalDischargeFieldsUpload,blogUploads,
     videoUploads,videoUpdateUploads ,footerUploads,aboutUsUploads,
-    foodDocUploads
+    foodDocUploads,foodServiceImageUpload,bannerUploadParser
+
 };  

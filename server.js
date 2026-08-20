@@ -197,9 +197,12 @@ app.use('/admin/pharmacy/medicine', require('./routes/admin/Pharmacy/MedicineUpl
 // --- Admin Lab Routes ---
 app.use('/admin/lab', require('./routes/admin/Lab/LabAdminRoute')); // Lab Management Route
 app.use('/admin/lab/tests', require('./routes/admin/Lab/TestUploadRoute')); // Master Lab Test Upload & List Route
-
+// =========================== Admin Food Routes Start =========================================
 app.use('/admin/food', require('./routes/admin/Food/foodAdminRoute')); 
 app.use('/admin/food/category', require('./routes/admin/Food/FoodCategoryRoute')); 
+app.use('/admin/food/manage', require('./routes/admin/Food/FoodManageRoute')); 
+app.use('/admin/food/special', require('./routes/admin/Food/FoodSpecialRoute')); 
+// =========================== Admin Food Routes End =============================================
 
 // --- Admin Doctor Routes ---
 app.use('/admin/doctor', require('./routes/admin/Doctor/DoctorAdminRoute')); // Doctor Management Route
@@ -261,8 +264,8 @@ app.use('/doctor/video-call', require('./routes/doctor/VideoCallRoute')); // Doc
 app.use('/api/auth/clinic', require('./routes/clinic/authClinicRoute')); 
 app.use('/api/admin/clinic/', require('./routes/admin/Clinic/ClinicAdminRoute')); // Clinic Admin Management Route
 
-
-
+////////////////////////////// Food Routes User /////////////////////////////////
+app.use('/api/foodpage', require('./routes/admin/user/home/FoodPageRoute'));
 
 
 //////////////// Provider Routes /////////////////////
