@@ -99,7 +99,7 @@ const createAdminCoupon = async (req, res) => {
         const { vendorType, ...couponDetails } = req.body; 
 
         // Optional: Enum check
-        const allowedTypes = ['Lab', 'Pharmacy', 'Food', 'Hospital', 'Ambulance'];
+        const allowedTypes = ['Lab', 'Pharmacy', 'Food', 'Ambulance', 'Doctor', 'All'];
         if (!allowedTypes.includes(vendorType)) {
             return res.status(400).json({ message: "Invalid Vendor Type selected" });
         }
