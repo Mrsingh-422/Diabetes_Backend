@@ -4,48 +4,30 @@ const express = require('express');
 const router = express.Router();
 
 const { 
+    getNearestVendors, //  New Import
+    getNearestCombos,  //  New Import
     getFoodPageLayout,
     getTodaySpecialById,
     getUserWeeklyMenu,
-    getWeeklySpecialById,
-    getVendorMenuForUser,
-    getVendorMenuItemById,
-    getVendorComboById,
-    getVendorCombosForUser
+    getWeeklySpecialById
 } = require('../../../../controllers/admin/user/Home/FoodPageController');
 
 // Base URL : /api/foodpage
 
-// --- 1. TODAY'S SPECIALS APIS ---
-// Get paginated list of Today's Specials (Default Limit: 20)
-router.get('/daywise', getFoodPageLayout);
+// 🚨 NEW GEOLOCATED VENDORS API (POST endpoint retrieving dynamic proximity data) [37]
+// Full Path: POST /api/foodpage/nearest-vendors
+router.post('/nearest-vendors', getNearestVendors);
 
-// Get single Today's Special meal details
+// 🚨 NEW GEOLOCATED COMBO BUNDLES LIST (Fires near-by tiffin bundles directly) [37, 53]
+// Full Path: POST /api/foodpage/nearest-combos
+router.post('/nearest-combos', getNearestCombos);
+
+// Today's Specials
+router.get('/daywise', getFoodPageLayout);
 router.get('/daywise/:id', getTodaySpecialById);
 
-
-// --- 2. WEEKLY PLANNERS APIS ---
-// Get weekly calendar structure
+// Weekly Calendar
 router.get('/weekly', getUserWeeklyMenu);
-
-// Get single Weekly menu plan meal details
 router.get('/weekly/:id', getWeeklySpecialById);
-
-
-
-// --- 3. DYNAMIC VENDOR MENU LIST & DETAIL APIS ---
-// Full Path: GET /api/foodpage/vendor-menu/:vendorId
-router.get('/vendor-menu/:vendorId', getVendorMenuForUser);
-
-// Full Path: GET /api/foodpage/vendor-menu/:vendorId/:id
-router.get('/vendor-menu/:vendorId/:id', getVendorMenuItemById);
-
-// --- 4. DYNAMIC VENDOR COMBOS LIST & DETAIL APIS ---
-// Full Path: GET /api/foodpage/vendor-combos/:vendorId
-router.get('/vendor-combos/:vendorId', getVendorCombosForUser);
-
-// Full Path: GET /api/foodpage/vendor-combos/:vendorId/:id
-router.get('/vendor-combos/:vendorId/:id', getVendorComboById);
-
 
 module.exports = router;
