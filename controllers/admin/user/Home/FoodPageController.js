@@ -4,6 +4,9 @@ const FoodCategory = require('../../../../models/FoodCategory');
 const FoodService = require('../../../../models/FoodService');
 const TodaySpecial = require('../../../../models/TodaySpecialFood');
 const WeeklySpecial = require('../../../../models/WeeklySpecialFood');
+const VendorFoodItem = require('../../../../models/VendorFoodItem');
+const VendorFoodCombo = require('../../../../models/VendorFoodCombo');
+const FoodComboOffer = require('../../../../models/FoodComboOffer');
 
 // --- 1. GET FULL FOOD PAGE LAYOUT DATA (Unified Handshake with Paginated Today's Specials) ---
 const getFoodPageLayout = async (req, res) => {
@@ -125,9 +128,160 @@ const getWeeklySpecialById = async (req, res) => {
     }
 };
 
+// ==========================================
+// 🟢 2. USER-END VENDOR MENU & COMBOS DYNAMIC FETCH
+// ==========================================
+
+// --- 2.1 GET VENDOR MENU CARD WITH UNAVAILABLE FLAGS INJECTED ---
+const getVendorMenuForUser = async (req, res) => {
+    try {
+        const { vendorId } = req.params;
+
+        const masterMeals = await FoodService.find({ isActive: true })
+            .populate('categoryId', 'foodCategory foodEffectCategory')
+            .lean();
+
+        const vendorMappings = await VendorFoodItem.find({ vendorId }).lean();
+
+        const finalMappedMenu = masterMeals.map(meal => {
+            const mapping = vendorMappings.find(
+                map => map.foodServiceId.toString() === meal._id.toString()
+            );
+
+            let UnavailableFoodItem = true;
+            let finalPrice = meal.price;
+            let finalDiscountPrice = meal.discountPrice;
+
+            if (mapping && mapping.isAvailable === true) {
+                UnavailableFoodItem = false;
+                if (mapping.price !== null) finalPrice = mapping.price;
+                if (mapping.discountPrice !== null) finalDiscountPrice = mapping.discountPrice;
+            }
+
+            return {
+                ...meal,
+                price: finalPrice,
+                discountPrice: finalDiscountPrice,
+                UnavailableFoodItem
+            };
+        });
+
+        res.json({ success: true, vendorId, count: finalMappedMenu.length, data: finalMappedMenu });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// --- 2.2 GET SINGLE VENDOR MENU MEAL DETAILS BY ID ---
+const getVendorMenuItemById = async (req, res) => {
+    try {
+        const { vendorId, id } = req.params;
+
+        const meal = await FoodService.findOne({ _id: id, isActive: true })
+            .populate('categoryId', 'foodCategory foodEffectCategory')
+            .lean();
+
+        if (!meal) {
+            return res.status(404).json({ success: false, message: "Master food item not found." });
+        }
+
+        const mapping = await VendorFoodItem.findOne({ vendorId, foodServiceId: id }).lean();
+
+        res.json({
+            success: true,
+            data: {
+                ...meal,
+                isAvailable: mapping ? mapping.isAvailable : false,
+                customPrice: mapping ? mapping.price : null,
+                customDiscountPrice: mapping ? mapping.discountPrice : null,
+                UnavailableFoodItem: mapping ? !mapping.isAvailable : true
+            }
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// --- 2.3 GET VENDOR COMBOS LIST WITH UNAVAILABLE FLAGS INJECTED ---
+const getVendorCombosForUser = async (req, res) => {
+    try {
+        const { vendorId } = req.params;
+
+        const masterCombos = await FoodComboOffer.find({ isActive: true })
+            .populate({
+                path: 'dishes.foodServiceId',
+                select: 'name price discountPrice imageUrl dietType calories'
+            })
+            .lean();
+
+        const vendorComboMappings = await VendorFoodCombo.find({ vendorId }).lean();
+
+        const finalMappedCombos = masterCombos.map(combo => {
+            const mapping = vendorComboMappings.find(
+                map => map.foodComboId.toString() === combo._id.toString()
+            );
+
+            let UnavailableCombo = true;
+            let finalPrice = combo.comboPrice;
+
+            if (mapping && mapping.isAvailable === true) {
+                UnavailableCombo = false;
+                if (mapping.price !== null) finalPrice = mapping.price;
+            }
+
+            return {
+                ...combo,
+                comboPrice: finalPrice,
+                UnavailableCombo
+            };
+        });
+
+        res.json({ success: true, vendorId, count: finalMappedCombos.length, data: finalMappedCombos });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// --- 2.4 GET SINGLE VENDOR COMBO DETAILS BY ID ---
+const getVendorComboById = async (req, res) => {
+    try {
+        const { vendorId, id } = req.params;
+
+        const combo = await FoodComboOffer.findById(id)
+            .populate({
+                path: 'dishes.foodServiceId',
+                select: 'name price discountPrice imageUrl dietType calories'
+            })
+            .lean();
+
+        if (!combo) {
+            return res.status(404).json({ success: false, message: "Combo bundle not found." });
+        }
+
+        const mapping = await VendorFoodCombo.findOne({ vendorId, foodComboId: id }).lean();
+
+        res.json({
+            success: true,
+            data: {
+                ...combo,
+                isAvailable: mapping ? mapping.isAvailable : false,
+                customPrice: mapping ? mapping.price : null,
+                UnavailableCombo: mapping ? !mapping.isAvailable : true
+            }
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 module.exports = {
     getFoodPageLayout,
     getTodaySpecialById,
     getUserWeeklyMenu,
-    getWeeklySpecialById
+    getWeeklySpecialById,
+
+    getVendorMenuForUser,
+    getVendorMenuItemById,
+    getVendorCombosForUser,
+    getVendorComboById
 };

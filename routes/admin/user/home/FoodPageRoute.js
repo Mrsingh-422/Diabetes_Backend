@@ -7,9 +7,12 @@ const {
     getFoodPageLayout,
     getTodaySpecialById,
     getUserWeeklyMenu,
-    getWeeklySpecialById
+    getWeeklySpecialById,
+    getVendorMenuForUser,
+    getVendorMenuItemById,
+    getVendorComboById,
+    getVendorCombosForUser
 } = require('../../../../controllers/admin/user/Home/FoodPageController');
-const { getVendorCombosForUser } = require('../../../../controllers/provider/Food/FoodInventoryController');
 
 // Base URL : /api/foodpage
 
@@ -27,8 +30,22 @@ router.get('/weekly', getUserWeeklyMenu);
 
 // Get single Weekly menu plan meal details
 router.get('/weekly/:id', getWeeklySpecialById);
+
+
+
+// --- 3. DYNAMIC VENDOR MENU LIST & DETAIL APIS ---
+// Full Path: GET /api/foodpage/vendor-menu/:vendorId
+router.get('/vendor-menu/:vendorId', getVendorMenuForUser);
+
+// Full Path: GET /api/foodpage/vendor-menu/:vendorId/:id
+router.get('/vendor-menu/:vendorId/:id', getVendorMenuItemById);
+
+// --- 4. DYNAMIC VENDOR COMBOS LIST & DETAIL APIS ---
 // Full Path: GET /api/foodpage/vendor-combos/:vendorId
-// User app par Specific kitchen vendor click hone par combo lists load karne ke liye
 router.get('/vendor-combos/:vendorId', getVendorCombosForUser);
+
+// Full Path: GET /api/foodpage/vendor-combos/:vendorId/:id
+router.get('/vendor-combos/:vendorId/:id', getVendorComboById);
+
 
 module.exports = router;
