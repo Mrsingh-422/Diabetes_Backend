@@ -202,7 +202,7 @@ app.use('/admin/food', require('./routes/admin/Food/foodAdminRoute'));
 app.use('/admin/food/category', require('./routes/admin/Food/FoodCategoryRoute')); 
 app.use('/admin/food/manage', require('./routes/admin/Food/FoodManageRoute')); 
 app.use('/admin/food/special', require('./routes/admin/Food/FoodSpecialRoute')); 
-app.use('/admin/food/manage/combo', require('./routes/admin/Food/foodComboControllerRoute')); 
+app.use('/admin/food/manage/combo', require('./routes/user/Food/FoodPageRoute')); 
 // =========================== Admin Food Routes End =============================================
 
 // --- Admin Doctor Routes ---
