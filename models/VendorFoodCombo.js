@@ -21,16 +21,11 @@ const vendorFoodComboSchema = new mongoose.Schema({
         default: null 
     },
 
-    // Availability States
-    isSelected: { 
+    // 🚨 UPDATED KEY: Now 'isAvailable' represents active status on vendor's menu
+    isAvailable: { 
         type: Boolean, 
         default: false 
-    }, // True if vendor selected this bundle to be offered
-    
-    isOutOfStock: { 
-        type: Boolean, 
-        default: false 
-    } // True if temporarily out of stock
+    }
 }, { timestamps: true });
 
 vendorFoodComboSchema.index({ vendorId: 1, foodComboId: 1 }, { unique: true });

@@ -17,7 +17,7 @@ const vendorFoodItemSchema = new mongoose.Schema({
         index: true
     },
     
-    // 🚨 Custom pricing (Optional fallback: agar null hai toh master catalog price use hoga)
+    // Custom pricing (Optional fallback to master catalog price if null)
     price: { 
         type: Number, 
         default: null 
@@ -27,16 +27,11 @@ const vendorFoodItemSchema = new mongoose.Schema({
         default: null 
     },
 
-    // 🚨 Availability Controls mapping your requirements:
-    isSelected: { 
+    // 🚨 UPDATED KEY: Now 'isAvailable' represents active status on vendor's menu
+    isAvailable: { 
         type: Boolean, 
         default: false 
-    }, // True if vendor added this item to their active menu
-    
-    isOutOfStock: { 
-        type: Boolean, 
-        default: false 
-    } // True if vendor temporarily marks it out of stock
+    } 
 }, { timestamps: true });
 
 // Ensures a vendor can map a master dish only once
