@@ -20,18 +20,32 @@ const {
 // Base URL context: /provider/food/inventory
 
 // ==========================================
-// 🍔 1. MEALS INVENTORY CONTROL
+// 🚨 STEP 1: STATIC ROUTES KO HUMESHA SABSE UPAR RAKHEIN
 // ==========================================
+
+// A. Get Master Checklist for Meals
 router.get('/master-catalog', protect('provider'), getMasterCatalogForSelection);
-router.get('/:foodServiceId', protect('provider'), getVendorMenuItemById); // GET single meal details
-router.post('/select', protect('provider'), selectFoodItems);
-router.put('/deselect/:foodServiceId', protect('provider'), deselectFoodItem);
+
+// B. Get Master Checklist for Combos (Ab yeh bina kisi conflict ke match hoga!)
+router.get('/master-combos', protect('provider'), getMasterCombosForSelection);
+
 
 // ==========================================
-// 🍱 2. COMBOS INVENTORY CONTROL
+// 🚨 STEP 2: DYNAMIC ROUTES (WILDCARDS) KO SABSE NEECHE RAKHEIN
 // ==========================================
-router.get('/master-combos', protect('provider'), getMasterCombosForSelection);
-router.get('/combo/:foodComboId', protect('provider'), getVendorComboById); // GET single combo details
+
+// GET single meal details by ID
+router.get('/:foodServiceId', protect('provider'), getVendorMenuItemById);
+
+// GET single combo details by ID
+router.get('/combo/:foodComboId', protect('provider'), getVendorComboById);
+
+
+// ==========================================
+// ⚙️ STEP 3: WRITE OPERATIONS
+// ==========================================
+router.post('/select', protect('provider'), selectFoodItems);
+router.put('/deselect/:foodServiceId', protect('provider'), deselectFoodItem);
 router.post('/select-combos', protect('provider'), selectFoodCombos);
 router.put('/deselect-combo/:foodComboId', protect('provider'), deselectFoodCombo);
 
