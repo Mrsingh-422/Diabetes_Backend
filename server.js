@@ -203,6 +203,8 @@ app.use('/admin/food/category', require('./routes/admin/Food/FoodCategoryRoute')
 app.use('/admin/food/manage', require('./routes/admin/Food/FoodManageRoute')); 
 app.use('/admin/food/special', require('./routes/admin/Food/FoodSpecialRoute')); 
 app.use('/admin/food/manage/combo', require('./routes/admin/Food/foodComboControllerRoute')); 
+app.use('/admin/food/tiffin/plans', require('./routes/admin/Food/TiffinPlanAdminRoute')); 
+
 // =========================== Admin Food Routes End =============================================
 
 // --- Admin Doctor Routes ---
@@ -247,6 +249,12 @@ app.use('/user/medicine', require('./routes/user/Pharmacy/MedicineInventoryUserR
 // --- user ambulance ---
 // app.use('/user/ambulance', require('./routes/user/Ambulance/AmbulanceBookRoute'));
 
+//========================== Food Routes User ================================================================
+app.use('/api/foodpage', require('./routes/user/Food/FoodPageRoute')); // Food Page Management Route
+app.use('/api/food/checkout', require('./routes/user/Food/FoodCheckoutRoute')); 
+app.use('/admin/food/tiffin/plans', require('./routes/user/Food/FoodCheckoutRoute')); 
+
+
 //////////////// Doctor Routes ///////////////////////
 app.use('/api/auth/doctor', require('./routes/doctor/authDoctor'));
 app.use('/doctor/settings', require('./routes/doctor/DoctorSettingsRoute')); // Doctor Panel Route (Dashboard, Profile, etc.)
@@ -267,6 +275,7 @@ app.use('/api/admin/clinic/', require('./routes/admin/Clinic/ClinicAdminRoute'))
 
 ////////////////////////////// Food Routes User /////////////////////////////////
 app.use('/api/foodpage', require('./routes/user/Food/FoodPageRoute')); // Food Page Management Route
+app.use('/api/food/checkout', require('./routes/user/Food/FoodCheckoutRoute')); 
 
 
 //////////////// Provider Routes /////////////////////

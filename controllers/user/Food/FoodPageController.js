@@ -9,7 +9,10 @@ const VendorFoodCombo = require('../../../models/VendorFoodCombo');
 const FoodComboOffer = require('../../../models/FoodComboOffer');
 const Coupon = require('../../../models/Coupon');
 const Food = require('../../../models/Food');
+const VendorTiffinPlan = require('../../../models/VendorTiffinPlan');
+const TiffinPlan = require('../../../models/TiffinPlan');
 const VendorKMLimit = require('../../../models/VendorKMLimit');
+
 
 // ==========================================
 // 💡 PURE HAVERSINE MATHEMATICAL DISTANCE ENGINE
@@ -779,6 +782,196 @@ const getFoodCoupons = async (req, res) => {
     }
 };
 
+// controllers/user/Food/FoodPageController.js
+
+// --- 1. GET NEAREST GEOLOCATED TIFFIN PLANS (Home Screen - POST) ---
+// Full Path: POST /api/foodpage/nearest-plans?page=1&limit=20
+const getNearestPlans = async (req, res) => {
+    try {
+        const { lat, lng } = req.body;
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 20;
+
+        if (!lat || !lng) {
+            return res.status(400).json({ success: false, message: "User latitude and longitude are required." });
+        }
+
+        // 1. Fetch platform-wide dynamic KM limit
+        const limitConfig = await VendorKMLimit.findOne({ vendorType: 'Food', isActive: true });
+        const maxDistanceLimit = limitConfig ? limitConfig.kmLimit : 10;
+
+        // 2. Fetch all approved active kitchen vendors
+        const vendors = await Food.find({ profileStatus: 'Approved', isActive: true })
+            .select('name location rating address profileImage')
+            .lean();
+
+        const nearestVendors = [];
+        const nearestVendorsMap = new Map();
+
+        // 3. Filter vendors by Haversine distance
+        for (let vendor of vendors) {
+            if (!vendor.location || !vendor.location.lat || !vendor.location.lng) continue;
+
+            const distance = calculateHaversineDistance(
+                Number(lat),
+                Number(lng),
+                Number(vendor.location.lat),
+                Number(vendor.location.lng)
+            );
+
+            if (distance <= maxDistanceLimit) {
+                const vData = {
+                    ...vendor,
+                    distance: Number(distance.toFixed(2)),
+                    distanceText: `${distance.toFixed(1)} km`
+                };
+                nearestVendors.push(vData);
+                nearestVendorsMap.set(vendor._id.toString(), vData);
+            }
+        }
+
+        // Sort nearest vendors ascending
+        nearestVendors.sort((a, b) => a.distance - b.distance);
+        const serviceableVendorIds = nearestVendors.map(v => v._id);
+
+        if (nearestVendors.length === 0) {
+            return res.json({ success: true, count: 0, data: [] });
+        }
+
+        // 4. Fetch all master plans created by Admin
+        const masterPlans = await TiffinPlan.find({ isActive: true })
+            .populate({
+                path: 'dishPool',
+                select: 'name imageUrl price discountPrice dietType calories'
+            })
+            .lean();
+
+        // 5. Fetch vendor mappings for nearby kitchens
+        const vendorPlanMappings = await VendorTiffinPlan.find({
+            vendorId: { $in: serviceableVendorIds }
+        }).lean();
+
+        const mappedPlansList = [];
+
+        // 6. Map and attach proximity metadata
+        for (let plan of masterPlans) {
+            const planMappings = vendorPlanMappings.filter(
+                map => map.planId.toString() === plan._id.toString()
+            );
+
+            const activeMapping = planMappings.find(m => m.isAvailable === true);
+
+            let isAvailable = false;
+            let finalPrice = plan.price;
+            let targetVendor = nearestVendors[0]; // Fallback to closest kitchen
+
+            if (activeMapping) {
+                isAvailable = true;
+                targetVendor = nearestVendorsMap.get(activeMapping.vendorId.toString());
+                if (activeMapping.customPrice !== null) finalPrice = activeMapping.customPrice;
+            } else {
+                const anyMapping = planMappings[0];
+                if (anyMapping) {
+                    targetVendor = nearestVendorsMap.get(anyMapping.vendorId.toString());
+                }
+            }
+
+            mappedPlansList.push({
+                _id: plan._id,
+                planId: plan.planId,
+                name: plan.name,
+                planCycle: plan.planCycle,
+                mealsPerDay: plan.mealsPerDay,
+                price: finalPrice,
+                permittedSlots: plan.permittedSlots,
+                dishPool: plan.dishPool,
+                description: plan.description,
+                activeSubscribers: plan.activeSubscribers || 0,
+                isAvailable,
+                UnavailablePlan: !isAvailable,
+                vendorId: {
+                    _id: targetVendor._id,
+                    name: targetVendor.name,
+                    address: targetVendor.address,
+                    rating: targetVendor.rating,
+                    profileImage: targetVendor.profileImage
+                },
+                distance: targetVendor.distance,
+                distanceText: targetVendor.distanceText
+            });
+        }
+
+        // 7. Sort plans by distance ascending (nearest kitchen first!)
+        mappedPlansList.sort((a, b) => a.distance - b.distance);
+
+        // In-Memory Pagination
+        const totalDocs = mappedPlansList.length;
+        const skip = (page - 1) * limit;
+        const paginatedPlans = mappedPlansList.slice(skip, skip + limit);
+
+        res.json({
+            success: true,
+            maxDistanceLimitApplied: `${maxDistanceLimit} km`,
+            totalDocs,
+            totalPages: Math.ceil(totalDocs / limit),
+            currentPage: page,
+            limit,
+            data: paginatedPlans
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// --- 2. GET SINGLE VENDOR PLANS (Specific Kitchen Screen - GET) ---
+// Full Path: GET /api/foodpage/vendor-plans/:vendorId
+const getVendorPlansForUser = async (req, res) => {
+    try {
+        const { vendorId } = req.params;
+
+        const masterPlans = await TiffinPlan.find({ isActive: true })
+            .populate({
+                path: 'dishPool',
+                select: 'name imageUrl price discountPrice dietType calories'
+            })
+            .lean();
+
+        const vendorMappings = await VendorTiffinPlan.find({ vendorId }).lean();
+
+        const finalMappedPlans = masterPlans.map(plan => {
+            const mapping = vendorMappings.find(
+                map => map.planId.toString() === plan._id.toString()
+            );
+
+            let UnavailablePlan = true;
+            let finalPrice = plan.price;
+
+            if (mapping && mapping.isAvailable === true) {
+                UnavailablePlan = false;
+                if (mapping.customPrice !== null) finalPrice = mapping.customPrice;
+            }
+
+            return {
+                ...plan,
+                price: finalPrice,
+                isAvailable: mapping ? mapping.isAvailable : false,
+                UnavailablePlan
+            };
+        });
+
+        res.json({
+            success: true,
+            vendorId,
+            count: finalMappedPlans.length,
+            data: finalMappedPlans
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 
 module.exports = {
     getNearestVendorMeals, 
@@ -791,5 +984,7 @@ module.exports = {
     getComboDetailsById ,
     getUserFoodCategories,
     getUserFoodEffectCategories ,
-    getFoodCoupons
+    getFoodCoupons,
+    getNearestPlans,
+    getVendorPlansForUser
 };

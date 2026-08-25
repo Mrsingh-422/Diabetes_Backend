@@ -4,6 +4,9 @@ const VendorFoodItem = require('../../../models/VendorFoodItem');
 const VendorFoodCombo = require('../../../models/VendorFoodCombo');
 const FoodService = require('../../../models/FoodService');
 const FoodComboOffer = require('../../../models/FoodComboOffer');
+const Food = require('../../../models/Food');
+const TiffinPlan = require('../../../models/TiffinPlan');
+const VendorTiffinPlan = require('../../../models/VendorTiffinPlan');
 const mongoose = require('mongoose');
 
 // Helper to safely parse strings into arrays of strings
@@ -367,6 +370,106 @@ const toggleVendorOnlineStatus = async (req, res) => {
     }
 };
 
+// ==========================================
+// 📅 4. TIFFIN PLANS INVENTORY CRUD SECTION (🚨 NEW)
+// ==========================================
+
+// --- 4.1 GET MASTER TIFFIN PLANS CHECKLIST ---
+// Full Path: GET /provider/food/inventory/master-plans
+const getMasterPlansForSelection = async (req, res) => {
+    try {
+        const vendorId = req.user.id;
+
+        // A. Fetch all active Admin-created subscription plans [30, 31]
+        const masterPlans = await TiffinPlan.find({ isActive: true })
+            .populate({
+                path: 'dishPool',
+                select: 'name imageUrl price discountPrice dietType calories'
+            })
+            .lean();
+
+        // B. Fetch this vendor's plan mappings [cite: custom_context]
+        const vendorPlanMappings = await VendorTiffinPlan.find({ vendorId }).lean();
+
+        // C. Map isAvailable status on-the-fly [cite: custom_context]
+        const checklist = masterPlans.map(plan => {
+            const mapping = vendorPlanMappings.find(
+                map => map.planId.toString() === plan._id.toString()
+            );
+
+            return {
+                ...plan,
+                isAvailable: mapping ? mapping.isAvailable : false, // Checkbox checked if true [cite: custom_context]
+                customPrice: mapping ? mapping.customPrice : null
+            };
+        });
+
+        res.json({
+            success: true,
+            count: checklist.length,
+            data: checklist
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// --- 4.2 SELECT/ADD TIFFIN PLANS TO VENDOR ACTIVE CATALOG ---
+// Full Path: POST /provider/food/inventory/select-plans
+const selectTiffinPlans = async (req, res) => {
+    try {
+        const vendorId = req.user.id;
+        const { planIds } = req.body; // Array of TiffinPlan ObjectIDs [cite: custom_context]
+
+        if (!planIds || !Array.isArray(planIds)) {
+            return res.status(400).json({ success: false, message: "planIds array is required." });
+        }
+
+        const operations = planIds.map(id => ({
+            updateOne: {
+                filter: { vendorId, planId: id },
+                update: { $set: { isAvailable: true } },
+                upsert: true
+            }
+        }));
+
+        await VendorTiffinPlan.bulkWrite(operations);
+
+        res.json({
+            success: true,
+            message: `${planIds.length} Tiffin subscription plans added to your active catalog successfully!`
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// --- 4.3 DESELECT / REMOVE TIFFIN PLAN FROM VENDOR CATALOG ---
+// Full Path: PUT /provider/food/inventory/deselect-plan/:planId
+const deselectTiffinPlan = async (req, res) => {
+    try {
+        const vendorId = req.user.id;
+        const { planId } = req.params;
+
+        const mapping = await VendorTiffinPlan.findOneAndUpdate(
+            { vendorId, planId },
+            { $set: { isAvailable: false } },
+            { new: true }
+        );
+
+        res.json({
+            success: true,
+            message: "Tiffin plan marked as Unavailable in your catalog.",
+            data: mapping
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
 module.exports = {
     selectFoodItems,
     deselectFoodItem,
@@ -380,5 +483,10 @@ module.exports = {
     selectFoodCombos,
     deselectFoodCombo,
     getVendorCombosForUser,
-    toggleVendorOnlineStatus
+    toggleVendorOnlineStatus,
+
+     // Tiffin Plans
+     getMasterPlansForSelection,
+     selectTiffinPlans,
+     deselectTiffinPlan
 };

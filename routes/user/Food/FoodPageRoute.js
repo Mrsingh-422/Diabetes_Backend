@@ -14,7 +14,9 @@ const {
     getComboDetailsById,
     getUserFoodCategories,
     getUserFoodEffectCategories,
-    getFoodCoupons
+    getFoodCoupons,
+    getNearestPlans,
+    getVendorPlansForUser
 } = require('../../../controllers/user/Food/FoodPageController');
 
 // Base URL : /api/foodpage
@@ -49,5 +51,11 @@ router.get('/effects', getUserFoodEffectCategories);
 // 🎟️ Get Active Food Coupons (Public / Checkout use)
 // Full Path: GET /api/foodpage/coupons
 router.get('/coupons', getFoodCoupons);
+// 1. Geolocated Nearest Tiffin Plans (Home Screen)
+// Full Path: POST /api/foodpage/nearest-plans
+router.post('/nearest-plans', getNearestPlans);
 
+// 2. Specific Vendor Tiffin Plans (Kitchen Profile Screen)
+// Full Path: GET /api/foodpage/vendor-plans/:vendorId
+router.get('/vendor-plans/:vendorId', getVendorPlansForUser);
 module.exports = router;
