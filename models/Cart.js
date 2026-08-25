@@ -57,20 +57,16 @@ const cartSchema = new mongoose.Schema({
             ref: 'Food',
             default: null
         },
-        bookingType: { 
-            type: String, 
-            enum: ['One day One Time', 'For Multiple Days', 'Acc. To Per/Hours'],
-            default: 'One day One Time' 
-        },
         items: [{
-            productType: {
+            itemType: {
                 type: String,
-                enum: ['MealItem', 'Combo'],
-                required: true,
-                default: 'MealItem'
+                enum: ['FoodService', 'FoodComboOffer'],
+                default: 'FoodService'
             },
+            // 🚨 Dynamic Reference Path: Automatically resolves to FoodService or FoodComboOffer
             itemId: { 
-                type: mongoose.Schema.Types.ObjectId,
+                type: mongoose.Schema.Types.ObjectId, 
+                refPath: 'foodCart.items.itemType',
                 required: true 
             },
             name: { 
@@ -84,25 +80,7 @@ const cartSchema = new mongoose.Schema({
             quantity: { 
                 type: Number, 
                 default: 1 
-            },
-            mealType: { 
-                type: String, 
-                enum: ['Single Meal', 'Weekly Subscription', 'Monthly Subscription'],
-                required: true 
-            },
-            isComboApplied: { 
-                type: Boolean, 
-                default: false 
-            },
-            comboOfferId: { 
-                type: mongoose.Schema.Types.ObjectId, 
-                ref: 'FoodComboOffer', 
-                default: null 
-            },
-            startDate: { type: Date, default: null },
-            endDate: { type: Date, default: null },
-            preferredTime: { type: String, default: null },
-            daysMultiplier: { type: Number, default: 1 }
+            }
         }]
     }
 

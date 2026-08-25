@@ -202,7 +202,7 @@ app.use('/admin/food', require('./routes/admin/Food/foodAdminRoute'));
 app.use('/admin/food/category', require('./routes/admin/Food/FoodCategoryRoute')); 
 app.use('/admin/food/manage', require('./routes/admin/Food/FoodManageRoute')); 
 app.use('/admin/food/special', require('./routes/admin/Food/FoodSpecialRoute')); 
-app.use('/admin/food/manage/combo', require('./routes/user/Food/FoodPageRoute')); 
+app.use('/admin/food/manage/combo', require('./routes/admin/Food/foodComboControllerRoute')); 
 // =========================== Admin Food Routes End =============================================
 
 // --- Admin Doctor Routes ---
@@ -266,7 +266,7 @@ app.use('/api/auth/clinic', require('./routes/clinic/authClinicRoute'));
 app.use('/api/admin/clinic/', require('./routes/admin/Clinic/ClinicAdminRoute')); // Clinic Admin Management Route
 
 ////////////////////////////// Food Routes User /////////////////////////////////
-app.use('/api/foodpage', require('./routes/admin/user/home/FoodPageRoute'));
+app.use('/api/foodpage', require('./routes/user/Food/FoodPageRoute')); // Food Page Management Route
 
 
 //////////////// Provider Routes /////////////////////

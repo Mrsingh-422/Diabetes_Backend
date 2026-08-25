@@ -6,21 +6,34 @@ const FoodService = require('../../../models/FoodService');
 const FoodComboOffer = require('../../../models/FoodComboOffer');
 const mongoose = require('mongoose');
 
+// Helper to safely parse strings into arrays of strings
+const parseStringToArray = (field) => {
+    if (Array.isArray(field)) return field;
+    if (typeof field === 'string') {
+        return field.split(',').map(item => item.trim()).filter(Boolean);
+    }
+    return [];
+};
+
 // ==========================================
 // 🍔 1. MEALS INVENTORY CRUD SECTION
 // ==========================================
 
-// --- 1.1 GET MASTER CATALOG CHECKLIST ---
+// --- 1.1 GET MASTER CATALOG FOR VENDOR SELECTION (Shows ALL admin items with available true/false) ---
+// Full Path: GET /provider/food/inventory/master-catalog
 const getMasterCatalogForSelection = async (req, res) => {
     try {
-        const vendorId = req.user.id;
+        const vendorId = req.user.id; // From protect('provider') middleware
 
+        // A. Fetch ALL active master meals created by Admin [cite: custom_context]
         const masterMeals = await FoodService.find({ isActive: true })
             .populate('categoryId', 'foodCategory foodEffectCategory')
             .lean();
 
+        // B. Fetch this specific vendor's current inventory mapping [cite: custom_context]
         const vendorMappings = await VendorFoodItem.find({ vendorId }).lean();
 
+        // C. Dynamic checkmark generator: Maps isAvailable state on-the-fly [cite: custom_context]
         const selectionChecklist = masterMeals.map(meal => {
             const mapping = vendorMappings.find(
                 map => map.foodServiceId.toString() === meal._id.toString()
@@ -28,13 +41,19 @@ const getMasterCatalogForSelection = async (req, res) => {
 
             return {
                 ...meal,
-                isAvailable: mapping ? mapping.isAvailable : false, // 👈 Pre-filled checkbox key
+                // 🚨 UPDATED KEY: Selected items will return true, non-selected/unmapped will return false
+                isAvailable: mapping ? mapping.isAvailable : false, // [cite: custom_context]
                 customPrice: mapping ? mapping.price : null,
                 customDiscountPrice: mapping ? mapping.discountPrice : null
             };
         });
 
-        res.json({ success: true, count: selectionChecklist.length, data: selectionChecklist });
+        res.json({
+            success: true,
+            count: selectionChecklist.length,
+            data: selectionChecklist
+        });
+
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
@@ -158,11 +177,13 @@ const getVendorMenuForUser = async (req, res) => {
 // 🍱 2. COMBO OFFERS INVENTORY CRUD SECTION (🚨 UPDATED TO isAvailable)
 // ==========================================
 
-// --- 2.1 GET MASTER COMBOS CHECKLIST ---
+// --- 2.1 GET MASTER COMBOS CHECKLIST (Shows ALL admin combos with available true/false) ---
+// Full Path: GET /provider/food/inventory/master-combos
 const getMasterCombosForSelection = async (req, res) => {
     try {
         const vendorId = req.user.id;
 
+        // A. Fetch ALL active admin combos [cite: custom_context]
         const masterCombos = await FoodComboOffer.find({ isActive: true })
             .populate({
                 path: 'dishes.foodServiceId',
@@ -170,8 +191,10 @@ const getMasterCombosForSelection = async (req, res) => {
             })
             .lean();
 
+        // B. Fetch this vendor's combo mapping record [cite: custom_context]
         const vendorMappings = await VendorFoodCombo.find({ vendorId }).lean();
 
+        // C. Generate dynamic checkmark states: Maps isAvailable state on-the-fly [cite: custom_context]
         const checklist = masterCombos.map(combo => {
             const mapping = vendorMappings.find(
                 map => map.foodComboId.toString() === combo._id.toString()
@@ -179,12 +202,18 @@ const getMasterCombosForSelection = async (req, res) => {
 
             return {
                 ...combo,
-                isAvailable: mapping ? mapping.isAvailable : false, // 👈 Pre-filled checkbox key
+                // 🚨 UPDATED KEY: Selected combos will return true, non-selected will return false
+                isAvailable: mapping ? mapping.isAvailable : false, // [cite: custom_context]
                 customPrice: mapping ? mapping.price : null
             };
         });
 
-        res.json({ success: true, count: checklist.length, data: checklist });
+        res.json({
+            success: true,
+            count: checklist.length,
+            data: checklist
+        });
+
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
@@ -235,7 +264,7 @@ const selectFoodCombos = async (req, res) => {
         const operations = foodComboIds.map(id => ({
             updateOne: {
                 filter: { vendorId, foodComboId: id },
-                update: { $set: { isAvailable: true } }, // 👈 Updated to isAvailable
+                update: { $set: { isAvailable: true } },
                 upsert: true
             }
         }));
@@ -255,7 +284,7 @@ const deselectFoodCombo = async (req, res) => {
 
         const mapping = await VendorFoodCombo.findOneAndUpdate(
             { vendorId, foodComboId },
-            { $set: { isAvailable: false } }, // 👈 Updated to isAvailable
+            { $set: { isAvailable: false } },
             { new: true }
         );
 
@@ -305,6 +334,39 @@ const getVendorCombosForUser = async (req, res) => {
     }
 };
 
+// --- 1.1 TOGGLE VENDOR LIVE STATUS (ONLINE / OFFLINE) ---
+// Full Path: PATCH /provider/food/inventory/toggle-online
+const toggleVendorOnlineStatus = async (req, res) => {
+    try {
+        const vendorId = req.user.id; // From protect('provider') middleware
+        const { isOnline } = req.body;
+
+        const vendor = await Food.findById(vendorId);
+        if (!vendor) {
+            return res.status(404).json({ success: false, message: "Vendor profile not found." });
+        }
+
+        // Body mein value aayi toh set karein, varna current status ka opposite toggle karein
+        const newStatus = isOnline !== undefined ? Boolean(isOnline) : !vendor.isOnline;
+
+        const updatedVendor = await Food.findByIdAndUpdate(
+            vendorId,
+            { $set: { isOnline: newStatus } },
+            { new: true }
+        ).select('-password -token -fcmToken');
+
+        res.json({
+            success: true,
+            message: `Kitchen status updated to ${updatedVendor.isOnline ? 'Online' : 'Offline'} successfully.`,
+            isOnline: updatedVendor.isOnline,
+            data: updatedVendor
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 module.exports = {
     selectFoodItems,
     deselectFoodItem,
@@ -312,10 +374,11 @@ module.exports = {
     getMasterCatalogForSelection,
     getVendorMenuForUser,
 
-    // New Combo Exports
+    // Combo Exports
     getMasterCombosForSelection,
-    getVendorComboById, // 👈 New single detail export
+    getVendorComboById,
     selectFoodCombos,
     deselectFoodCombo,
-    getVendorCombosForUser
+    getVendorCombosForUser,
+    toggleVendorOnlineStatus
 };

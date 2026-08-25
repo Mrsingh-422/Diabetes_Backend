@@ -14,7 +14,8 @@ const {
     getMasterCombosForSelection,
     getVendorComboById,
     selectFoodCombos,
-    deselectFoodCombo
+    deselectFoodCombo,
+    toggleVendorOnlineStatus
 } = require('../../../controllers/provider/Food/FoodInventoryController');
 
 // Base URL context: /provider/food/inventory
@@ -48,5 +49,8 @@ router.post('/select', protect('provider'), selectFoodItems);
 router.put('/deselect/:foodServiceId', protect('provider'), deselectFoodItem);
 router.post('/select-combos', protect('provider'), selectFoodCombos);
 router.put('/deselect-combo/:foodComboId', protect('provider'), deselectFoodCombo);
+
+// Full Path: PATCH /provider/food/inventory/toggle-online
+router.patch('/toggle-online', protect('provider'), toggleVendorOnlineStatus);
 
 module.exports = router;

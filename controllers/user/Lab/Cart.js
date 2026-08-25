@@ -13,6 +13,8 @@ const Medicine = require('../../../models/Medicine');
 const Availability = require('../../../models/Availability');
 const DeliveryCharge = require('../../../models/DeliveryCharge');
 const Coupon = require('../../../models/Coupon');
+const FoodService = require('../../../models/FoodService');
+const FoodComboOffer = require('../../../models/FoodComboOffer');
 
 
 const calculateBill = async (vendorId, items, patientsCount, couponCode, isRapid, vendorType) => {
@@ -247,13 +249,112 @@ const updateSelectedPatients = async (req, res) => {
 };
 
 
-// 3. GET COMBINED CART (Lab + Pharmacy)
+// // 3. GET COMBINED CART (Lab + Pharmacy)
+// const getMyCart = async (req, res) => {
+//     try {
+//         const cart = await Cart.findOne({ userId: req.user.id })
+//             .populate('labCart.labId', 'name city address profileImage')
+//             .populate('pharmacyCart.pharmacyId', 'name address rating city')
+//             .populate('pharmacyCart.items.medicineId', 'image_url manufacturers name mrp prescription_required')
+
+//         if (!cart) {
+//             return res.json({ 
+//                 success: true, 
+//                 data: { 
+//                     labCart: { items: [] }, 
+//                     pharmacyCart: { items: [] },
+//                     labCartTotal: 0,
+//                     pharmacyCartTotal: 0,
+//                     totalItems: 0 
+//                 } 
+//             });
+//         }
+
+//         // 1. Totals calculate karein (Price * Quantity)
+//         let labTotal = cart.labCart.items.reduce((acc, i) => acc + (i.price * i.quantity), 0);
+//         let medTotal = cart.pharmacyCart.items.reduce((acc, i) => acc + (i.price * i.quantity), 0);
+
+//         // 2. Total Items Count calculate karein (Sum of all quantities)
+//         let labItemCount = cart.labCart.items.reduce((acc, i) => acc + i.quantity, 0);
+//         let pharmacyItemCount = cart.pharmacyCart.items.reduce((acc, i) => acc + i.quantity, 0);
+//         let totalItems = labItemCount + pharmacyItemCount;
+
+//         // 🚨 3. DYNAMIC PREPARATION GUIDE & MAIN CATEGORY INJECTOR [1]
+//         // Loop through all lab cart items to fetch their precaution & mainCategory on-the-fly [1]
+//         const mappedLabItems = await Promise.all(cart.labCart.items.map(async (item) => {
+//             let precaution = "No special preparation required."; // Default fallback [1]
+//             let itemCategory = "Pathology"; // Default fallback category
+
+//             if (item.productType === 'LabTest') {
+//                 const test = await LabTest.findById(item.itemId).select('precaution mainCategory');
+//                 if (test) {
+//                     if (test.precaution) precaution = test.precaution;
+//                     if (test.mainCategory) itemCategory = test.mainCategory; // 👈 Directly assigned
+//                 }
+//             } else if (item.productType === 'LabPackage') {
+//                 // Fetch package and populate its tests to inspect their categories [cite: 2.1]
+//                 const pkg = await LabPackage.findById(item.itemId)
+//                     .select('precaution')
+//                     .populate({
+//                         path: 'tests',
+//                         model: 'MasterLabTest',
+//                         select: 'mainCategory'
+//                     });
+//                 if (pkg) {
+//                     if (pkg.precaution) precaution = pkg.precaution;
+                    
+//                     // Determine category dynamically based on its tests [cite: 2.1]
+//                     const hasRadiology = pkg.tests && pkg.tests.some(t => t.mainCategory && t.mainCategory.toLowerCase() === 'radiology');
+//                     itemCategory = hasRadiology ? 'Radiology' : 'General';
+//                 }
+//             }
+
+//             return {
+//                 ...item.toObject(), // Convert mongoose document to raw Javascript object
+//                 preparationGuide: precaution, // Dynamic preparation instruction [1]
+//                 mainCategory: itemCategory // 👈 Dynamic mainCategory key injected
+//             };
+//         }));
+
+//         // 4. Construct response ensuring NO OTHER KEY is modified [1]
+//         res.json({ 
+//             success: true, 
+//             data: { 
+//                 ...cart._doc, 
+//                 labCart: {
+//                     ...cart.labCart.toObject(),
+//                     items: mappedLabItems // Replaced with updated dynamic array [1]
+//                 },
+//                 labCartTotal: labTotal, 
+//                 pharmacyCartTotal: medTotal,
+//                 totalItems: totalItems 
+//             } 
+//         });
+//     } catch (error) { 
+//         res.status(500).json({ message: error.message }); 
+//     }
+// };
+
+
+// ==========================================
+// 💡 CENTRALIZED COMBINED CART (GET /)
+// ==========================================
 const getMyCart = async (req, res) => {
     try {
         const cart = await Cart.findOne({ userId: req.user.id })
             .populate('labCart.labId', 'name city address profileImage')
             .populate('pharmacyCart.pharmacyId', 'name address rating city')
             .populate('pharmacyCart.items.medicineId', 'image_url manufacturers name mrp prescription_required')
+            .populate('foodCart.foodId', 'name city address profileImage')
+            .populate({
+                path: 'foodCart.items.itemId',
+                strictPopulate: false, // 👈 Fix: Ignores missing dishes path on single meals
+                populate: {
+                    path: 'dishes.foodServiceId',
+                    select: 'name price discountPrice imageUrl dietType calories',
+                    strictPopulate: false
+                }
+            });
 
         if (!cart) {
             return res.json({ 
@@ -261,70 +362,31 @@ const getMyCart = async (req, res) => {
                 data: { 
                     labCart: { items: [] }, 
                     pharmacyCart: { items: [] },
+                    foodCart: { items: [] },
                     labCartTotal: 0,
                     pharmacyCartTotal: 0,
+                    foodCartTotal: 0,
                     totalItems: 0 
                 } 
             });
         }
 
-        // 1. Totals calculate karein (Price * Quantity)
         let labTotal = cart.labCart.items.reduce((acc, i) => acc + (i.price * i.quantity), 0);
         let medTotal = cart.pharmacyCart.items.reduce((acc, i) => acc + (i.price * i.quantity), 0);
+        let foodTotal = cart.foodCart?.items?.reduce((acc, i) => acc + (i.price * i.quantity), 0) || 0;
 
-        // 2. Total Items Count calculate karein (Sum of all quantities)
         let labItemCount = cart.labCart.items.reduce((acc, i) => acc + i.quantity, 0);
         let pharmacyItemCount = cart.pharmacyCart.items.reduce((acc, i) => acc + i.quantity, 0);
-        let totalItems = labItemCount + pharmacyItemCount;
+        let foodItemCount = cart.foodCart?.items?.reduce((acc, i) => acc + i.quantity, 0) || 0;
+        let totalItems = labItemCount + pharmacyItemCount + foodItemCount;
 
-        // 🚨 3. DYNAMIC PREPARATION GUIDE & MAIN CATEGORY INJECTOR [1]
-        // Loop through all lab cart items to fetch their precaution & mainCategory on-the-fly [1]
-        const mappedLabItems = await Promise.all(cart.labCart.items.map(async (item) => {
-            let precaution = "No special preparation required."; // Default fallback [1]
-            let itemCategory = "Pathology"; // Default fallback category
-
-            if (item.productType === 'LabTest') {
-                const test = await LabTest.findById(item.itemId).select('precaution mainCategory');
-                if (test) {
-                    if (test.precaution) precaution = test.precaution;
-                    if (test.mainCategory) itemCategory = test.mainCategory; // 👈 Directly assigned
-                }
-            } else if (item.productType === 'LabPackage') {
-                // Fetch package and populate its tests to inspect their categories [cite: 2.1]
-                const pkg = await LabPackage.findById(item.itemId)
-                    .select('precaution')
-                    .populate({
-                        path: 'tests',
-                        model: 'MasterLabTest',
-                        select: 'mainCategory'
-                    });
-                if (pkg) {
-                    if (pkg.precaution) precaution = pkg.precaution;
-                    
-                    // Determine category dynamically based on its tests [cite: 2.1]
-                    const hasRadiology = pkg.tests && pkg.tests.some(t => t.mainCategory && t.mainCategory.toLowerCase() === 'radiology');
-                    itemCategory = hasRadiology ? 'Radiology' : 'General';
-                }
-            }
-
-            return {
-                ...item.toObject(), // Convert mongoose document to raw Javascript object
-                preparationGuide: precaution, // Dynamic preparation instruction [1]
-                mainCategory: itemCategory // 👈 Dynamic mainCategory key injected
-            };
-        }));
-
-        // 4. Construct response ensuring NO OTHER KEY is modified [1]
         res.json({ 
             success: true, 
             data: { 
                 ...cart._doc, 
-                labCart: {
-                    ...cart.labCart.toObject(),
-                    items: mappedLabItems // Replaced with updated dynamic array [1]
-                },
                 labCartTotal: labTotal, 
                 pharmacyCartTotal: medTotal,
+                foodCartTotal: foodTotal, 
                 totalItems: totalItems 
             } 
         });
@@ -886,6 +948,239 @@ const getAvailableCoupons = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
+// ==========================================
+//  FOOD CART CRUD SECTION (WITH DYNAMIC POPULATE)
+// ==========================================
+
+// --- 2.1 ADD TO FOOD CART (POST /user/cart/food/add) ---
+const addToFoodCart = async (req, res) => {
+    try {
+        const { foodId, itemId, quantity = 1, forceReplace } = req.body;
+        const userId = req.user.id;
+
+        if (!foodId || !itemId) {
+            return res.status(400).json({ success: false, message: "foodId and itemId are required." });
+        }
+
+        // Auto-detect whether itemId belongs to FoodService or FoodComboOffer
+        let resolvedItemType = 'FoodService';
+        let activePrice = 0;
+        let itemName = '';
+
+        const meal = await FoodService.findById(itemId);
+        if (meal) {
+            resolvedItemType = 'FoodService';
+            activePrice = meal.discountPrice > 0 ? meal.discountPrice : meal.price;
+            itemName = meal.name;
+        } else {
+            const combo = await FoodComboOffer.findById(itemId);
+            if (combo) {
+                resolvedItemType = 'FoodComboOffer';
+                activePrice = combo.comboPrice;
+                itemName = combo.name;
+            }
+        }
+
+        if (!meal && !activePrice) {
+            return res.status(404).json({ success: false, message: "Item not found in meals catalog or combo offers." });
+        }
+
+        let cart = await Cart.findOne({ userId });
+        if (!cart) cart = new Cart({ userId, foodCart: { items: [] } });
+
+        // Kitchen Mismatch validation (Single kitchen per order)
+        const hasItems = cart.foodCart.items.length > 0;
+        if (hasItems && cart.foodCart.foodId?.toString() !== foodId && !forceReplace) {
+            return res.status(400).json({
+                success: false,
+                canReplace: true,
+                message: "Your cart contains items from another kitchen. Clear and replace?"
+            });
+        }
+
+        if (forceReplace) {
+            cart.foodCart.items = [];
+        }
+
+        cart.foodCart.foodId = foodId;
+
+        // Duplicate check by itemId and itemType
+        const itemIndex = cart.foodCart.items.findIndex(
+            i => i.itemId.toString() === itemId && i.itemType === resolvedItemType
+        );
+
+        if (itemIndex > -1) {
+            cart.foodCart.items[itemIndex].quantity += Number(quantity);
+        } else {
+            cart.foodCart.items.push({
+                itemType: resolvedItemType,
+                itemId,
+                name: itemName,
+                price: activePrice,
+                quantity: Number(quantity)
+            });
+        }
+
+        await cart.save();
+
+        // Populate with strictPopulate: false
+        const populatedCart = await Cart.findById(cart._id)
+            .populate('foodCart.foodId', 'name city address profileImage')
+            .populate({
+                path: 'foodCart.items.itemId',
+                strictPopulate: false,
+                populate: {
+                    path: 'dishes.foodServiceId',
+                    select: 'name price discountPrice imageUrl dietType calories',
+                    strictPopulate: false
+                }
+            });
+
+        res.json({
+            success: true,
+            message: `${resolvedItemType === 'FoodComboOffer' ? 'Combo bundle' : 'Food item'} added to cart successfully!`,
+            data: populatedCart.foodCart
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// --- 2.2 UPDATE QUANTITY (PUT /user/cart/food/quantity) ---
+const updateFoodCartQuantity = async (req, res) => {
+    try {
+        const { itemId, action } = req.body;
+        const userId = req.user.id;
+
+        const cart = await Cart.findOne({ userId });
+        if (!cart) return res.status(404).json({ success: false, message: "Cart not found." });
+
+        const itemIndex = cart.foodCart.items.findIndex(i => i.itemId.toString() === itemId);
+
+        if (itemIndex > -1) {
+            const isIncrement = action === 'inc' || action === 'increment';
+            const isDecrement = action === 'dec' || action === 'decrement';
+
+            if (isIncrement) {
+                cart.foodCart.items[itemIndex].quantity += 1;
+            } else if (isDecrement) {
+                cart.foodCart.items[itemIndex].quantity -= 1;
+            }
+
+            if (cart.foodCart.items[itemIndex].quantity <= 0) {
+                cart.foodCart.items.splice(itemIndex, 1);
+            }
+        } else {
+            return res.status(404).json({ success: false, message: "Item not found in cart." });
+        }
+
+        if (cart.foodCart.items.length === 0) {
+            cart.foodCart.foodId = null;
+        }
+
+        await cart.save();
+
+        const populatedCart = await Cart.findById(cart._id)
+            .populate('foodCart.foodId', 'name city address profileImage')
+            .populate({
+                path: 'foodCart.items.itemId',
+                strictPopulate: false,
+                populate: {
+                    path: 'dishes.foodServiceId',
+                    select: 'name price discountPrice imageUrl dietType calories',
+                    strictPopulate: false
+                }
+            });
+
+        res.json({
+            success: true,
+            message: "Quantity updated successfully!",
+            data: populatedCart.foodCart
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// --- 2.3 REMOVE ITEM (DELETE /user/cart/food/item/:itemId) ---
+const removeFoodCartItem = async (req, res) => {
+    try {
+        const { itemId } = req.params;
+        const cart = await Cart.findOne({ userId: req.user.id });
+
+        if (!cart) return res.status(404).json({ success: false, message: "Cart not found." });
+
+        cart.foodCart.items = cart.foodCart.items.filter(item => item.itemId.toString() !== itemId);
+
+        if (cart.foodCart.items.length === 0) {
+            cart.foodCart.foodId = null;
+        }
+
+        await cart.save();
+        res.json({ success: true, message: "Item removed from cart.", data: cart.foodCart });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// --- 2.4 CLEAR FULL FOOD CART (POST /user/cart/food/clear) ---
+const clearFoodCart = async (req, res) => {
+    try {
+        await Cart.findOneAndUpdate(
+            { userId: req.user.id },
+            { $set: { "foodCart.items": [], "foodCart.foodId": null } }
+        );
+        res.json({ success: true, message: "Food cart cleared successfully!" });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// --- 2.5 GET FOOD CART WITH POPULATE (GET /user/cart/food) ---
+const getFoodCart = async (req, res) => {
+    try {
+        const cart = await Cart.findOne({ userId: req.user.id })
+            .populate('foodCart.foodId', 'name city address profileImage')
+            .populate({
+                path: 'foodCart.items.itemId',
+                strictPopulate: false, 
+                populate: {
+                    path: 'dishes.foodServiceId',
+                    select: 'name price discountPrice imageUrl dietType calories',
+                    strictPopulate: false
+                }
+            });
+
+        if (!cart || !cart.foodCart || cart.foodCart.items.length === 0) {
+            return res.json({
+                success: true,
+                data: {
+                    foodId: null,
+                    items: [],
+                    foodCartTotal: 0
+                }
+            });
+        }
+
+        const foodCartTotal = cart.foodCart.items.reduce((acc, i) => acc + (i.price * i.quantity), 0);
+
+        res.json({
+            success: true,
+            data: {
+                foodId: cart.foodCart.foodId,
+                items: cart.foodCart.items,
+                foodCartTotal
+            }
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 
 module.exports = { updateSelectedPatients,addToLabCart,updateCartQuantity, getMyCart, clearLabCart, removeItem,
     compareCartOnMap,
@@ -894,5 +1189,10 @@ module.exports = { updateSelectedPatients,addToLabCart,updateCartQuantity, getMy
     updateMedicineDuration,
      getLabCart, getPharmacyCart,
 
-    getAvailableSlots, getAvailableCoupons
+    getAvailableSlots, getAvailableCoupons,
+    addToFoodCart,
+    updateFoodCartQuantity,
+    removeFoodCartItem,
+    clearFoodCart,
+    getFoodCart
  };
