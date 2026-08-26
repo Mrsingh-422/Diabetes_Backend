@@ -104,7 +104,19 @@ const foodBookingSchema = new mongoose.Schema({
         razorpayOrderId: { type: String, default: "" },
         razorpaySignature: { type: String, default: "" },
         paidAt: { type: Date, default: null }
-    }
+    },
+    // 🍴 NON-FOOD ADD-ONS (Spoons, Bowls, Containers)
+    addons: [{
+        addonId: { 
+            type: mongoose.Schema.Types.ObjectId, 
+            ref: 'FoodAddon', 
+            required: true 
+        },
+        name: { type: String, required: true },
+        price: { type: Number, required: true },
+        quantity: { type: Number, default: 1 }
+    }],
+    
 }, { timestamps: true });
 
 module.exports = mongoose.model('FoodBooking', foodBookingSchema);

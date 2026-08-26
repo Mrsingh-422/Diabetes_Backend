@@ -1125,6 +1125,23 @@ const bannerUploadParser = multer({
         }
     }
 }).single('file'); // Key for Postman/Figma upload: 'file'
+// ==========================================
+//  FOOD ADDON IMAGE CONFIGURATION (Cutlery/Bowls Images)
+// ==========================================
+const foodAddonDir = 'public/uploads/foods/addons';
+ensureDir(foodAddonDir);
+
+const foodAddonImageUpload = multer({
+    storage: multer.diskStorage({
+        destination: (req, file, cb) => cb(null, foodAddonDir),
+        filename: (req, file, cb) => {
+            const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
+            cb(null, `addon-${uniqueSuffix}${path.extname(file.originalname)}`);
+        }
+    }),
+    fileFilter: docFileFilter,
+    limits: { fileSize: 5 * 1024 * 1024 } // 5MB limit
+}).single('imageUrl'); // Key for Postman upload: 'imageUrl'
 
 module.exports = { 
     clinicUploads,
@@ -1175,6 +1192,6 @@ module.exports = {
     labReportUpload,
     docPrescriptionUpload,hospitalPrescriptionUploads,hospitalDischargeFieldsUpload,blogUploads,
     videoUploads,videoUpdateUploads ,footerUploads,aboutUsUploads,
-    foodDocUploads,foodServiceImageUpload,bannerUploadParser
+    foodDocUploads,foodServiceImageUpload,bannerUploadParser,foodAddonImageUpload
 
 };  

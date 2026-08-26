@@ -2,14 +2,22 @@
 
 const express = require('express');
 const router = express.Router();
-const { protect } = require('../../../middleware/authMiddleware');
+const { protect } = require('../../../middleware/authMiddleware')
+const { foodAddonImageUpload } = require('../../../middleware/multer');
+;
 
 const {
     calculateCheckoutBill,
     placeFoodOrder,
     verifyFoodPayment,
     getMyFoodOrders,
-    getSingleFoodOrder
+    getSingleFoodOrder,
+    createFoodAddon,
+    getAvailableAddons,
+    getAddonById,
+    updateFoodAddon,
+    deleteFoodAddon,
+    toggleAddonStatus
 } = require('../../../controllers/user/Food/FoodCheckoutController');
 
 // Base URL: /api/food/checkout
@@ -29,4 +37,12 @@ router.get('/my-orders', protect('user'), getMyFoodOrders);
 // 5. Single Order Tracking (GET)
 router.get('/order/:id', protect('user'), getSingleFoodOrder);
 
+// ==========================================
+// 🥗 ADD-ONS ROUTES
+// ==========================================
+router.get('/addons', getAvailableAddons); // Public
+router.get('/addons/:id', getAddonById);
+router.post('/addons/add', protect('admin'), foodAddonImageUpload, createFoodAddon);
+router.put('/addons/update/:id', protect('admin'), foodAddonImageUpload, updateFoodAddon);
+router.delete('/addons/delete/:id', protect('admin'), deleteFoodAddon);
 module.exports = router;

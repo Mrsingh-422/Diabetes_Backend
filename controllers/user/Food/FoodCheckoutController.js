@@ -8,6 +8,8 @@ const FoodBooking = require('../../../models/FoodBooking');
 const DeliveryCharge = require('../../../models/DeliveryCharge');
 const Coupon = require('../../../models/Coupon');
 const VendorKMLimit = require('../../../models/VendorKMLimit');
+const FoodAddon = require('../../../models/FoodAddon'); 
+const { deleteFile } = require('../../../utils/fileHandler');
 
 const crypto = require('crypto');
 const { 
@@ -20,7 +22,7 @@ const {
 // 💡 HAVERSINE DISTANCE CALCULATOR
 // ==========================================
 const calculateDistance = (lat1, lon1, lat2, lon2) => {
-    const R = 6371; // KM [37]
+    const R = 6371; // KM
     const dLat = (lat2 - lat1) * Math.PI / 180;
     const dLon = (lon2 - lon1) * Math.PI / 180;
     const a = 
@@ -32,20 +34,21 @@ const calculateDistance = (lat1, lon1, lat2, lon2) => {
 };
 
 // ==========================================
-// 💡 SECURE BILLING ENGINE (Crash-Proof)
+// 💡 SECURE BILLING ENGINE (MEALS + NON-FOOD ADDONS)
 // ==========================================
-const calculateFoodBillHelper = async ({ userId, foodId, items, userLat, userLng, couponCode, isRapid = false }) => {
+const calculateFoodBillHelper = async ({ userId, foodId, items = [], addons = [], userLat, userLng, couponCode, isRapid = false }) => {
     let itemTotal = 0;
     const verifiedItems = [];
+    const verifiedAddons = [];
 
     const cleanFoodId = foodId?._id ? foodId._id.toString() : foodId.toString();
 
+    // 1. Verify Meals & Combos directly from Database
     for (let item of items) {
         let price = 0;
         let name = '';
         let resolvedProductType = 'MealItem';
 
-        // 🚨 Extract raw ID whether it's an ObjectId or populated object
         const rawItemId = item.itemId?._id ? item.itemId._id.toString() : (item.itemId ? item.itemId.toString() : item._id.toString());
         const isCombo = item.productType === 'Combo' || item.itemType === 'FoodComboOffer';
 
@@ -78,13 +81,34 @@ const calculateFoodBillHelper = async ({ userId, foodId, items, userLat, userLng
         });
     }
 
-    // Kitchen Status Check
+    // 2. 🚨 Calculate Non-Food Addons (Cutlery / Spoons / Bowls)
+    if (addons && Array.isArray(addons) && addons.length > 0) {
+        for (let add of addons) {
+            const rawAddonId = add.addonId?._id || add.addonId || add._id;
+            const addonDoc = await FoodAddon.findById(rawAddonId);
+
+            if (addonDoc) {
+                const addPrice = Number(addonDoc.price || 0);
+                const addQty = Math.max(1, Number(add.quantity || 1));
+                itemTotal += (addPrice * addQty);
+
+                verifiedAddons.push({
+                    addonId: addonDoc._id,
+                    name: addonDoc.name,
+                    price: addPrice,
+                    quantity: addQty
+                });
+            }
+        }
+    }
+
+    // 3. Kitchen Status Check
     const vendor = await Food.findById(cleanFoodId);
     if (!vendor) throw new Error("Kitchen vendor not found.");
     if (vendor.isActive === false) throw new Error("This kitchen is currently suspended by Admin.");
     if (vendor.isOnline === false) throw new Error("Booking Blocked: Kitchen is currently offline and not accepting orders.");
 
-    // Delivery & Logistics
+    // 4. Delivery & Logistics
     let deliveryCharge = 0;
     let distance = 0;
 
@@ -123,7 +147,7 @@ const calculateFoodBillHelper = async ({ userId, foodId, items, userLat, userLng
 
     if (isRapid) deliveryCharge += (chargesConfig.fastDeliveryExtra || 25);
 
-    // Coupon Verification
+    // 5. Coupon Verification
     let couponDiscount = 0;
     let validCouponId = null;
 
@@ -156,7 +180,7 @@ const calculateFoodBillHelper = async ({ userId, foodId, items, userLat, userLng
         validCouponId = coupon._id;
     }
 
-    // Tax Assessment (GST 5%)
+    // 6. Tax Assessment (GST 5%)
     const taxRate = chargesConfig.taxPercentage || 5;
     const taxableSubtotal = Math.max(0, (itemTotal - couponDiscount) + deliveryCharge);
     const taxAmount = Math.round(taxableSubtotal * (taxRate / 100));
@@ -164,6 +188,7 @@ const calculateFoodBillHelper = async ({ userId, foodId, items, userLat, userLng
 
     return {
         verifiedItems,
+        verifiedAddons,
         vendor,
         distance,
         billSummary: {
@@ -184,7 +209,7 @@ const calculateFoodBillHelper = async ({ userId, foodId, items, userLat, userLng
 const calculateCheckoutBill = async (req, res) => {
     try {
         const userId = req.user.id;
-        const { foodId, items, userLat, userLng, couponCode, isRapid } = req.body;
+        const { foodId, items, addons, userLat, userLng, couponCode, isRapid } = req.body;
 
         let cartItems = items;
         let targetFoodId = foodId;
@@ -206,6 +231,7 @@ const calculateCheckoutBill = async (req, res) => {
             userId,
             foodId: targetFoodId,
             items: cartItems,
+            addons: addons || [],
             userLat,
             userLng,
             couponCode,
@@ -216,7 +242,8 @@ const calculateCheckoutBill = async (req, res) => {
             success: true,
             distance: `${calculation.distance} km`,
             billSummary: calculation.billSummary,
-            items: calculation.verifiedItems
+            items: calculation.verifiedItems,
+            addons: calculation.verifiedAddons
         });
 
     } catch (error) {
@@ -233,6 +260,7 @@ const placeFoodOrder = async (req, res) => {
         const { 
             foodId, 
             items, 
+            addons,
             bookingType = 'Direct',
             subscriptionDetails,
             customPlateSchedule,
@@ -247,7 +275,7 @@ const placeFoodOrder = async (req, res) => {
 
         const activePaymentMethod = paymentMethod || 'COD';
 
-        // Safely parse address
+        // Parse address safely
         let parsedAddress = address;
         if (typeof address === 'string') {
             try {
@@ -279,6 +307,7 @@ const placeFoodOrder = async (req, res) => {
             userId,
             foodId: cleanFoodId,
             items: cartItems,
+            addons: addons || [],
             userLat,
             userLng,
             couponCode,
@@ -290,7 +319,7 @@ const placeFoodOrder = async (req, res) => {
 
         let rzpOrder = null;
 
-        // 🚨 ONLINE FLOW: Razorpay Order Creation
+        // Online Razorpay Flow
         if (activePaymentMethod !== 'COD') {
             const payableAmountInRupees = Math.max(1, calculation.billSummary.totalAmount);
             rzpOrder = await createRazorpayOrder(
@@ -299,13 +328,14 @@ const placeFoodOrder = async (req, res) => {
             );
         }
 
-        // 🚨 CREATE BOOKING IN DB
+        // 🚨 Create Booking Document in MongoDB (With Add-ons)
         const booking = await FoodBooking.create({
             bookingId: tempBookingId,
             userId,
             foodId: cleanFoodId,
             bookingType,
             items: calculation.verifiedItems,
+            addons: calculation.verifiedAddons, // 👈 Saved in DB [cite: custom_context]
             subscriptionDetails,
             customPlateSchedule,
             address: parsedAddress,
@@ -321,7 +351,7 @@ const placeFoodOrder = async (req, res) => {
             }
         });
 
-        // --- A. COD FLOW ---
+        // COD Post-Order Actions
         if (activePaymentMethod === 'COD') {
             if (calculation.billSummary.couponId) {
                 await Coupon.findByIdAndUpdate(calculation.billSummary.couponId, {
@@ -342,7 +372,7 @@ const placeFoodOrder = async (req, res) => {
             });
         }
 
-        // --- B. ONLINE FLOW (🚨 SENDS RAZORPAY KEY WITH ALL SDK VARIATIONS) ---
+        // Online Post-Order Actions
         const rawKey = process.env.RAZORPAY_KEY_ID || "rzp_test_T2f3swDLdaDZCP";
         const razorpayKey = rawKey.replace(/["']/g, "").trim();
 
@@ -350,33 +380,22 @@ const placeFoodOrder = async (req, res) => {
             success: true,
             isOnlinePayment: true,
             message: "Razorpay order created for food checkout.",
-            
-            // 🚨 All standard Razorpay Web & Flutter SDK key formats:
-            key: razorpayKey,          // 👈 Required by Razorpay Flutter & Web SDKs ('key')
-            key_id: razorpayKey,       // 👈 Alternative key format ('key_id')
-            keyId: razorpayKey,        // 👈 CamelCase key format ('keyId')
-            razorpayKey: razorpayKey,
-            
-            // Order details
-            amount: rzpOrder.amount,   // in paise (e.g. 95200)
+            key: razorpayKey,
+            key_id: razorpayKey,
+            keyId: razorpayKey,
+            amount: rzpOrder.amount, // in paise
             amountInRupees: calculation.billSummary.totalAmount,
             currency: "INR",
             razorpayOrderId: rzpOrder.id,
-            orderId: rzpOrder.id,      // 👈 Flutter fallback ('orderId')
-            order_id: rzpOrder.id,     // 👈 SnakeCase fallback ('order_id')
-            
-            // Verification mapping tokens
+            orderId: rzpOrder.id,
             bookingId: booking.bookingId,
-            appointmentId: booking._id, // 👈 Required for signature verification API
-            
+            appointmentId: booking._id,
             data: {
                 ...booking._doc,
                 key: razorpayKey,
                 key_id: razorpayKey,
-                keyId: razorpayKey,
                 amount: rzpOrder.amount,
                 razorpayOrderId: rzpOrder.id,
-                orderId: rzpOrder.id,
                 appointmentId: booking._id
             }
         });
@@ -405,7 +424,6 @@ const verifyFoodPayment = async (req, res) => {
             razorpay_signature 
         } = req.body;
 
-        // 🚨 Flexible parameter matching (Handles both CamelCase & SnakeCase)
         const targetId = appointmentId || bookingId || orderId;
         const rzpOrderId = razorpayOrderId || razorpay_order_id;
         const rzpPaymentId = razorpayPaymentId || razorpay_payment_id;
@@ -415,12 +433,10 @@ const verifyFoodPayment = async (req, res) => {
             return res.status(400).json({ success: false, message: "Missing payment verification tokens." });
         }
 
-        // 1. Signature Verification
         let isVerified = false;
         try {
             isVerified = verifyRazorpaySignature(rzpOrderId, rzpPaymentId, rzpSignature);
         } catch (e) {
-            // Direct crypto fallback verification
             const secret = (process.env.RAZORPAY_KEY_SECRET || "").replace(/["']/g, "").trim();
             const expectedSignature = crypto
                 .createHmac('sha256', secret)
@@ -433,7 +449,6 @@ const verifyFoodPayment = async (req, res) => {
             return res.status(400).json({ success: false, message: "Payment signature verification failed." });
         }
 
-        // 2. Fetch Booking Document
         const order = await FoodBooking.findOne({
             $or: [
                 { _id: targetId },
@@ -447,7 +462,6 @@ const verifyFoodPayment = async (req, res) => {
             return res.status(404).json({ success: false, message: "Order not found." });
         }
 
-        // 3. Map Payment Gateway Details
         let rzpDetails = null;
         try {
             rzpDetails = await fetchAndMapRazorpayPayment(rzpPaymentId, rzpSignature);
@@ -466,14 +480,12 @@ const verifyFoodPayment = async (req, res) => {
 
         await order.save();
 
-        // 4. Record Coupon Usage
         if (order.billSummary?.couponId) {
             await Coupon.findByIdAndUpdate(order.billSummary.couponId, {
                 $push: { usedBy: { userId, usageCount: 1 } }
             });
         }
 
-        // 5. Clear Food Cart after successful payment
         await Cart.findOneAndUpdate(
             { userId },
             { $set: { "foodCart.items": [], "foodCart.foodId": null } }
@@ -547,10 +559,130 @@ const getSingleFoodOrder = async (req, res) => {
     }
 };
 
+// --- 1. CREATE FOOD ADDON (With Image Upload) ---
+// Full Path: POST /api/food/checkout/addons/add
+const createFoodAddon = async (req, res) => {
+    try {
+        const { name, price, description } = req.body;
+
+        if (!name || price === undefined) {
+            return res.status(400).json({ success: false, message: "Add-on name and price are required." });
+        }
+
+        const imagePath = req.file ? `/uploads/foods/addons/${req.file.filename}` : null;
+
+        const newAddon = await FoodAddon.create({
+            name,
+            price: Number(price),
+            description: description || "",
+            imageUrl: imagePath
+        });
+
+        res.status(201).json({
+            success: true,
+            message: "Add-on created successfully with image!",
+            data: newAddon
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// --- 2. UPDATE FOOD ADDON (With Image Replacement) ---
+// Full Path: PUT /api/food/checkout/addons/update/:id
+const updateFoodAddon = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { name, price, description } = req.body;
+
+        const addon = await FoodAddon.findById(id);
+        if (!addon) {
+            return res.status(404).json({ success: false, message: "Add-on not found." });
+        }
+
+        const updateData = {};
+        if (name !== undefined) updateData.name = name;
+        if (price !== undefined) updateData.price = Number(price);
+        if (description !== undefined) updateData.description = description;
+
+        // Image replacement & old file disk cleanup
+        if (req.file) {
+            if (addon.imageUrl) {
+                deleteFile(addon.imageUrl);
+            }
+            updateData.imageUrl = `/uploads/foods/addons/${req.file.filename}`;
+        }
+
+        const updated = await FoodAddon.findByIdAndUpdate(id, { $set: updateData }, { new: true });
+
+        res.json({ success: true, message: "Add-on updated successfully!", data: updated });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// --- 3. DELETE FOOD ADDON (Cleans up disk image) ---
+// Full Path: DELETE /api/food/checkout/addons/delete/:id
+const deleteFoodAddon = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const addon = await FoodAddon.findById(id);
+
+        if (!addon) {
+            return res.status(404).json({ success: false, message: "Add-on not found." });
+        }
+
+        if (addon.imageUrl) {
+            deleteFile(addon.imageUrl);
+        }
+
+        await FoodAddon.findByIdAndDelete(id);
+
+        res.json({ success: true, message: "Add-on removed successfully." });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+const getAvailableAddons = async (req, res) => {
+    try {
+        const addons = await FoodAddon.find().sort({ createdAt: -1 });
+
+        res.json({
+            success: true,
+            count: addons.length,
+            data: addons
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+const getAddonById = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const addon = await FoodAddon.findById(id);
+
+        if (!addon) {
+            return res.status(404).json({ success: false, message: "Add-on not found." });
+        }
+
+        res.json({ success: true, data: addon });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 module.exports = {
     calculateCheckoutBill,
     placeFoodOrder,
     verifyFoodPayment,
     getMyFoodOrders,
-    getSingleFoodOrder
+    getSingleFoodOrder,
+
+    // Addons CRUD Exports
+    createFoodAddon,
+    getAvailableAddons,
+    getAddonById,
+    updateFoodAddon,
+    deleteFoodAddon
 };
