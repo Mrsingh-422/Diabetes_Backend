@@ -40,12 +40,53 @@ const tiffinPlanSchema = new mongoose.Schema({
         enum: ['Breakfast', 'Lunch', 'Dinner'],
         required: true 
     }],
-    // SELECT DISH SELECTION POOL (Array of Master FoodService Item IDs)
+
+    // 🚨 NEW: SLOT-WISE DISH POOL (Breakfast, Lunch, Dinner with Meals & Combos)
+    slotDishes: {
+        breakfast: [{
+            itemType: { 
+                type: String, 
+                enum: ['FoodService', 'FoodComboOffer'], 
+                default: 'FoodService' 
+            },
+            itemId: { 
+                type: mongoose.Schema.Types.ObjectId, 
+                refPath: 'slotDishes.breakfast.itemType',
+                required: true 
+            }
+        }],
+        lunch: [{
+            itemType: { 
+                type: String, 
+                enum: ['FoodService', 'FoodComboOffer'], 
+                default: 'FoodService' 
+            },
+            itemId: { 
+                type: mongoose.Schema.Types.ObjectId, 
+                refPath: 'slotDishes.lunch.itemType',
+                required: true 
+            }
+        }],
+        dinner: [{
+            itemType: { 
+                type: String, 
+                enum: ['FoodService', 'FoodComboOffer'], 
+                default: 'FoodService' 
+            },
+            itemId: { 
+                type: mongoose.Schema.Types.ObjectId, 
+                refPath: 'slotDishes.dinner.itemType',
+                required: true 
+            }
+        }]
+    },
+
+    // Retained for backward compatibility
     dishPool: [{ 
         type: mongoose.Schema.Types.ObjectId, 
-        ref: 'FoodService',
-        required: true 
+        ref: 'FoodService'
     }],
+
     // PLAN DESCRIPTION
     description: { 
         type: String, 

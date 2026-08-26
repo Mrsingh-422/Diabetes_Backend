@@ -65,14 +65,27 @@ const foodBookingSchema = new mongoose.Schema({
 
     // BILL SUMMARY
     billSummary: {
-        itemTotal: { type: Number, default: 0 },
+        itemTotal: { type: Number, required: true },
         deliveryCharge: { type: Number, default: 0 },
+        packagingCharge: { type: Number, default: 15 },
+        rapidCharge: { type: Number, default: 0 },
+        fastDeliveryCharge: { type: Number, default: 0 },
         taxAmount: { type: Number, default: 0 },
+        taxPercentage: { type: Number, default: 5 },
+        
+        // 🚨 Logistics Pricing Breakdown Keys
+        fixedPrice: { type: Number, default: 40 },
+        fixedDistance: { type: Number, default: 5 },
+        pricePerKM: { type: Number, default: 10 },
+        freeDeliveryThreshold: { type: Number, default: 500 },
+        isRapidAvailable: { type: Boolean, default: true },
+
         couponDiscount: { type: Number, default: 0 },
         couponId: { type: mongoose.Schema.Types.ObjectId, ref: 'Coupon', default: null },
-        totalAmount: { type: Number, default: 0 },
+        totalAmount: { type: Number, required: true },
         noShowFeeApplied: { type: Number, default: 0 }
     },
+
 
     // LIFECYCLE STATE MACHINE (Standard sequence as per your specs)
     status: {
@@ -80,6 +93,29 @@ const foodBookingSchema = new mongoose.Schema({
         enum: ['New', 'Preparing', 'Ready', 'Picked Up', 'Delivered', 'Cancelled', 'No-Show'],
         default: 'New'
     },
+
+    billSummary: {
+        itemTotal: { type: Number, required: true },
+        deliveryCharge: { type: Number, default: 0 },
+        packagingCharge: { type: Number, default: 15 },
+        rapidCharge: { type: Number, default: 0 },
+        fastDeliveryCharge: { type: Number, default: 0 },
+        taxAmount: { type: Number, default: 0 },
+        taxPercentage: { type: Number, default: 5 },
+        
+        // 🚨 Logistics Pricing Breakdown Keys
+        fixedPrice: { type: Number, default: 40 },
+        fixedDistance: { type: Number, default: 5 },
+        pricePerKM: { type: Number, default: 10 },
+        freeDeliveryThreshold: { type: Number, default: 500 },
+        isRapidAvailable: { type: Boolean, default: true },
+
+        couponDiscount: { type: Number, default: 0 },
+        couponId: { type: mongoose.Schema.Types.ObjectId, ref: 'Coupon', default: null },
+        totalAmount: { type: Number, required: true },
+        noShowFeeApplied: { type: Number, default: 0 }
+    },
+
 
     paymentMethod: { type: String, enum: ['UPI', 'COD', 'Card', 'Netbanking', 'Wallet', 'Online'], default: 'COD' },
     paymentStatus: { type: String, enum: ['Pending', 'Paid', 'Failed', 'Refunded'], default: 'Pending' },

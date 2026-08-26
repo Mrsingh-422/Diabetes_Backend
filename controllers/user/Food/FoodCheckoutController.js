@@ -9,6 +9,7 @@ const DeliveryCharge = require('../../../models/DeliveryCharge');
 const Coupon = require('../../../models/Coupon');
 const VendorKMLimit = require('../../../models/VendorKMLimit');
 const FoodAddon = require('../../../models/FoodAddon'); 
+const CodConfig = require('../../../models/CodConfig');
 const { deleteFile } = require('../../../utils/fileHandler');
 
 const crypto = require('crypto');
@@ -34,16 +35,26 @@ const calculateDistance = (lat1, lon1, lat2, lon2) => {
 };
 
 // ==========================================
-// 💡 SECURE BILLING ENGINE (MEALS + NON-FOOD ADDONS)
+// 💡 SECURE BILLING ENGINE (WITH LOCATION-BASED DELIVERY CHARGES)
 // ==========================================
-const calculateFoodBillHelper = async ({ userId, foodId, items = [], addons = [], userLat, userLng, couponCode, isRapid = false }) => {
+const calculateFoodBillHelper = async ({ 
+    userId, 
+    foodId, 
+    items = [], 
+    addons = [], 
+    address = null,      // 👈 User Delivery Address Object
+    userLat, 
+    userLng, 
+    couponCode, 
+    isRapid = false 
+}) => {
     let itemTotal = 0;
     const verifiedItems = [];
     const verifiedAddons = [];
 
     const cleanFoodId = foodId?._id ? foodId._id.toString() : foodId.toString();
 
-    // 1. Verify Meals & Combos directly from Database
+    // 1. Verify Meals & Combos from DB
     for (let item of items) {
         let price = 0;
         let name = '';
@@ -81,7 +92,7 @@ const calculateFoodBillHelper = async ({ userId, foodId, items = [], addons = []
         });
     }
 
-    // 2. 🚨 Calculate Non-Food Addons (Cutlery / Spoons / Bowls)
+    // 2. Non-Food Addons Calculation
     if (addons && Array.isArray(addons) && addons.length > 0) {
         for (let add of addons) {
             const rawAddonId = add.addonId?._id || add.addonId || add._id;
@@ -108,20 +119,81 @@ const calculateFoodBillHelper = async ({ userId, foodId, items = [], addons = []
     if (vendor.isActive === false) throw new Error("This kitchen is currently suspended by Admin.");
     if (vendor.isOnline === false) throw new Error("Booking Blocked: Kitchen is currently offline and not accepting orders.");
 
-    // 4. Delivery & Logistics
-    let deliveryCharge = 0;
-    let distance = 0;
+    // 4. COD Availability Policy Check
+    const codSetting = await CodConfig.findOne({ vendorType: 'Food' });
+    const isCodAvailable = codSetting ? Boolean(codSetting.isCodAvailable) : true;
 
-    const chargesConfig = await DeliveryCharge.findOne({ vendorId: cleanFoodId }) || {
+    // 5. 📍 LOCATION-BASED DELIVERY CHARGES RESOLUTION
+    let parsedAddress = address;
+    if (typeof address === 'string') {
+        try { parsedAddress = JSON.parse(address); } catch (e) { parsedAddress = null; }
+    }
+
+    const userCity = parsedAddress?.city ? parsedAddress.city.trim() : null;
+    const userState = parsedAddress?.state ? parsedAddress.state.trim() : null;
+
+    let chargesConfig = null;
+
+    // A. Priority 1: Match Exact City (e.g. Mohali / New Delhi)
+    if (userCity) {
+        chargesConfig = await DeliveryCharge.findOne({
+            vendorType: 'Food',
+            city: new RegExp(`^${userCity}$`, 'i'),
+            isAdminGlobal: true
+        });
+    }
+
+    // B. Priority 2: Match State (e.g. Punjab / Delhi)
+    if (!chargesConfig && userState) {
+        chargesConfig = await DeliveryCharge.findOne({
+            vendorType: 'Food',
+            state: new RegExp(`^${userState}$`, 'i'),
+            city: null,
+            isAdminGlobal: true
+        });
+    }
+
+    // C. Priority 3: Specific Vendor's Custom Delivery Rates (if configured)
+    if (!chargesConfig) {
+        chargesConfig = await DeliveryCharge.findOne({ vendorId: cleanFoodId });
+    }
+
+    // D. Priority 4: Platform Global Fallback Rate
+    if (!chargesConfig) {
+        chargesConfig = await DeliveryCharge.findOne({ 
+            vendorType: 'Food', 
+            isAdminGlobal: true, 
+            city: null, 
+            state: null 
+        }) || await DeliveryCharge.findOne({ vendorType: 'Food', isAdminGlobal: true });
+    }
+
+    // E. Priority 5: In-Memory Default Safety
+    const finalCharges = chargesConfig || {
         fixedPrice: 40,
         fixedDistance: 5,
         pricePerKM: 10,
+        rapidCharge: 25,
         fastDeliveryExtra: 25,
         packagingCharge: 15,
         freeDeliveryThreshold: 500,
-        taxPercentage: 5
+        taxPercentage: 5,
+        isRapidAvailable: true
     };
 
+    const fixedPrice = finalCharges.fixedPrice ?? 40;
+    const fixedDistance = finalCharges.fixedDistance ?? 5;
+    const pricePerKM = finalCharges.pricePerKM ?? 10;
+    const packagingCharge = finalCharges.packagingCharge ?? 15;
+    const rapidCharge = finalCharges.rapidCharge ?? finalCharges.fastDeliveryExtra ?? 25;
+    const freeDeliveryThreshold = finalCharges.freeDeliveryThreshold ?? 500;
+    const taxPercentage = finalCharges.taxPercentage ?? 5;
+    const isRapidAvailable = finalCharges.isRapidAvailable !== false;
+
+    let deliveryCharge = 0;
+    let distance = 0;
+
+    // Distance Calculation & Delivery Fee Computation
     if (userLat && userLng && vendor.location?.lat && vendor.location?.lng) {
         distance = calculateDistance(Number(userLat), Number(userLng), Number(vendor.location.lat), Number(vendor.location.lng));
 
@@ -131,23 +203,32 @@ const calculateFoodBillHelper = async ({ userId, foodId, items = [], addons = []
             throw new Error(`Your address is ${distance} km away. Maximum delivery radius is ${maxRadius} km.`);
         }
 
-        if (itemTotal >= (chargesConfig.freeDeliveryThreshold || 500)) {
+        if (itemTotal >= freeDeliveryThreshold) {
             deliveryCharge = 0;
         } else {
-            if (distance <= (chargesConfig.fixedDistance || 5)) {
-                deliveryCharge = chargesConfig.fixedPrice || 40;
+            if (distance <= fixedDistance) {
+                deliveryCharge = fixedPrice;
             } else {
-                const extraKm = distance - chargesConfig.fixedDistance;
-                deliveryCharge = (chargesConfig.fixedPrice || 40) + (extraKm * (chargesConfig.pricePerKM || 10));
+                const extraKm = distance - fixedDistance;
+                deliveryCharge = fixedPrice + (extraKm * pricePerKM);
             }
         }
     } else {
-        deliveryCharge = chargesConfig.fixedPrice || 40;
+        // Flat Fixed Delivery Price fallback if coordinates not passed
+        deliveryCharge = (itemTotal >= freeDeliveryThreshold) ? 0 : fixedPrice;
     }
 
-    if (isRapid) deliveryCharge += (chargesConfig.fastDeliveryExtra || 25);
+    // Rapid Delivery Extra Surcharge
+    let appliedRapidFee = 0;
+    if (isRapid) {
+        if (!isRapidAvailable) {
+            throw new Error("Rapid express delivery is currently not available for this location/kitchen.");
+        }
+        appliedRapidFee = rapidCharge;
+        deliveryCharge += appliedRapidFee;
+    }
 
-    // 5. Coupon Verification
+    // 6. Coupon Verification
     let couponDiscount = 0;
     let validCouponId = null;
 
@@ -180,21 +261,38 @@ const calculateFoodBillHelper = async ({ userId, foodId, items = [], addons = []
         validCouponId = coupon._id;
     }
 
-    // 6. Tax Assessment (GST 5%)
-    const taxRate = chargesConfig.taxPercentage || 5;
-    const taxableSubtotal = Math.max(0, (itemTotal - couponDiscount) + deliveryCharge);
-    const taxAmount = Math.round(taxableSubtotal * (taxRate / 100));
-    const totalAmount = Math.max(0, (itemTotal - couponDiscount) + deliveryCharge + taxAmount);
+    // 7. Tax Assessment (GST)
+    const taxableSubtotal = Math.max(0, (itemTotal - couponDiscount) + deliveryCharge + packagingCharge);
+    const taxAmount = Math.round(taxableSubtotal * (taxPercentage / 100));
+    const totalAmount = Math.max(0, (itemTotal - couponDiscount) + deliveryCharge + packagingCharge + taxAmount);
 
     return {
         verifiedItems,
         verifiedAddons,
         vendor,
         distance,
+        isCodAvailable,
+        isRapidAvailable,
+        appliedLocation: {
+            city: userCity || "Global Fallback",
+            state: userState || "Global Fallback"
+        },
         billSummary: {
             itemTotal: Math.round(itemTotal),
             deliveryCharge: Math.round(deliveryCharge),
+            packagingCharge: Math.round(packagingCharge),
+            rapidCharge: Math.round(appliedRapidFee),
+            fastDeliveryCharge: Math.round(appliedRapidFee),
             taxAmount: Math.round(taxAmount),
+            taxPercentage: taxPercentage,
+            
+            // 🚨 Breakdown Parameters Snapshot:
+            fixedPrice: fixedPrice,
+            fixedDistance: fixedDistance,
+            pricePerKM: pricePerKM,
+            freeDeliveryThreshold: freeDeliveryThreshold,
+            isRapidAvailable: isRapidAvailable,
+
             couponDiscount: Math.round(couponDiscount),
             couponId: validCouponId,
             totalAmount: Math.round(totalAmount),
@@ -209,7 +307,16 @@ const calculateFoodBillHelper = async ({ userId, foodId, items = [], addons = []
 const calculateCheckoutBill = async (req, res) => {
     try {
         const userId = req.user.id;
-        const { foodId, items, addons, userLat, userLng, couponCode, isRapid } = req.body;
+        const { 
+            foodId, 
+            items, 
+            addons, 
+            address,      // 👈 Address passed from frontend
+            userLat, 
+            userLng, 
+            couponCode, 
+            isRapid 
+        } = req.body;
 
         let cartItems = items;
         let targetFoodId = foodId;
@@ -232,15 +339,21 @@ const calculateCheckoutBill = async (req, res) => {
             foodId: targetFoodId,
             items: cartItems,
             addons: addons || [],
+            address: address || null, // 👈 Location evaluated here
             userLat,
             userLng,
             couponCode,
-            isRapid
+            isRapid: isRapid === true
         });
 
         res.json({
             success: true,
             distance: `${calculation.distance} km`,
+            appliedLocation: calculation.appliedLocation,
+            orderRestrictions: {
+                isCodAvailable: calculation.isCodAvailable,
+                isRapidAvailable: calculation.isRapidAvailable
+            },
             billSummary: calculation.billSummary,
             items: calculation.verifiedItems,
             addons: calculation.verifiedAddons
@@ -308,11 +421,20 @@ const placeFoodOrder = async (req, res) => {
             foodId: cleanFoodId,
             items: cartItems,
             addons: addons || [],
+            address: parsedAddress, // 👈 Pass address object directly
             userLat,
             userLng,
             couponCode,
-            isRapid
+            isRapid: isRapid === true
         });
+
+        // COD Enforcement Check
+        if (activePaymentMethod === 'COD' && calculation.isCodAvailable === false) {
+            return res.status(400).json({
+                success: false,
+                message: "Cash on Delivery is currently disabled for food orders. Please pay online to complete your checkout."
+            });
+        }
 
         const tempBookingId = `ORD-FD-${Math.floor(100000 + Math.random() * 900000)}`;
         const deliveryOTP = String(Math.floor(1000 + Math.random() * 9000));
@@ -327,15 +449,15 @@ const placeFoodOrder = async (req, res) => {
                 `rcpt_${tempBookingId}_${Date.now()}`
             );
         }
-
-        // 🚨 Create Booking Document in MongoDB (With Add-ons)
+        
+        // Create Booking in DB
         const booking = await FoodBooking.create({
             bookingId: tempBookingId,
             userId,
             foodId: cleanFoodId,
             bookingType,
             items: calculation.verifiedItems,
-            addons: calculation.verifiedAddons, // 👈 Saved in DB [cite: custom_context]
+            addons: calculation.verifiedAddons,
             subscriptionDetails,
             customPlateSchedule,
             address: parsedAddress,
@@ -383,7 +505,7 @@ const placeFoodOrder = async (req, res) => {
             key: razorpayKey,
             key_id: razorpayKey,
             keyId: razorpayKey,
-            amount: rzpOrder.amount, // in paise
+            amount: rzpOrder.amount,
             amountInRupees: calculation.billSummary.totalAmount,
             currency: "INR",
             razorpayOrderId: rzpOrder.id,
@@ -514,10 +636,12 @@ const getMyFoodOrders = async (req, res) => {
         const query = { userId };
         if (status) query.status = status;
 
+        // 🚨 Sirf UI Card ke liye zaroori fields select kiye gaye hain
         const orders = await FoodBooking.find(query)
+            .select('_id bookingId createdAt status deliveryOTP paymentStatus paymentMethod billSummary.totalAmount foodId')
             .populate('foodId', 'name profileImage address city')
-            .populate('driverId', 'name phone vehicleType vehicleNumber')
-            .sort({ createdAt: -1 });
+            .sort({ createdAt: -1 })
+            .lean();
 
         res.json({
             success: true,
@@ -531,19 +655,23 @@ const getMyFoodOrders = async (req, res) => {
 };
 
 // ==========================================
-// 5. GET SINGLE ORDER (GET /order/:id)
+// 5. GET SINGLE ORDER BY ID (GET /order/:id)
 // ==========================================
 const getSingleFoodOrder = async (req, res) => {
     try {
         const userId = req.user.id;
         const { id } = req.params;
 
+        // 🚨 Supports both MongoDB _id and custom bookingId (e.g. ORD-FD-281415)
         const order = await FoodBooking.findOne({ 
             $or: [{ _id: id }, { bookingId: id }], 
             userId 
         })
-        .populate('foodId', 'name profileImage address city phone')
-        .populate('driverId', 'name phone vehicleType vehicleNumber profilePic');
+        .populate('foodId', 'name profileImage address city state phone rating location')
+        .populate('driverId', 'name phone vehicleType vehicleNumber profilePic status')
+        .populate('addons.addonId', 'name price imageUrl description')
+        .populate('billSummary.couponId', 'couponName discountPercentage maxDiscount')
+        .lean();
 
         if (!order) {
             return res.status(404).json({ success: false, message: "Order details not found." });
@@ -558,100 +686,67 @@ const getSingleFoodOrder = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
-
-// --- 1. CREATE FOOD ADDON (With Image Upload) ---
-// Full Path: POST /api/food/checkout/addons/add
+// --- ADDONS CRUD CONTROLLERS ---
 const createFoodAddon = async (req, res) => {
     try {
         const { name, price, description } = req.body;
-
         if (!name || price === undefined) {
             return res.status(400).json({ success: false, message: "Add-on name and price are required." });
         }
-
         const imagePath = req.file ? `/uploads/foods/addons/${req.file.filename}` : null;
-
         const newAddon = await FoodAddon.create({
             name,
             price: Number(price),
             description: description || "",
             imageUrl: imagePath
         });
-
-        res.status(201).json({
-            success: true,
-            message: "Add-on created successfully with image!",
-            data: newAddon
-        });
+        res.status(201).json({ success: true, message: "Add-on created successfully!", data: newAddon });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
 };
 
-// --- 2. UPDATE FOOD ADDON (With Image Replacement) ---
-// Full Path: PUT /api/food/checkout/addons/update/:id
 const updateFoodAddon = async (req, res) => {
     try {
         const { id } = req.params;
         const { name, price, description } = req.body;
-
         const addon = await FoodAddon.findById(id);
-        if (!addon) {
-            return res.status(404).json({ success: false, message: "Add-on not found." });
-        }
+        if (!addon) return res.status(404).json({ success: false, message: "Add-on not found." });
 
         const updateData = {};
         if (name !== undefined) updateData.name = name;
         if (price !== undefined) updateData.price = Number(price);
         if (description !== undefined) updateData.description = description;
 
-        // Image replacement & old file disk cleanup
         if (req.file) {
-            if (addon.imageUrl) {
-                deleteFile(addon.imageUrl);
-            }
+            if (addon.imageUrl) deleteFile(addon.imageUrl);
             updateData.imageUrl = `/uploads/foods/addons/${req.file.filename}`;
         }
 
         const updated = await FoodAddon.findByIdAndUpdate(id, { $set: updateData }, { new: true });
-
         res.json({ success: true, message: "Add-on updated successfully!", data: updated });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
 };
 
-// --- 3. DELETE FOOD ADDON (Cleans up disk image) ---
-// Full Path: DELETE /api/food/checkout/addons/delete/:id
 const deleteFoodAddon = async (req, res) => {
     try {
         const { id } = req.params;
         const addon = await FoodAddon.findById(id);
-
-        if (!addon) {
-            return res.status(404).json({ success: false, message: "Add-on not found." });
-        }
-
-        if (addon.imageUrl) {
-            deleteFile(addon.imageUrl);
-        }
-
+        if (!addon) return res.status(404).json({ success: false, message: "Add-on not found." });
+        if (addon.imageUrl) deleteFile(addon.imageUrl);
         await FoodAddon.findByIdAndDelete(id);
-
         res.json({ success: true, message: "Add-on removed successfully." });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
 const getAvailableAddons = async (req, res) => {
     try {
         const addons = await FoodAddon.find().sort({ createdAt: -1 });
-
-        res.json({
-            success: true,
-            count: addons.length,
-            data: addons
-        });
+        res.json({ success: true, count: addons.length, data: addons });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
@@ -661,11 +756,7 @@ const getAddonById = async (req, res) => {
     try {
         const { id } = req.params;
         const addon = await FoodAddon.findById(id);
-
-        if (!addon) {
-            return res.status(404).json({ success: false, message: "Add-on not found." });
-        }
-
+        if (!addon) return res.status(404).json({ success: false, message: "Add-on not found." });
         res.json({ success: true, data: addon });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
@@ -678,8 +769,6 @@ module.exports = {
     verifyFoodPayment,
     getMyFoodOrders,
     getSingleFoodOrder,
-
-    // Addons CRUD Exports
     createFoodAddon,
     getAvailableAddons,
     getAddonById,

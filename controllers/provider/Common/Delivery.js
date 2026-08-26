@@ -1,116 +1,249 @@
+// controllers/provider/Common/Delivery.js
+
 const DeliveryCharge = require('../../../models/DeliveryCharge');
 
-// Default Values synced with your live Figma layout
 const DEFAULT_CHARGES = {
     fixedPrice: 40,
     fixedDistance: 5,
     pricePerKM: 10,
+    rapidCharge: 25,
     fastDeliveryExtra: 25,
+    isRapidAvailable: true,
     packagingCharge: 15,
     freeDeliveryThreshold: 500,
     taxPercentage: 5,
     taxInRupees: 0
 };
 
-// 1. SAVE/UPDATE DELIVERY CHARGES
+// 1. SAVE/UPDATE DELIVERY CHARGES (Allows Multiple Location Entries)
 const saveDeliveryCharges = async (req, res) => {
     try {
-        let vendorId = req.user.id;
-        let vendorType = req.user.role; // Role: Lab, Pharmacy, Food
+        const isAdmin = req.user.role === 'superadmin' || req.user.role === 'subadmin';
+        const vendorType = req.body.vendorType || req.query.vendorType || (isAdmin ? 'Food' : req.user.role);
 
-        // 🚨 CRITICAL FIX: If Admin is updating, read target vendor parameters from req.body
-        if (req.user.role === 'superadmin' || req.user.role === 'subadmin') {
-            vendorId = req.body.vendorId;
-            vendorType = req.body.vendorType;
+        const country = req.body.country ? req.body.country.trim() : 'India';
+        const state = req.body.state ? req.body.state.trim() : null;
+        const city = req.body.city ? req.body.city.trim() : null;
 
-            if (!vendorId || !vendorType) {
-                return res.status(400).json({ success: false, message: "vendorId and vendorType are required for admin updates." });
+        let filter = {};
+        let updateData = { 
+            ...req.body, 
+            vendorType,
+            country,
+            state,
+            city
+        };
+
+        // Normalize rapid charges
+        if (req.body.rapidCharge !== undefined) {
+            updateData.rapidCharge = Number(req.body.rapidCharge);
+            updateData.fastDeliveryExtra = Number(req.body.rapidCharge);
+        } else if (req.body.fastDeliveryExtra !== undefined) {
+            updateData.rapidCharge = Number(req.body.fastDeliveryExtra);
+            updateData.fastDeliveryExtra = Number(req.body.fastDeliveryExtra);
+        }
+
+        if (isAdmin) {
+            if (req.body.vendorId) {
+                // Specific Vendor Rate
+                filter = { vendorId: req.body.vendorId };
+                updateData.vendorId = req.body.vendorId;
+                updateData.isAdminGlobal = false;
+            } else if (city) {
+                // 🚨 City-Specific Document (E.g. Mohali)
+                filter = { 
+                    vendorType, 
+                    city: city,
+                    isAdminGlobal: true 
+                };
+                updateData.isAdminGlobal = true;
+                updateData.vendorId = null;
+            } else if (state) {
+                // 🚨 State-Specific Document (E.g. Punjab)
+                filter = { 
+                    vendorType, 
+                    state: state,
+                    city: null,
+                    isAdminGlobal: true 
+                };
+                updateData.isAdminGlobal = true;
+                updateData.vendorId = null;
+            } else {
+                // 🚨 Platform Global Document (All Cities fallback)
+                filter = { 
+                    vendorType, 
+                    city: null,
+                    state: null,
+                    isAdminGlobal: true 
+                };
+                updateData.isAdminGlobal = true;
+                updateData.vendorId = null;
             }
+        } else {
+            // Vendor's own charges
+            filter = { vendorId: req.user.id };
+            updateData.vendorId = req.user.id;
+            updateData.isAdminGlobal = false;
         }
 
         const charges = await DeliveryCharge.findOneAndUpdate(
-            { vendorId: vendorId },
-            { 
-                $set: { 
-                    ...req.body, 
-                    vendorId, 
-                    vendorType 
-                } 
-            },
-            { upsert: true, new: true }
+            filter,
+            { $set: updateData },
+            { upsert: true, new: true, runValidators: true }
         );
 
-        res.json({ success: true, message: "Delivery charges saved successfully!", data: charges });
+        res.json({
+            success: true,
+            message: city 
+                ? `Delivery charges for ${city} saved successfully!` 
+                : "Delivery charges saved successfully!",
+            data: charges
+        });
+
     } catch (error) { 
         res.status(500).json({ success: false, message: error.message }); 
     }
 };
 
-// 2. GET MY DELIVERY CHARGES
+// 2. GET DELIVERY CHARGES (Returns All Records / List)
 const getMyDeliveryCharges = async (req, res) => {
     try {
-        let targetId = req.user.id;
+        const isAdmin = req.user.role === 'superadmin' || req.user.role === 'subadmin' || req.user.role === 'admin';
+        const { city, state, country, vendorId, vendorType } = req.query;
 
-        // If admin is requesting specific vendor charges via query
-        if ((req.user.role === 'superadmin' || req.user.role === 'subadmin') && req.query.vendorId) {
-            targetId = req.query.vendorId;
+        let charges;
+
+        if (isAdmin) {
+            let filter = {};
+
+            // Agar URL me query params bheje gaye hain toh filter karo, warna sara data aayega
+            if (vendorType) filter.vendorType = vendorType;
+            if (vendorId) filter.vendorId = vendorId;
+            if (city) filter.city = new RegExp(`^${city.trim()}$`, 'i');
+            if (state) filter.state = new RegExp(`^${state.trim()}$`, 'i');
+            if (country) filter.country = new RegExp(`^${country.trim()}$`, 'i');
+
+            // 🚨 Sare documents ek sath fetch honge (Array format)
+            charges = await DeliveryCharge.find(filter).sort({ createdAt: -1 });
+
+        } else {
+            // Normal Vendor ke liye uske specific charges
+            charges = await DeliveryCharge.find({ vendorId: req.user.id }).sort({ createdAt: -1 });
         }
 
-        const charges = await DeliveryCharge.findOne({ vendorId: targetId });
-
-        if (!charges) {
-            // Fallback for Admin vs Vendor role
-            const activeRole = req.query.vendorType || req.user.role;
-            return res.json({ 
-                success: true, 
-                data: { ...DEFAULT_CHARGES, vendorType: activeRole }, 
-                isDefault: true 
+        // Agar database khali hai
+        if (!charges || charges.length === 0) {
+            return res.json({
+                success: true,
+                count: 0,
+                data: [],
+                message: "No delivery charges found"
             });
         }
-        
-        res.json({ success: true, data: charges, isDefault: false });
+
+        // Saare records return honge
+        res.json({
+            success: true,
+            count: charges.length,
+            data: charges
+        });
+
     } catch (error) { 
         res.status(500).json({ success: false, message: error.message }); 
     }
 };
 
-// 3. COMPLETE USER SIDE CHECKOUT CALCULATION ENGINE (Figma Matches)
-const getCalculatedDelivery = (distance, orderTotal, charges, isFastDeliverySelected = false) => {
+// 3. UPDATE DELIVERY CHARGES
+const updateDeliveryCharges = async (req, res) => {
+    try {
+        const isAdmin = req.user.role === 'superadmin' || req.user.role === 'subadmin';
+        const { id } = req.params;
+        const vendorType = req.body.vendorType || req.query.vendorType || (isAdmin ? 'Food' : req.user.role);
+
+        const country = req.body.country ? req.body.country.trim() : 'India';
+        const state = req.body.state ? req.body.state.trim() : null;
+        const city = req.body.city ? req.body.city.trim() : null;
+
+        let filter = {};
+
+        if (id) {
+            filter = { _id: id };
+        } else if (isAdmin) {
+            if (req.body.vendorId) {
+                filter = { vendorId: req.body.vendorId };
+            } else if (city) {
+                filter = { vendorType, city: city, isAdminGlobal: true };
+            } else if (state) {
+                filter = { vendorType, state: state, city: null, isAdminGlobal: true };
+            } else {
+                filter = { vendorType, city: null, state: null, isAdminGlobal: true };
+            }
+        } else {
+            filter = { vendorId: req.user.id };
+        }
+
+        const updateData = { ...req.body };
+
+        if (req.body.rapidCharge !== undefined) {
+            updateData.rapidCharge = Number(req.body.rapidCharge);
+            updateData.fastDeliveryExtra = Number(req.body.rapidCharge);
+        } else if (req.body.fastDeliveryExtra !== undefined) {
+            updateData.rapidCharge = Number(req.body.fastDeliveryExtra);
+            updateData.fastDeliveryExtra = Number(req.body.fastDeliveryExtra);
+        }
+
+        const charges = await DeliveryCharge.findOneAndUpdate(
+            filter,
+            { $set: updateData },
+            { new: true, upsert: true, runValidators: true }
+        );
+
+        res.json({
+            success: true,
+            message: "Delivery & Logistics rates updated successfully!",
+            data: charges
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// 4. CALCULATION ENGINE
+const getCalculatedDelivery = (distance, orderTotal, charges, isRapidSelected = false) => {
     let baseShippingFee = 0;
     
-    // A. Check Free Delivery Threshold bypass
-    if (orderTotal >= charges.freeDeliveryThreshold) {
+    if (orderTotal >= (charges.freeDeliveryThreshold || 500)) {
         baseShippingFee = 0;
     } else {
-        // B. Distance Proximity calculation
-        if (distance <= charges.fixedDistance) {
-            baseShippingFee = charges.fixedPrice;
+        if (distance <= (charges.fixedDistance || 5)) {
+            baseShippingFee = charges.fixedPrice || 40;
         } else {
-            const extraDistance = distance - charges.fixedDistance;
-            baseShippingFee = charges.fixedPrice + (extraDistance * charges.pricePerKM);
+            const extraDistance = distance - (charges.fixedDistance || 5);
+            baseShippingFee = (charges.fixedPrice || 40) + (extraDistance * (charges.pricePerKM || 10));
         }
     }
 
-    // C. Packaging fees & Surcharges appends
     const packagingFee = charges.packagingCharge || 0;
-    const fastDeliveryFee = isFastDeliverySelected ? (charges.fastDeliveryExtra || 0) : 0;
-    
-    const subtotalLogistics = baseShippingFee + packagingFee + fastDeliveryFee;
+    const rapidFee = isRapidSelected ? (charges.rapidCharge || charges.fastDeliveryExtra || 0) : 0;
+    const subtotalLogistics = baseShippingFee + packagingFee + rapidFee;
 
-    // D. Taxation assessment (applied on delivery subtotal)
     const taxPercentage = charges.taxPercentage || 0;
     const logisticsTax = Math.round(subtotalLogistics * (taxPercentage / 100));
-
-    // E. Total dynamic delivery cost
     const totalDeliveryCost = subtotalLogistics + logisticsTax;
 
     return {
         baseShippingFee,
         packagingFee,
-        fastDeliveryFee,
+        rapidDeliveryCharge: rapidFee,
         logisticsTax,
-        totalDeliveryCost // Final payable delivery charge [cite: custom_context]
+        totalDeliveryCost
     };
 };
 
-module.exports = { saveDeliveryCharges, getMyDeliveryCharges, getCalculatedDelivery };
+module.exports = { 
+    saveDeliveryCharges, 
+    getMyDeliveryCharges, 
+    updateDeliveryCharges, 
+    getCalculatedDelivery 
+};

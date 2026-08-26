@@ -5,6 +5,7 @@ const router = express.Router();
 const { protect, checkRoleAccess } = require('../../../middleware/authMiddleware');
 
 const {
+    getCatalogPoolForModal,
     createTiffinPlan,
     getAllTiffinPlans,
     getTiffinPlanById,
@@ -15,10 +16,13 @@ const {
 
 // Base URL: /admin/food/tiffin/plans
 
+// 0. 🌟 Fetch Catalog Pool for Creation Modal Tabs (Dishes + Combos)
+router.get('/catalog-pool', protect('admin'), getCatalogPoolForModal);
+
 // 1. Create Subscription Tier (POST)
 router.post('/add', protect('admin'), checkRoleAccess(36), createTiffinPlan);
 
-// 2. Get All Subscription Plans (GET - Public / Dashboard use)
+// 2. Get All Subscription Plans (GET)
 router.get('/get', getAllTiffinPlans);
 
 // 3. Get Single Plan Details (GET)

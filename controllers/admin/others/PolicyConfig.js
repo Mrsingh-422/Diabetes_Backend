@@ -82,11 +82,10 @@ const getCodConfigs = async (req, res) => {
             'Lab', 
             'Pharmacy', 
             'Food', 
-            'Hospital', 
+            'Clinic', 
             'Doctor', 
-            'Ambulance-Accident', 
-            'Ambulance-Medical', 
-            'Ambulance-Referral'
+            'Ambulance '
+        
         ];
             const formattedData = allVendors.map(vendor => {
             const dbMatch = configs.find(c => c.vendorType === vendor);
