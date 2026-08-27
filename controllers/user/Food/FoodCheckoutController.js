@@ -765,6 +765,7 @@ const getAddonById = async (req, res) => {
 
 module.exports = {
     calculateCheckoutBill,
+    //place order
     placeFoodOrder,
     verifyFoodPayment,
     getMyFoodOrders,
