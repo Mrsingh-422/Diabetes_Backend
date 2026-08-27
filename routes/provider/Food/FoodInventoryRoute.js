@@ -16,51 +16,45 @@ const {
     selectFoodCombos,
     deselectFoodCombo,
     toggleVendorOnlineStatus,
+
+    // Tiffin Plans imports
     getMasterPlansForSelection,
-    selectTiffinPlans,
-    deselectTiffinPlan
+    syncTiffinPlans,
+    toggleTiffinPlanAvailability,
+
 } = require('../../../controllers/provider/Food/FoodInventoryController');
 
-// Base URL context: /provider/food/inventory
+// Base URL: /provider/food/inventory
 
 // ==========================================
-// 🚨 STEP 1: STATIC ROUTES KO HUMESHA SABSE UPAR RAKHEIN
+// 🚨 STEP 1: STATIC GET ROUTES (Always placed on top)
 // ==========================================
-
-// A. Get Master Checklist for Meals
 router.get('/master-catalog', protect('provider'), getMasterCatalogForSelection);
-
-// B. Get Master Checklist for Combos (Ab yeh bina kisi conflict ke match hoga!)
 router.get('/master-combos', protect('provider'), getMasterCombosForSelection);
 router.get('/master-plans', protect('provider'), getMasterPlansForSelection);
 
-
 // ==========================================
-// 🚨 STEP 2: DYNAMIC ROUTES (WILDCARDS) KO SABSE NEECHE RAKHEIN
+// ⚙️ STEP 2: WRITE / SYNC OPERATIONS
 // ==========================================
-
-// GET single meal details by ID
-router.get('/:foodServiceId', protect('provider'), getVendorMenuItemById);
-
-// GET single combo details by ID
-router.get('/combo/:foodComboId', protect('provider'), getVendorComboById);
-router.get('/master-plans', protect('provider'), getMasterPlansForSelection);
-
-
-// ==========================================
-// ⚙️ STEP 3: WRITE OPERATIONS
-// ==========================================
+// Meals & Combos
 router.post('/select', protect('provider'), selectFoodItems);
 router.put('/deselect/:foodServiceId', protect('provider'), deselectFoodItem);
 router.post('/select-combos', protect('provider'), selectFoodCombos);
 router.put('/deselect-combo/:foodComboId', protect('provider'), deselectFoodCombo);
 
-// Full Path: PATCH /provider/food/inventory/toggle-online
+// Vendor Live Online Toggle
 router.patch('/toggle-online', protect('provider'), toggleVendorOnlineStatus);
 
+// 🌟 TIFFIN PLANS: Unified Sync & Toggle Routes
+router.post('/sync-plans', protect('provider'), syncTiffinPlans);
+router.patch('/toggle-plan/:planId', protect('provider'), toggleTiffinPlanAvailability);
 
-router.post('/select-plans', protect('provider'), selectTiffinPlans);
-router.put('/deselect-plan/:planId', protect('provider'), deselectTiffinPlan);
 
+
+// ==========================================
+// 🚨 STEP 3: DYNAMIC WILDCARD ROUTES (Always placed at the bottom)
+// ==========================================
+router.get('/:foodServiceId', protect('provider'), getVendorMenuItemById);
+router.get('/combo/:foodComboId', protect('provider'), getVendorComboById);
 
 module.exports = router;

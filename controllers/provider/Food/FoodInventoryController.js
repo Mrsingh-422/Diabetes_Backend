@@ -22,21 +22,17 @@ const parseStringToArray = (field) => {
 // 🍔 1. MEALS INVENTORY CRUD SECTION
 // ==========================================
 
-// --- 1.1 GET MASTER CATALOG FOR VENDOR SELECTION (Shows ALL admin items with available true/false) ---
-// Full Path: GET /provider/food/inventory/master-catalog
+// --- 1.1 GET MASTER CATALOG FOR VENDOR SELECTION ---
 const getMasterCatalogForSelection = async (req, res) => {
     try {
-        const vendorId = req.user.id; // From protect('provider') middleware
+        const vendorId = req.user.id;
 
-        // A. Fetch ALL active master meals created by Admin [cite: custom_context]
         const masterMeals = await FoodService.find({ isActive: true })
             .populate('categoryId', 'foodCategory foodEffectCategory')
             .lean();
 
-        // B. Fetch this specific vendor's current inventory mapping [cite: custom_context]
         const vendorMappings = await VendorFoodItem.find({ vendorId }).lean();
 
-        // C. Dynamic checkmark generator: Maps isAvailable state on-the-fly [cite: custom_context]
         const selectionChecklist = masterMeals.map(meal => {
             const mapping = vendorMappings.find(
                 map => map.foodServiceId.toString() === meal._id.toString()
@@ -44,8 +40,7 @@ const getMasterCatalogForSelection = async (req, res) => {
 
             return {
                 ...meal,
-                // 🚨 UPDATED KEY: Selected items will return true, non-selected/unmapped will return false
-                isAvailable: mapping ? mapping.isAvailable : false, // [cite: custom_context]
+                isAvailable: mapping ? mapping.isAvailable : false,
                 customPrice: mapping ? mapping.price : null,
                 customDiscountPrice: mapping ? mapping.discountPrice : null
             };
@@ -65,7 +60,7 @@ const getMasterCatalogForSelection = async (req, res) => {
 // --- 1.2 GET SINGLE MENU ITEM DETAIL BY ID ---
 const getVendorMenuItemById = async (req, res) => {
     try {
-        const { id } = req.params; // foodServiceId from URL
+        const { id } = req.params;
         const vendorId = req.user.id;
 
         const meal = await FoodService.findById(id)
@@ -117,7 +112,7 @@ const selectFoodItems = async (req, res) => {
     }
 };
 
-// --- 1.4 DESELECT MEAL FROM MENU (Mark Unavailable) ---
+// --- 1.4 DESELECT MEAL FROM MENU ---
 const deselectFoodItem = async (req, res) => {
     try {
         const vendorId = req.user.id;
@@ -177,16 +172,14 @@ const getVendorMenuForUser = async (req, res) => {
 
 
 // ==========================================
-// 🍱 2. COMBO OFFERS INVENTORY CRUD SECTION (🚨 UPDATED TO isAvailable)
+// 🍱 2. COMBO OFFERS INVENTORY SECTION
 // ==========================================
 
-// --- 2.1 GET MASTER COMBOS CHECKLIST (Shows ALL admin combos with available true/false) ---
-// Full Path: GET /provider/food/inventory/master-combos
+// --- 2.1 GET MASTER COMBOS CHECKLIST ---
 const getMasterCombosForSelection = async (req, res) => {
     try {
         const vendorId = req.user.id;
 
-        // A. Fetch ALL active admin combos [cite: custom_context]
         const masterCombos = await FoodComboOffer.find({ isActive: true })
             .populate({
                 path: 'dishes.foodServiceId',
@@ -194,10 +187,8 @@ const getMasterCombosForSelection = async (req, res) => {
             })
             .lean();
 
-        // B. Fetch this vendor's combo mapping record [cite: custom_context]
         const vendorMappings = await VendorFoodCombo.find({ vendorId }).lean();
 
-        // C. Generate dynamic checkmark states: Maps isAvailable state on-the-fly [cite: custom_context]
         const checklist = masterCombos.map(combo => {
             const mapping = vendorMappings.find(
                 map => map.foodComboId.toString() === combo._id.toString()
@@ -205,8 +196,7 @@ const getMasterCombosForSelection = async (req, res) => {
 
             return {
                 ...combo,
-                // 🚨 UPDATED KEY: Selected combos will return true, non-selected will return false
-                isAvailable: mapping ? mapping.isAvailable : false, // [cite: custom_context]
+                isAvailable: mapping ? mapping.isAvailable : false,
                 customPrice: mapping ? mapping.price : null
             };
         });
@@ -225,7 +215,7 @@ const getMasterCombosForSelection = async (req, res) => {
 // --- 2.2 GET SINGLE COMBO DETAIL BY ID ---
 const getVendorComboById = async (req, res) => {
     try {
-        const { id } = req.params; // foodComboId from URL
+        const { id } = req.params;
         const vendorId = req.user.id;
 
         const combo = await FoodComboOffer.findById(id)
@@ -279,7 +269,7 @@ const selectFoodCombos = async (req, res) => {
     }
 };
 
-// --- 2.4 DESELECT / REMOVE COMBO FROM KITCHEN MENU (Mark Unavailable) ---
+// --- 2.4 DESELECT COMBO FROM KITCHEN MENU ---
 const deselectFoodCombo = async (req, res) => {
     try {
         const vendorId = req.user.id;
@@ -337,11 +327,10 @@ const getVendorCombosForUser = async (req, res) => {
     }
 };
 
-// --- 1.1 TOGGLE VENDOR LIVE STATUS (ONLINE / OFFLINE) ---
-// Full Path: PATCH /provider/food/inventory/toggle-online
+// --- 3.1 TOGGLE VENDOR LIVE STATUS (ONLINE / OFFLINE) ---
 const toggleVendorOnlineStatus = async (req, res) => {
     try {
-        const vendorId = req.user.id; // From protect('provider') middleware
+        const vendorId = req.user.id;
         const { isOnline } = req.body;
 
         const vendor = await Food.findById(vendorId);
@@ -349,7 +338,6 @@ const toggleVendorOnlineStatus = async (req, res) => {
             return res.status(404).json({ success: false, message: "Vendor profile not found." });
         }
 
-        // Body mein value aayi toh set karein, varna current status ka opposite toggle karein
         const newStatus = isOnline !== undefined ? Boolean(isOnline) : !vendor.isOnline;
 
         const updatedVendor = await Food.findByIdAndUpdate(
@@ -370,28 +358,29 @@ const toggleVendorOnlineStatus = async (req, res) => {
     }
 };
 
+
 // ==========================================
-// 📅 4. TIFFIN PLANS INVENTORY CRUD SECTION (🚨 NEW)
+// 📅 4. TIFFIN PLANS INVENTORY SECTION (🚨 UPGRADED)
 // ==========================================
 
-// --- 4.1 GET MASTER TIFFIN PLANS CHECKLIST ---
+// --- 4.1 GET MASTER TIFFIN PLANS CHECKLIST (With Slot-Wise Populated Dishes) ---
 // Full Path: GET /provider/food/inventory/master-plans
 const getMasterPlansForSelection = async (req, res) => {
     try {
         const vendorId = req.user.id;
 
-        // A. Fetch all active Admin-created subscription plans [30, 31]
+        // A. Fetch all active Admin-created subscription plans with deep slot population
         const masterPlans = await TiffinPlan.find({ isActive: true })
-            .populate({
-                path: 'dishPool',
-                select: 'name imageUrl price discountPrice dietType calories'
-            })
+            .populate('slotDishes.breakfast.itemId', 'name imageUrl price discountPrice dietType calories')
+            .populate('slotDishes.lunch.itemId', 'name imageUrl price discountPrice dietType calories')
+            .populate('slotDishes.dinner.itemId', 'name imageUrl price discountPrice dietType calories')
+            .populate('dishPool', 'name imageUrl price discountPrice dietType calories')
             .lean();
 
-        // B. Fetch this vendor's plan mappings [cite: custom_context]
+        // B. Fetch this vendor's plan mappings
         const vendorPlanMappings = await VendorTiffinPlan.find({ vendorId }).lean();
 
-        // C. Map isAvailable status on-the-fly [cite: custom_context]
+        // C. Map isAvailable status on-the-fly
         const checklist = masterPlans.map(plan => {
             const mapping = vendorPlanMappings.find(
                 map => map.planId.toString() === plan._id.toString()
@@ -399,7 +388,7 @@ const getMasterPlansForSelection = async (req, res) => {
 
             return {
                 ...plan,
-                isAvailable: mapping ? mapping.isAvailable : false, // Checkbox checked if true [cite: custom_context]
+                isAvailable: mapping ? mapping.isAvailable : false, // Checkbox checked if true
                 customPrice: mapping ? mapping.customPrice : null
             };
         });
@@ -415,30 +404,49 @@ const getMasterPlansForSelection = async (req, res) => {
     }
 };
 
-// --- 4.2 SELECT/ADD TIFFIN PLANS TO VENDOR ACTIVE CATALOG ---
-// Full Path: POST /provider/food/inventory/select-plans
-const selectTiffinPlans = async (req, res) => {
+// --- 4.2 🌟 UNIFIED SYNC TIFFIN PLANS SELECTION (Single API for Multi-select) ---
+// Selected IDs -> isAvailable: true | Unselected IDs -> isAvailable: false
+// Full Path: POST /provider/food/inventory/sync-plans
+const syncTiffinPlans = async (req, res) => {
     try {
         const vendorId = req.user.id;
-        const { planIds } = req.body; // Array of TiffinPlan ObjectIDs [cite: custom_context]
+        const { selectedPlanIds = [], customPricing = {} } = req.body; 
 
-        if (!planIds || !Array.isArray(planIds)) {
-            return res.status(400).json({ success: false, message: "planIds array is required." });
+        if (!Array.isArray(selectedPlanIds)) {
+            return res.status(400).json({ success: false, message: "selectedPlanIds must be an array of Plan IDs." });
         }
 
-        const operations = planIds.map(id => ({
-            updateOne: {
-                filter: { vendorId, planId: id },
-                update: { $set: { isAvailable: true } },
-                upsert: true
-            }
-        }));
+        // 1. Fetch all active master plans
+        const allMasterPlans = await TiffinPlan.find({ isActive: true }).select('_id').lean();
 
-        await VendorTiffinPlan.bulkWrite(operations);
+        // 2. Build bulkWrite operations for ALL plans
+        const operations = allMasterPlans.map(plan => {
+            const planIdStr = plan._id.toString();
+            const isSelected = selectedPlanIds.map(id => id.toString()).includes(planIdStr);
+            const customPrice = customPricing[planIdStr] !== undefined ? Number(customPricing[planIdStr]) : null;
+
+            const updatePayload = { isAvailable: isSelected };
+            if (customPrice !== null) {
+                updatePayload.customPrice = customPrice;
+            }
+
+            return {
+                updateOne: {
+                    filter: { vendorId, planId: plan._id },
+                    update: { $set: updatePayload },
+                    upsert: true
+                }
+            };
+        });
+
+        if (operations.length > 0) {
+            await VendorTiffinPlan.bulkWrite(operations);
+        }
 
         res.json({
             success: true,
-            message: `${planIds.length} Tiffin subscription plans added to your active catalog successfully!`
+            message: `Tiffin plans menu synchronized successfully! (${selectedPlanIds.length} Active Plans)`,
+            activePlansCount: selectedPlanIds.length
         });
 
     } catch (error) {
@@ -446,28 +454,33 @@ const selectTiffinPlans = async (req, res) => {
     }
 };
 
-// --- 4.3 DESELECT / REMOVE TIFFIN PLAN FROM VENDOR CATALOG ---
-// Full Path: PUT /provider/food/inventory/deselect-plan/:planId
-const deselectTiffinPlan = async (req, res) => {
+// --- 4.3 ⚡ SINGLE INSTANT TOGGLE SWITCH (One-Click Availability Toggle) ---
+// Full Path: PATCH /provider/food/inventory/toggle-plan/:planId
+const toggleTiffinPlanAvailability = async (req, res) => {
     try {
         const vendorId = req.user.id;
         const { planId } = req.params;
 
+        const existing = await VendorTiffinPlan.findOne({ vendorId, planId });
+        const newStatus = existing ? !existing.isAvailable : true;
+
         const mapping = await VendorTiffinPlan.findOneAndUpdate(
             { vendorId, planId },
-            { $set: { isAvailable: false } },
-            { new: true }
+            { $set: { isAvailable: newStatus } },
+            { upsert: true, new: true }
         );
 
         res.json({
             success: true,
-            message: "Tiffin plan marked as Unavailable in your catalog.",
+            message: `Tiffin plan status updated to ${newStatus ? 'Active' : 'Inactive'} successfully.`,
+            isAvailable: newStatus,
             data: mapping
         });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
 
 
 module.exports = {
@@ -485,8 +498,9 @@ module.exports = {
     getVendorCombosForUser,
     toggleVendorOnlineStatus,
 
-     // Tiffin Plans
-     getMasterPlansForSelection,
-     selectTiffinPlans,
-     deselectTiffinPlan
+    // Tiffin Plans Exports
+    getMasterPlansForSelection,
+    syncTiffinPlans,               // 👈 🌟 Unified Single Sync API
+    toggleTiffinPlanAvailability,  // 👈 ⚡ Instant Single Switch API
+    
 };
