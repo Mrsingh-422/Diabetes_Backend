@@ -287,6 +287,7 @@ app.use('/provider/driver', require('./routes/provider/Common/DriverRoute')); //
 app.use('/provider/delivery-charges', require('./routes/provider/Common/DeliveryRoute')); // Delivery Charges Management Route
 // =================== Food Provider Routes =========================
 app.use('/provider/food/inventory', require('./routes/provider/Food/FoodInventoryRoute')); // Food Inventory Management
+app.use('/provider/food/orders', require('./routes/provider/Food/FoodOrderRoute')); 
 // =================== Food Provider Routes END=========================
 
 // --- Provider Lab Routes ---
