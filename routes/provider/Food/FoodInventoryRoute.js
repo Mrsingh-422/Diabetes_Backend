@@ -21,6 +21,8 @@ const {
     getMasterPlansForSelection,
     syncTiffinPlans,
     toggleTiffinPlanAvailability,
+    getVendorTiffinPlans,
+    getVendorTiffinPlanById
 
 } = require('../../../controllers/provider/Food/FoodInventoryController');
 
@@ -48,6 +50,8 @@ router.patch('/toggle-online', protect('provider'), toggleVendorOnlineStatus);
 // 🌟 TIFFIN PLANS: Unified Sync & Toggle Routes
 router.post('/sync-plans', protect('provider'), syncTiffinPlans);
 router.patch('/toggle-plan/:planId', protect('provider'), toggleTiffinPlanAvailability);
+router.get('/plans', protect('provider'), getVendorTiffinPlans);
+router.get('/plans/:id', protect('provider'), getVendorTiffinPlanById);
 
 
 

@@ -481,6 +481,105 @@ const toggleTiffinPlanAvailability = async (req, res) => {
     }
 };
 
+// ==========================================
+// 📅 1. GET ALL VENDOR TIFFIN PLANS (Vendor Inventory List)
+// Full Path: GET /provider/food/inventory/plans
+// ==========================================
+const getVendorTiffinPlans = async (req, res) => {
+    try {
+        const vendorId = req.user.id;
+        const { isAvailable } = req.query; // Optional filter (?isAvailable=true)
+
+        // 1. Fetch all active master plans with populated slot dishes
+        const masterPlans = await TiffinPlan.find({ isActive: true })
+            .populate('slotDishes.breakfast.itemId', 'name imageUrl price discountPrice dietType calories')
+            .populate('slotDishes.lunch.itemId', 'name imageUrl price discountPrice dietType calories')
+            .populate('slotDishes.dinner.itemId', 'name imageUrl price discountPrice calories dietType')
+            .populate('dishPool', 'name imageUrl price discountPrice dietType calories')
+            .lean();
+
+        // 2. Fetch logged-in vendor's mappings
+        const vendorPlanMappings = await VendorTiffinPlan.find({ vendorId }).lean();
+
+        // 3. Map vendor status on-the-fly
+        let result = masterPlans.map(plan => {
+            const mapping = vendorPlanMappings.find(
+                map => map.planId.toString() === plan._id.toString()
+            );
+
+            return {
+                ...plan,
+                isAvailable: mapping ? mapping.isAvailable : false,
+                customPrice: mapping ? mapping.customPrice : null
+            };
+        });
+
+        // Optional query filter
+        if (isAvailable !== undefined) {
+            const statusBool = isAvailable === 'true';
+            result = result.filter(p => p.isAvailable === statusBool);
+        }
+
+        // Sort: isAvailable: true first, then latest created
+        result.sort((a, b) => {
+            if (a.isAvailable !== b.isAvailable) return a.isAvailable ? -1 : 1;
+            return new Date(b.createdAt) - new Date(a.createdAt);
+        });
+
+        res.json({
+            success: true,
+            count: result.length,
+            data: result
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// ==========================================
+// 📅 2. GET SINGLE VENDOR TIFFIN PLAN FULL DETAILS BY ID
+// Full Path: GET /provider/food/inventory/plans/:id
+// ==========================================
+const getVendorTiffinPlanById = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const vendorId = req.user.id;
+
+        // 1. Fetch master plan by _id or planId with deep clinical & ingredient details
+        const plan = await TiffinPlan.findOne({
+            $or: [{ _id: id }, { planId: id }],
+            isActive: true
+        })
+        .populate('slotDishes.breakfast.itemId', 'name imageUrl price discountPrice calories dietType ingredients tags foodEffectCategory')
+        .populate('slotDishes.lunch.itemId', 'name imageUrl price discountPrice calories dietType ingredients tags foodEffectCategory')
+        .populate('slotDishes.dinner.itemId', 'name imageUrl price discountPrice calories dietType ingredients tags foodEffectCategory')
+        .populate('dishPool', 'name imageUrl price discountPrice dietType calories')
+        .lean();
+
+        if (!plan) {
+            return res.status(404).json({ success: false, message: "Tiffin subscription plan not found." });
+        }
+
+        // 2. Fetch logged-in vendor's specific mapping
+        const mapping = await VendorTiffinPlan.findOne({ 
+            vendorId, 
+            planId: plan._id 
+        }).lean();
+
+        res.json({
+            success: true,
+            data: {
+                ...plan,
+                isAvailable: mapping ? mapping.isAvailable : false,
+                customPrice: mapping ? mapping.customPrice : null
+            }
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
 
 
 module.exports = {
@@ -500,7 +599,10 @@ module.exports = {
 
     // Tiffin Plans Exports
     getMasterPlansForSelection,
-    syncTiffinPlans,               // 👈 🌟 Unified Single Sync API
-    toggleTiffinPlanAvailability,  // 👈 ⚡ Instant Single Switch API
+    syncTiffinPlans,               //  Unified Single Sync API
+    toggleTiffinPlanAvailability,  //  Instant Single Switch API
+    getVendorTiffinPlans,          //  Vendor Inventory List
+    getVendorTiffinPlanById        //  Single Plan Full Details
+
     
 };
