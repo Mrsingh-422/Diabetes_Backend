@@ -4,8 +4,8 @@ const express = require('express');
 const router = express.Router();
 
 const { 
-    getNearestVendorMeals, //  New Import
-    getNearestCombos,  //  New Import
+    getNearestVendorMeals,
+    getNearestCombos,
     getFoodPageLayout,
     getTodaySpecialById,
     getUserWeeklyMenu,
@@ -15,47 +15,38 @@ const {
     getUserFoodCategories,
     getUserFoodEffectCategories,
     getFoodCoupons,
-    getNearestPlans,
+    getNearestPlans,             // Geolocated nearest plans
+    getPlanDetailsById,          // Single plan full details
     getVendorPlansForUser
 } = require('../../../controllers/user/Food/FoodPageController');
 
 // Base URL : /api/foodpage
 
-// Full Path: POST /api/foodpage/nearest-meals
+// 🍔 Meals Endpoints
 router.post('/nearest-meals', getNearestVendorMeals);
-// Full Path: GET /api/foodpage/meals/:id
 router.get('/meals/:id', getMealDetailsById);
 
-// Full Path: GET /api/foodpage/combos/:id
+// 🍱 Combo Bundles Endpoints
+router.post('/nearest-combos', getNearestCombos);
 router.get('/combos/:id', getComboDetailsById);
 
-// 🚨 NEW GEOLOCATED COMBO BUNDLES LIST (Fires near-by tiffin bundles directly) [37, 53]
-// Full Path: POST /api/foodpage/nearest-combos
-router.post('/nearest-combos', getNearestCombos);
+// 🌟 Tiffin Subscription Plans Endpoints 
+// 1. Geolocated Nearest Tiffin Plans (Home Screen)
+router.post('/nearest-plans', getNearestPlans);
+// 2. Get Single Tiffin Plan Details by ID (Overlay / Details Screen)
+router.get('/plans/:id', getPlanDetailsById);
+// 3. Specific Vendor Tiffin Plans (Kitchen Profile Screen)
+router.get('/vendor-plans/:vendorId', getVendorPlansForUser);
 
-// Today's Specials
+// 📅 Specials & Calendar Endpoints
 router.get('/daywise', getFoodPageLayout);
 router.get('/daywise/:id', getTodaySpecialById);
-
-// Weekly Calendar
 router.get('/weekly', getUserWeeklyMenu);
 router.get('/weekly/:id', getWeeklySpecialById);
-// A. Get only Food Categories (For horizontal sliders)
-// Full Path: GET /api/foodpage/categories
+
+// 🏷️ Categories & Coupons
 router.get('/categories', getUserFoodCategories);
-
-// B. Get only Therapy/Health Effect Focus Categories (For medical filters)
-// Full Path: GET /api/foodpage/effects
 router.get('/effects', getUserFoodEffectCategories);
-
-// 🎟️ Get Active Food Coupons (Public / Checkout use)
-// Full Path: GET /api/foodpage/coupons
 router.get('/coupons', getFoodCoupons);
-// 1. Geolocated Nearest Tiffin Plans (Home Screen)
-// Full Path: POST /api/foodpage/nearest-plans
-router.post('/nearest-plans', getNearestPlans);
 
-// 2. Specific Vendor Tiffin Plans (Kitchen Profile Screen)
-// Full Path: GET /api/foodpage/vendor-plans/:vendorId
-router.get('/vendor-plans/:vendorId', getVendorPlansForUser);
 module.exports = router;
