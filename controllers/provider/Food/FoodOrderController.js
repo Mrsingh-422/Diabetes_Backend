@@ -179,6 +179,7 @@ const updateVendorOrderStatus = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
 module.exports = {
     getVendorOrders,
     getVendorOrderById,

@@ -9,18 +9,12 @@ const Pharmacy = require('../../../models/Pharmacy');
 const Lab = require('../../../models/Lab');
 const Driver = require('../../../models/Driver');
 
-
-
 const modelMap = {
-
     'Doctor': Doctor,
-    
     'Pharmacy': Pharmacy,
     'Lab': Lab,
-    "Food": Food, 
+    'Food': Food, 
     'Driver': Driver,
-    
-     
 };
 
 // 1. GET: List Profile Update Requests (With Pagination & Filters)
@@ -121,12 +115,24 @@ const handleProfileUpdateAction = async (req, res) => {
                 });
             }
 
+            // 🛠️ FIX: Safely map dot-notation keys (like 'documents.fssaiCertificates') for Mongoose $set
+            let setQuery = {};
+            for (let key in request.updatedFields) {
+                if (request.updatedFields.hasOwnProperty(key)) {
+                    setQuery[key] = request.updatedFields[key];
+                }
+            }
+
+            // Ensure profileStatus is updated to Approved on the primary vendor document
+            setQuery['profileStatus'] = 'Approved';
+
             // Apply the staged update fields directly to the primary vendor document
             await TargetModel.findByIdAndUpdate(
                 request.vendorId,
-                { $set: request.updatedFields },
+                { $set: setQuery },
                 { new: true, runValidators: true }
             );
+            
             request.status = 'Approved';
 
         } else if (action === 'Reject') {

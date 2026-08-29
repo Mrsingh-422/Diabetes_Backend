@@ -288,6 +288,7 @@ app.use('/provider/delivery-charges', require('./routes/provider/Common/Delivery
 // =================== Food Provider Routes =========================
 app.use('/provider/food/inventory', require('./routes/provider/Food/FoodInventoryRoute')); // Food Inventory Management
 app.use('/provider/food/orders', require('./routes/provider/Food/FoodOrderRoute')); 
+app.use('/provider/food/profile', require('./routes/provider/Food/ProfileRoute')); 
 // =================== Food Provider Routes END=========================
 
 // --- Provider Lab Routes ---
