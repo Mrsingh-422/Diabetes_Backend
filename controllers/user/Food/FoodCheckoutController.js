@@ -11,6 +11,9 @@ const VendorKMLimit = require('../../../models/VendorKMLimit');
 const FoodAddon = require('../../../models/FoodAddon'); 
 const CodConfig = require('../../../models/CodConfig');
 const { deleteFile } = require('../../../utils/fileHandler');
+const VendorFoodCombo = require('../../../models/VendorFoodCombo');
+const VendorFoodItem = require('../../../models/VendorFoodItem');
+const { getDistance } = require('../../../utils/helpers');
 
 const crypto = require('crypto');
 const { 
@@ -35,7 +38,7 @@ const calculateDistance = (lat1, lon1, lat2, lon2) => {
 };
 
 // ==========================================
-// 💡 SECURE BILLING ENGINE (WITH LOCATION-BASED DELIVERY CHARGES)
+// 💡 SECURE BILLING ENGINE (SAFE & DEFENSIVE)
 // ==========================================
 const calculateFoodBillHelper = async ({ 
     userId, 
@@ -52,26 +55,37 @@ const calculateFoodBillHelper = async ({
     const verifiedItems = [];
     const verifiedAddons = [];
 
-    const cleanFoodId = foodId?._id ? foodId._id.toString() : foodId.toString();
+    // 🛡️ 1. Safe Food ID Extraction
+    let resolvedFoodId = foodId?._id 
+        ? foodId._id.toString() 
+        : (foodId?.id ? foodId.id.toString() : (foodId ? foodId.toString() : null));
 
-    // 1. Verify Meals & Combos from DB
+    // 🛡️ 2. Verify Meals & Combos from DB
     for (let item of items) {
         let price = 0;
         let name = '';
         let resolvedProductType = 'MealItem';
 
-        const rawItemId = item.itemId?._id ? item.itemId._id.toString() : (item.itemId ? item.itemId.toString() : item._id.toString());
-        const isCombo = item.productType === 'Combo' || item.itemType === 'FoodComboOffer';
+        // Handles item.itemId._id, item.itemId, item._id, or item.id safely
+        const rawItemId = item.itemId?._id 
+            ? item.itemId._id.toString() 
+            : (item.itemId ? item.itemId.toString() : (item._id ? item._id.toString() : (item.id ? item.id.toString() : null)));
+
+        if (!rawItemId) {
+            continue; // Skip invalid item safely
+        }
+
+        const isCombo = item.productType === 'Combo' || item.itemType === 'FoodComboOffer' || item.itemType === 'Combo';
 
         if (isCombo) {
             const combo = await FoodComboOffer.findById(rawItemId);
-            if (!combo || !combo.isActive) throw new Error(`Combo bundle is currently unavailable.`);
+            if (!combo || !combo.isActive) throw new Error(`Combo bundle '${item.name || rawItemId}' is currently unavailable.`);
             price = combo.comboPrice;
             name = combo.name;
             resolvedProductType = 'Combo';
         } else {
             const meal = await FoodService.findById(rawItemId);
-            if (!meal || !meal.isActive) throw new Error(`Dish is currently unavailable.`);
+            if (!meal || !meal.isActive) throw new Error(`Dish '${item.name || rawItemId}' is currently unavailable.`);
             price = meal.discountPrice > 0 ? meal.discountPrice : meal.price;
             name = meal.name;
             resolvedProductType = 'MealItem';
@@ -92,10 +106,16 @@ const calculateFoodBillHelper = async ({
         });
     }
 
-    // 2. Non-Food Addons Calculation
+    if (verifiedItems.length === 0) {
+        throw new Error("No valid food items found to calculate bill.");
+    }
+
+    // 🛡️ 3. Non-Food Addons Calculation (Spoons, Bowls, Bags)
     if (addons && Array.isArray(addons) && addons.length > 0) {
         for (let add of addons) {
-            const rawAddonId = add.addonId?._id || add.addonId || add._id;
+            const rawAddonId = add.addonId?._id || add.addonId || add._id || add.id;
+            if (!rawAddonId) continue;
+
             const addonDoc = await FoodAddon.findById(rawAddonId);
 
             if (addonDoc) {
@@ -113,17 +133,33 @@ const calculateFoodBillHelper = async ({
         }
     }
 
-    // 3. Kitchen Status Check
-    const vendor = await Food.findById(cleanFoodId);
+    // 🛡️ 4. Auto-Resolve Vendor ID if missing for Combos / Meals
+    if (!resolvedFoodId && verifiedItems.length > 0) {
+        const firstItem = verifiedItems[0];
+        if (firstItem.productType === 'Combo') {
+            const comboMapping = await VendorFoodCombo.findOne({ foodComboId: firstItem.itemId, isAvailable: true });
+            if (comboMapping) resolvedFoodId = comboMapping.vendorId.toString();
+        } else {
+            const mealMapping = await VendorFoodItem.findOne({ foodServiceId: firstItem.itemId, isAvailable: true });
+            if (mealMapping) resolvedFoodId = mealMapping.vendorId.toString();
+        }
+    }
+
+    if (!resolvedFoodId) {
+        throw new Error("Kitchen Vendor ID (foodId) could not be resolved for the selected items.");
+    }
+
+    // 🛡️ 5. Kitchen Status Check
+    const vendor = await Food.findById(resolvedFoodId);
     if (!vendor) throw new Error("Kitchen vendor not found.");
     if (vendor.isActive === false) throw new Error("This kitchen is currently suspended by Admin.");
     if (vendor.isOnline === false) throw new Error("Booking Blocked: Kitchen is currently offline and not accepting orders.");
 
-    // 4. COD Availability Policy Check
+    // 🛡️ 6. COD Availability Policy Check
     const codSetting = await CodConfig.findOne({ vendorType: 'Food' });
     const isCodAvailable = codSetting ? Boolean(codSetting.isCodAvailable) : true;
 
-    // 5. 📍 LOCATION-BASED DELIVERY CHARGES RESOLUTION
+    // 🛡️ 7. 📍 Location-Based Delivery Charges Resolution (Priority 1 to 5)
     let parsedAddress = address;
     if (typeof address === 'string') {
         try { parsedAddress = JSON.parse(address); } catch (e) { parsedAddress = null; }
@@ -134,7 +170,7 @@ const calculateFoodBillHelper = async ({
 
     let chargesConfig = null;
 
-    // A. Priority 1: Match Exact City (e.g. Mohali / New Delhi)
+    // Priority 1: Match City
     if (userCity) {
         chargesConfig = await DeliveryCharge.findOne({
             vendorType: 'Food',
@@ -143,7 +179,7 @@ const calculateFoodBillHelper = async ({
         });
     }
 
-    // B. Priority 2: Match State (e.g. Punjab / Delhi)
+    // Priority 2: Match State
     if (!chargesConfig && userState) {
         chargesConfig = await DeliveryCharge.findOne({
             vendorType: 'Food',
@@ -153,12 +189,12 @@ const calculateFoodBillHelper = async ({
         });
     }
 
-    // C. Priority 3: Specific Vendor's Custom Delivery Rates (if configured)
+    // Priority 3: Specific Vendor Custom Rate
     if (!chargesConfig) {
-        chargesConfig = await DeliveryCharge.findOne({ vendorId: cleanFoodId });
+        chargesConfig = await DeliveryCharge.findOne({ vendorId: resolvedFoodId });
     }
 
-    // D. Priority 4: Platform Global Fallback Rate
+    // Priority 4: Platform Global Fallback
     if (!chargesConfig) {
         chargesConfig = await DeliveryCharge.findOne({ 
             vendorType: 'Food', 
@@ -168,7 +204,7 @@ const calculateFoodBillHelper = async ({
         }) || await DeliveryCharge.findOne({ vendorType: 'Food', isAdminGlobal: true });
     }
 
-    // E. Priority 5: In-Memory Default Safety
+    // Priority 5: Default Fallback Object
     const finalCharges = chargesConfig || {
         fixedPrice: 40,
         fixedDistance: 5,
@@ -190,12 +226,17 @@ const calculateFoodBillHelper = async ({
     const taxPercentage = finalCharges.taxPercentage ?? 5;
     const isRapidAvailable = finalCharges.isRapidAvailable !== false;
 
+    // 🛡️ 8. 📍 Distance Calculation & Delivery Fee Computation
     let deliveryCharge = 0;
     let distance = 0;
 
-    // Distance Calculation & Delivery Fee Computation
-    if (userLat && userLng && vendor.location?.lat && vendor.location?.lng) {
-        distance = calculateDistance(Number(userLat), Number(userLng), Number(vendor.location.lat), Number(vendor.location.lng));
+    const targetLat = Number(userLat || parsedAddress?.lat || parsedAddress?.location?.lat);
+    const targetLng = Number(userLng || parsedAddress?.lng || parsedAddress?.location?.lng);
+    const vendorLat = Number(vendor.location?.lat);
+    const vendorLng = Number(vendor.location?.lng);
+
+    if (targetLat && targetLng && vendorLat && vendorLng) {
+        distance = calculateDistance(targetLat, targetLng, vendorLat, vendorLng);
 
         const limitConfig = await VendorKMLimit.findOne({ vendorType: 'Food', isActive: true });
         const maxRadius = limitConfig ? limitConfig.kmLimit : 10;
@@ -218,7 +259,7 @@ const calculateFoodBillHelper = async ({
         deliveryCharge = (itemTotal >= freeDeliveryThreshold) ? 0 : fixedPrice;
     }
 
-    // Rapid Delivery Extra Surcharge
+    // Rapid Delivery Surcharge
     let appliedRapidFee = 0;
     if (isRapid) {
         if (!isRapidAvailable) {
@@ -228,7 +269,7 @@ const calculateFoodBillHelper = async ({
         deliveryCharge += appliedRapidFee;
     }
 
-    // 6. Coupon Verification
+    // 🛡️ 9. Coupon Verification
     let couponDiscount = 0;
     let validCouponId = null;
 
@@ -242,7 +283,7 @@ const calculateFoodBillHelper = async ({
             startDate: { $lte: now },
             expiryDate: { $gte: now },
             $or: [
-                { vendorId: cleanFoodId, vendorType: 'Food' },
+                { vendorId: resolvedFoodId, vendorType: 'Food' },
                 { isAdminCreated: true, vendorType: { $in: ['Food', 'All'] } }
             ]
         });
@@ -261,7 +302,7 @@ const calculateFoodBillHelper = async ({
         validCouponId = coupon._id;
     }
 
-    // 7. Tax Assessment (GST)
+    // 🛡️ 10. GST Tax Assessment & Total Payable
     const taxableSubtotal = Math.max(0, (itemTotal - couponDiscount) + deliveryCharge + packagingCharge);
     const taxAmount = Math.round(taxableSubtotal * (taxPercentage / 100));
     const totalAmount = Math.max(0, (itemTotal - couponDiscount) + deliveryCharge + packagingCharge + taxAmount);
@@ -286,7 +327,7 @@ const calculateFoodBillHelper = async ({
             taxAmount: Math.round(taxAmount),
             taxPercentage: taxPercentage,
             
-            // 🚨 Breakdown Parameters Snapshot:
+            // Breakdown Parameters Snapshot
             fixedPrice: fixedPrice,
             fixedDistance: fixedDistance,
             pricePerKM: pricePerKM,
@@ -311,7 +352,7 @@ const calculateCheckoutBill = async (req, res) => {
             foodId, 
             items, 
             addons, 
-            address,      // 👈 Address passed from frontend
+            address, 
             userLat, 
             userLng, 
             couponCode, 
@@ -321,6 +362,7 @@ const calculateCheckoutBill = async (req, res) => {
         let cartItems = items;
         let targetFoodId = foodId;
 
+        // Fallback to DB Cart if items not passed in body
         if (!cartItems || cartItems.length === 0) {
             const cart = await Cart.findOne({ userId });
             if (!cart || !cart.foodCart || cart.foodCart.items.length === 0) {
@@ -339,7 +381,7 @@ const calculateCheckoutBill = async (req, res) => {
             foodId: targetFoodId,
             items: cartItems,
             addons: addons || [],
-            address: address || null, // 👈 Location evaluated here
+            address: address || null,
             userLat,
             userLng,
             couponCode,
@@ -360,6 +402,7 @@ const calculateCheckoutBill = async (req, res) => {
         });
 
     } catch (error) {
+        console.error("calculateCheckoutBill Error:", error.message);
         res.status(400).json({ success: false, message: error.message });
     }
 };

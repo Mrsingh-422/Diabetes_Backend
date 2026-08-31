@@ -3,19 +3,33 @@
 const FoodBooking = require('../../../models/FoodBooking');
 const TiffinPlan = require('../../../models/TiffinPlan');
 const FoodService = require('../../../models/FoodService');
-const FoodComboOffer = require('../../../models/FoodComboOffer');
 const Food = require('../../../models/Food');
 const DeliveryCharge = require('../../../models/DeliveryCharge');
 const Coupon = require('../../../models/Coupon');
 const CodConfig = require('../../../models/CodConfig');
-const Cart = require('../../../models/Cart');
+const VendorKMLimit = require('../../../models/VendorKMLimit');
 
 const { createRazorpayOrder } = require('../../../utils/razorpay');
 
 // ==========================================
-// 💡 HELPER: CALCULATE SUBSCRIPTION DATES
+// 💡 HAVERSINE DISTANCE CALCULATOR
 // ==========================================
-const calculateDates = (cycle, daysMultiplier = null, customStartDate = null) => {
+const calculateDistance = (lat1, lon1, lat2, lon2) => {
+    const R = 6371; // KM
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = 
+        Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+        Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
+        Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return Number((R * c).toFixed(2));
+};
+
+// ==========================================
+// 💡 HELPER: DYNAMIC DATE GENERATOR
+// ==========================================
+const calculateSubscriptionDates = (cycle, customDays = null, customStartDate = null) => {
     const startDate = customStartDate ? new Date(customStartDate) : new Date();
     const endDate = new Date(startDate);
 
@@ -23,10 +37,10 @@ const calculateDates = (cycle, daysMultiplier = null, customStartDate = null) =>
         endDate.setDate(startDate.getDate() + 7);
     } else if (cycle === 'monthly' || cycle === 'Monthly Cycle') {
         endDate.setDate(startDate.getDate() + 30);
-    } else if (daysMultiplier) {
-        endDate.setDate(startDate.getDate() + Number(daysMultiplier));
+    } else if (customDays) {
+        endDate.setDate(startDate.getDate() + Number(customDays));
     } else {
-        endDate.setDate(startDate.getDate() + 30);
+        endDate.setDate(startDate.getDate() + 7);
     }
 
     return { startDate, endDate };
@@ -63,8 +77,39 @@ const getDeliveryConfig = async (address, foodId) => {
 };
 
 // ==========================================
-// 🧮 1. CALCULATE TIFFIN SUBSCRIPTION BILL (PREVIEW)
-// Full Path: POST /api/food/tiffin/calculate
+// 💡 HELPER: AUTO-RESOLVE NEAREST KITCHEN VENDOR
+// ==========================================
+const resolveNearestVendor = async (passedFoodId, userLat, userLng) => {
+    if (passedFoodId) {
+        const vendor = await Food.findById(passedFoodId);
+        if (vendor && vendor.isActive && vendor.isOnline) return vendor;
+    }
+
+    // Auto-search nearest vendor if foodId not passed or offline
+    if (userLat && userLng) {
+        const vendors = await Food.find({ profileStatus: 'Approved', isActive: true, isOnline: true }).lean();
+        let nearestVendor = null;
+        let minDistance = Infinity;
+
+        for (let v of vendors) {
+            if (!v.location?.lat || !v.location?.lng) continue;
+            const dist = calculateDistance(Number(userLat), Number(userLng), Number(v.location.lat), Number(v.location.lng));
+            if (dist < minDistance) {
+                minDistance = dist;
+                nearestVendor = { ...v, distance: dist };
+            }
+        }
+
+        if (nearestVendor) return nearestVendor;
+    }
+
+    // Fallback: Pick any first active online kitchen
+    return await Food.findOne({ profileStatus: 'Approved', isActive: true, isOnline: true });
+};
+
+// ==========================================
+// 🧮 1. DIRECT BILL PREVIEW (POST /calculate)
+// No Cart Required - Direct Plan Calculation
 // ==========================================
 const calculateTiffinSubscriptionBill = async (req, res) => {
     try {
@@ -73,127 +118,123 @@ const calculateTiffinSubscriptionBill = async (req, res) => {
             foodId, 
             bookingType = 'Subscription', // 'Subscription' ya 'Custom Plate'
             planId, 
-            billingCycle = 'monthly', 
-            daysMultiplier,
-            slotsConfiguration = [], 
-            customPlateSchedule = [],
+            billingCycle = 'weekly',      // 'weekly', 'monthly', 'custom'
+            durationDays,                 // e.g. 7, 10, 15, 30
+            universalDeliveryTimes = {},  // { breakfastTime, lunchTime, dinnerTime }
+            dailyMealSchedule = [],       // [{ weekNumber, dayOfWeek, slotName, mealId }]
             address, 
+            userLat,
+            userLng,
             couponCode 
         } = req.body;
 
-        if (!foodId) {
-            return res.status(400).json({ success: false, message: "Kitchen Vendor ID (foodId) is required." });
+        // Parse address
+        let parsedAddress = address;
+        if (typeof address === 'string') {
+            try { parsedAddress = JSON.parse(address); } catch (e) { parsedAddress = null; }
+        }
+
+        // 1. Resolve Kitchen Vendor
+        const targetLat = Number(userLat || parsedAddress?.lat || parsedAddress?.location?.lat || 30.7046);
+        const targetLng = Number(userLng || parsedAddress?.lng || parsedAddress?.location?.lng || 76.7179);
+
+        const vendor = await resolveNearestVendor(foodId, targetLat, targetLng);
+        if (!vendor) {
+            return res.status(400).json({ success: false, message: "No active kitchen vendor found in your area." });
         }
 
         let itemTotal = 0;
-        let verifiedSlots = [];
-        let verifiedCustomSchedule = [];
+        let planTitle = "Custom Tiffin Plan";
+        const verifiedSchedule = [];
 
-        // ----------------------------------------------------
-        // SCENARIO A: PRE-SET MASTER PLAN (OurTiffin Model)
-        // ----------------------------------------------------
-        if (bookingType === 'Subscription') {
-            if (!planId) {
-                return res.status(400).json({ success: false, message: "planId is required for standard tiffin subscriptions." });
+        // 2. Validate Daily Meal Schedule
+        if (!Array.isArray(dailyMealSchedule) || dailyMealSchedule.length === 0) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Please configure dishes for your daily meal schedule before calculating." 
+            });
+        }
+
+        for (let item of dailyMealSchedule) {
+            const { weekNumber = 1, dayOfWeek, slotName, mealId } = item;
+            if (!dayOfWeek || !slotName || !mealId) continue;
+
+            const dish = await FoodService.findById(mealId).select('name price discountPrice imageUrl dietType calories');
+            if (!dish) {
+                throw new Error(`Dish '${mealId}' scheduled for ${dayOfWeek} (${slotName}) was not found.`);
             }
 
+            const dishPrice = dish.discountPrice > 0 ? dish.discountPrice : dish.price;
+
+            // Resolve delivery time from universal timing preferences
+            let slotTime = "01:00 PM - 02:00 PM";
+            if (slotName.toLowerCase() === 'breakfast') slotTime = universalDeliveryTimes.breakfastTime || "08:00 AM - 09:00 AM";
+            else if (slotName.toLowerCase() === 'lunch') slotTime = universalDeliveryTimes.lunchTime || "01:00 PM - 02:00 PM";
+            else if (slotName.toLowerCase() === 'dinner') slotTime = universalDeliveryTimes.dinnerTime || "08:00 PM - 09:00 PM";
+
+            verifiedSchedule.push({
+                weekNumber: Number(weekNumber) || 1,
+                dayOfWeek: dayOfWeek.toLowerCase(),
+                slotName: slotName.toLowerCase(),
+                mealId: dish._id,
+                mealName: dish.name,
+                mealImage: dish.imageUrl,
+                mealPrice: dishPrice,
+                calories: dish.calories,
+                dietType: dish.dietType,
+                deliveryTime: slotTime
+            });
+        }
+
+        // 3. PRICING EVALUATION
+        // A. Pre-set Master Plan (Weekly / Monthly)
+        if (bookingType === 'Subscription' && planId) {
             const masterPlan = await TiffinPlan.findOne({
                 $or: [{ _id: planId }, { planId }],
                 isActive: true
             });
 
             if (!masterPlan) {
-                return res.status(404).json({ success: false, message: "Selected Tiffin Plan is currently unavailable." });
+                return res.status(404).json({ success: false, message: "Selected Tiffin Plan tier is not available." });
             }
 
-            // Slot Quota Validation: Ensure selected slots match plan limit
-            if (slotsConfiguration.length !== masterPlan.mealsPerDay) {
-                return res.status(422).json({
-                    success: false,
-                    message: `Validation Error: This plan tier (${masterPlan.name}) requires exactly ${masterPlan.mealsPerDay} active meal slot(s). You configured ${slotsConfiguration.length}.`
-                });
-            }
-
+            planTitle = masterPlan.name;
             itemTotal = masterPlan.price;
-
-            // Verify each configured dish
-            for (let slot of slotsConfiguration) {
-                const { slotName, mealId, preferredTime } = slot;
-                const dish = await FoodService.findById(mealId).select('name price discountPrice imageUrl dietType calories');
-                
-                if (!dish) {
-                    throw new Error(`Dish with ID '${mealId}' configured in slot '${slotName}' was not found.`);
-                }
-
-                verifiedSlots.push({
-                    slotName: slotName.toLowerCase(),
-                    mealId: dish._id,
-                    mealName: dish.name,
-                    mealImage: dish.imageUrl,
-                    calories: dish.calories,
-                    dietType: dish.dietType,
-                    preferredTime: preferredTime || (slotName.toLowerCase() === 'breakfast' ? '08:30' : (slotName.toLowerCase() === 'lunch' ? '13:00' : '20:00'))
-                });
-            }
         } 
-        // ----------------------------------------------------
-        // SCENARIO B: CUSTOM 7-DAY WORKSPACE (Custom Plate)
-        // ----------------------------------------------------
-        else if (bookingType === 'Custom Plate') {
-            if (!Array.isArray(customPlateSchedule) || customPlateSchedule.length === 0) {
-                return res.status(400).json({ success: false, message: "customPlateSchedule array is required for custom plate bookings." });
-            }
+        // B. Custom Days Plan (10 Days, 15 Days, or Custom)
+        else {
+            const effectiveDays = Number(durationDays) || (billingCycle === 'weekly' ? 7 : (billingCycle === 'monthly' ? 30 : 15));
+            const sumOfSchedule = verifiedSchedule.reduce((acc, curr) => acc + curr.mealPrice, 0);
 
-            let weeklyTotal = 0;
-
-            for (let item of customPlateSchedule) {
-                const { dayOfWeek, slotName, mealId, preferredTime } = item;
-                const dish = await FoodService.findById(mealId).select('name price discountPrice imageUrl dietType calories');
-
-                if (!dish) {
-                    throw new Error(`Dish with ID '${mealId}' for ${dayOfWeek} ${slotName} not found.`);
-                }
-
-                const price = dish.discountPrice > 0 ? dish.discountPrice : dish.price;
-                weeklyTotal += price;
-
-                verifiedCustomSchedule.push({
-                    dayOfWeek: dayOfWeek.toLowerCase(),
-                    slotName: slotName.toLowerCase(),
-                    mealId: dish._id,
-                    mealName: dish.name,
-                    mealImage: dish.imageUrl,
-                    mealPrice: price,
-                    calories: dish.calories,
-                    dietType: dish.dietType,
-                    preferredTime: preferredTime || '13:00'
-                });
-            }
-
-            // Pricing Math: Average Daily Cost * multiplier - Discount
-            const multiplier = billingCycle === 'weekly' ? 7 : (billingCycle === 'monthly' ? 30 : Number(daysMultiplier || 30));
-            const averageDailyPrice = weeklyTotal / 7;
-            const baseProgramCost = Math.round(averageDailyPrice * multiplier);
+            const scheduleDaysCount = Math.max(1, new Set(verifiedSchedule.map(s => `${s.weekNumber}-${s.dayOfWeek}`)).size);
+            const avgDailyCost = sumOfSchedule / scheduleDaysCount;
+            const baseCost = Math.round(avgDailyCost * effectiveDays);
 
             let discountRate = 0;
-            if (billingCycle === 'weekly') discountRate = 0.10; // 10%
-            else if (billingCycle === 'monthly') discountRate = 0.20; // 20%
-            else if (billingCycle === 'custom' && multiplier > 15) discountRate = 0.08; // 8%
+            if (billingCycle === 'weekly' || effectiveDays === 7) discountRate = 0.10;
+            else if (billingCycle === 'monthly' || effectiveDays >= 28) discountRate = 0.20;
+            else if (effectiveDays > 15) discountRate = 0.08;
 
-            const planSavings = Math.round(baseProgramCost * discountRate);
-            itemTotal = Math.round(baseProgramCost - planSavings);
+            const savings = Math.round(baseCost * discountRate);
+            itemTotal = Math.round(baseCost - savings);
+            planTitle = `Custom ${effectiveDays}-Day Tiffin Program`;
         }
 
-        // Logistics & Delivery Charges
-        const chargesConfig = await getDeliveryConfig(address, foodId);
+        // 4. Logistics & Delivery Charges
+        const chargesConfig = await getDeliveryConfig(parsedAddress, vendor._id);
         const fixedPrice = chargesConfig.fixedPrice || 40;
         const packagingCharge = chargesConfig.packagingCharge || 15;
         const freeDeliveryThreshold = chargesConfig.freeDeliveryThreshold || 500;
         const taxPercentage = chargesConfig.taxPercentage || 5;
 
+        let distance = 0;
+        if (vendor.location?.lat && vendor.location?.lng) {
+            distance = calculateDistance(targetLat, targetLng, Number(vendor.location.lat), Number(vendor.location.lng));
+        }
+
         let deliveryCharge = (itemTotal >= freeDeliveryThreshold) ? 0 : fixedPrice;
 
-        // Coupon Verification
+        // 5. Coupon Verification
         let couponDiscount = 0;
         let validCouponId = null;
 
@@ -207,7 +248,7 @@ const calculateTiffinSubscriptionBill = async (req, res) => {
                 startDate: { $lte: now },
                 expiryDate: { $gte: now },
                 $or: [
-                    { vendorId: foodId, vendorType: 'Food' },
+                    { vendorId: vendor._id, vendorType: 'Food' },
                     { isAdminCreated: true, vendorType: { $in: ['Food', 'All'] } }
                 ]
             });
@@ -218,21 +259,34 @@ const calculateTiffinSubscriptionBill = async (req, res) => {
             }
         }
 
-        // Tax & Total Assessment
         const taxableSubtotal = Math.max(0, (itemTotal - couponDiscount) + deliveryCharge + packagingCharge);
         const taxAmount = Math.round(taxableSubtotal * (taxPercentage / 100));
         const totalAmount = Math.max(0, (itemTotal - couponDiscount) + deliveryCharge + packagingCharge + taxAmount);
 
-        // Calculate Dates Preview
-        const { startDate, endDate } = calculateDates(billingCycle, daysMultiplier);
+        const effectiveDays = Number(durationDays) || (billingCycle === 'weekly' ? 7 : (billingCycle === 'monthly' ? 30 : 7));
+        const { startDate, endDate } = calculateSubscriptionDates(billingCycle, effectiveDays);
 
         res.json({
             success: true,
+            planName: planTitle,
             bookingType,
             billingCycle,
+            durationDays: effectiveDays,
+            distance: `${distance} km`,
+            assignedVendor: {
+                _id: vendor._id,
+                name: vendor.name,
+                city: vendor.city,
+                address: vendor.address
+            },
             dates: {
                 startDate: startDate.toISOString().split('T')[0],
                 endDate: endDate.toISOString().split('T')[0]
+            },
+            universalDeliveryTimes: {
+                breakfastTime: universalDeliveryTimes.breakfastTime || "08:00 AM - 09:00 AM",
+                lunchTime: universalDeliveryTimes.lunchTime || "01:00 PM - 02:00 PM",
+                dinnerTime: universalDeliveryTimes.dinnerTime || "08:00 PM - 09:00 PM"
             },
             billSummary: {
                 itemTotal: Math.round(itemTotal),
@@ -244,8 +298,8 @@ const calculateTiffinSubscriptionBill = async (req, res) => {
                 couponId: validCouponId,
                 totalAmount: Math.round(totalAmount)
             },
-            slotsConfiguration: verifiedSlots,
-            customPlateSchedule: verifiedCustomSchedule
+            totalConfiguredMeals: verifiedSchedule.length,
+            dailyMealSchedule: verifiedSchedule
         });
 
     } catch (error) {
@@ -254,8 +308,8 @@ const calculateTiffinSubscriptionBill = async (req, res) => {
 };
 
 // ==========================================
-// 💳 2. PURCHASE & SUBSCRIBE TIFFIN (ORDER PLACEMENT)
-// Full Path: POST /api/food/tiffin/subscribe
+// 💳 2. DIRECT SUBSCRIBE & BUY TIFFIN (POST /subscribe)
+// Direct Purchase -> Initiates Order Immediately
 // ==========================================
 const subscribeTiffinPlan = async (req, res) => {
     try {
@@ -264,11 +318,14 @@ const subscribeTiffinPlan = async (req, res) => {
             foodId, 
             bookingType = 'Subscription', 
             planId, 
-            billingCycle = 'monthly', 
-            daysMultiplier,
-            slotsConfiguration = [], 
-            customPlateSchedule = [],
+            planName,
+            billingCycle = 'weekly', 
+            durationDays,
+            universalDeliveryTimes = {},
+            dailyMealSchedule = [],
             address, 
+            userLat,
+            userLng,
             couponCode,
             paymentMethod = 'Online'
         } = req.body;
@@ -280,16 +337,19 @@ const subscribeTiffinPlan = async (req, res) => {
         }
 
         if (!parsedAddress || !parsedAddress.name || !parsedAddress.phone || !parsedAddress.houseNo || !parsedAddress.city) {
-            return res.status(400).json({ success: false, message: "Complete delivery address is required." });
+            return res.status(400).json({ success: false, message: "Complete delivery address is required to proceed." });
         }
 
-        // Verify Kitchen
-        const vendor = await Food.findById(foodId);
-        if (!vendor || !vendor.isActive || vendor.isOnline === false) {
-            return res.status(400).json({ success: false, message: "Kitchen vendor is currently offline or unavailable." });
+        // 1. Resolve Kitchen Vendor
+        const targetLat = Number(userLat || parsedAddress?.lat || parsedAddress?.location?.lat || 30.7046);
+        const targetLng = Number(userLng || parsedAddress?.lng || parsedAddress?.location?.lng || 76.7179);
+
+        const vendor = await resolveNearestVendor(foodId, targetLat, targetLng);
+        if (!vendor) {
+            return res.status(400).json({ success: false, message: "No active kitchen vendor available to service this subscription." });
         }
 
-        // Validate COD Policy
+        // 2. Validate COD Policy
         if (paymentMethod === 'COD') {
             const codSetting = await CodConfig.findOne({ vendorType: 'Food' });
             if (codSetting && codSetting.isCodAvailable === false) {
@@ -297,61 +357,66 @@ const subscribeTiffinPlan = async (req, res) => {
             }
         }
 
-        // Calculate Pricing using helper logic
-        let itemTotal = 0;
-        let verifiedSlots = [];
-        let verifiedCustom = [];
+        // 3. Verify Scheduled Meals
+        const verifiedSchedule = [];
+        let sumOfSchedule = 0;
 
-        if (bookingType === 'Subscription') {
-            const masterPlan = await TiffinPlan.findOne({ $or: [{ _id: planId }, { planId }], isActive: true });
-            if (!masterPlan) return res.status(404).json({ success: false, message: "Tiffin Plan not found." });
+        for (let item of dailyMealSchedule) {
+            const { weekNumber = 1, dayOfWeek, slotName, mealId } = item;
+            if (!dayOfWeek || !slotName || !mealId) continue;
 
-            if (slotsConfiguration.length !== masterPlan.mealsPerDay) {
-                return res.status(422).json({
-                    success: false,
-                    message: `Validation Error: This plan requires exactly ${masterPlan.mealsPerDay} configured slot(s).`
-                });
-            }
+            const dish = await FoodService.findById(mealId);
+            if (!dish) throw new Error(`Dish not found: ${mealId}`);
 
-            itemTotal = masterPlan.price;
-            for (let slot of slotsConfiguration) {
-                const dish = await FoodService.findById(slot.mealId);
-                if (!dish) throw new Error(`Dish not found: ${slot.mealId}`);
+            const dishPrice = dish.discountPrice > 0 ? dish.discountPrice : dish.price;
+            sumOfSchedule += dishPrice;
 
-                verifiedSlots.push({
-                    slotName: slot.slotName.toLowerCase(),
-                    mealId: dish._id,
-                    preferredTime: slot.preferredTime || '13:00'
-                });
-            }
-        } else {
-            let weeklyTotal = 0;
-            for (let item of customPlateSchedule) {
-                const dish = await FoodService.findById(item.mealId);
-                if (!dish) throw new Error(`Dish not found: ${item.mealId}`);
+            let slotTime = "01:00 PM - 02:00 PM";
+            if (slotName.toLowerCase() === 'breakfast') slotTime = universalDeliveryTimes.breakfastTime || "08:00 AM - 09:00 AM";
+            else if (slotName.toLowerCase() === 'lunch') slotTime = universalDeliveryTimes.lunchTime || "01:00 PM - 02:00 PM";
+            else if (slotName.toLowerCase() === 'dinner') slotTime = universalDeliveryTimes.dinnerTime || "08:00 PM - 09:00 PM";
 
-                const price = dish.discountPrice > 0 ? dish.discountPrice : dish.price;
-                weeklyTotal += price;
-
-                verifiedCustom.push({
-                    dayOfWeek: item.dayOfWeek.toLowerCase(),
-                    slotName: item.slotName.toLowerCase(),
-                    baseIngredientId: item.baseIngredientId || null,
-                    proteinIngredientId: item.proteinIngredientId || null,
-                    fiberIngredientId: item.fiberIngredientId || null,
-                    preferredDeliveryTime: item.preferredTime || '13:00'
-                });
-            }
-
-            const multiplier = billingCycle === 'weekly' ? 7 : (billingCycle === 'monthly' ? 30 : Number(daysMultiplier || 30));
-            const averageDailyPrice = weeklyTotal / 7;
-            const baseProgramCost = Math.round(averageDailyPrice * multiplier);
-            let discountRate = billingCycle === 'weekly' ? 0.10 : (billingCycle === 'monthly' ? 0.20 : 0.08);
-            itemTotal = Math.round(baseProgramCost - (baseProgramCost * discountRate));
+            verifiedSchedule.push({
+                weekNumber: Number(weekNumber) || 1,
+                dayOfWeek: dayOfWeek.toLowerCase(),
+                slotName: slotName.toLowerCase(),
+                mealId: dish._id,
+                mealName: dish.name,
+                mealImage: dish.imageUrl,
+                mealPrice: dishPrice,
+                calories: dish.calories,
+                dietType: dish.dietType,
+                deliveryTime: slotTime
+            });
         }
 
-        // Logistics & Bill
-        const chargesConfig = await getDeliveryConfig(parsedAddress, foodId);
+        if (verifiedSchedule.length === 0) {
+            return res.status(400).json({ success: false, message: "Daily meal schedule cannot be empty." });
+        }
+
+        // 4. Calculate Price
+        let itemTotal = 0;
+        let resolvedTitle = planName || "Custom Tiffin Plan";
+
+        if (bookingType === 'Subscription' && planId) {
+            const masterPlan = await TiffinPlan.findOne({ $or: [{ _id: planId }, { planId }], isActive: true });
+            if (masterPlan) {
+                itemTotal = masterPlan.price;
+                resolvedTitle = masterPlan.name;
+            }
+        } else {
+            const effectiveDays = Number(durationDays) || (billingCycle === 'weekly' ? 7 : (billingCycle === 'monthly' ? 30 : 15));
+            const scheduleDaysCount = Math.max(1, new Set(verifiedSchedule.map(s => `${s.weekNumber}-${s.dayOfWeek}`)).size);
+            const avgDailyCost = sumOfSchedule / scheduleDaysCount;
+            const baseCost = Math.round(avgDailyCost * effectiveDays);
+
+            let discountRate = billingCycle === 'weekly' ? 0.10 : (billingCycle === 'monthly' ? 0.20 : 0.08);
+            itemTotal = Math.round(baseCost - (baseCost * discountRate));
+            resolvedTitle = `Custom ${effectiveDays}-Day Tiffin Program`;
+        }
+
+        // 5. Logistics & Bill
+        const chargesConfig = await getDeliveryConfig(parsedAddress, vendor._id);
         const fixedPrice = chargesConfig.fixedPrice || 40;
         const packagingCharge = chargesConfig.packagingCharge || 15;
         const freeDeliveryThreshold = chargesConfig.freeDeliveryThreshold || 500;
@@ -373,8 +438,8 @@ const subscribeTiffinPlan = async (req, res) => {
         const taxAmount = Math.round(((itemTotal - couponDiscount) + deliveryCharge + packagingCharge) * (taxPercentage / 100));
         const totalAmount = Math.round((itemTotal - couponDiscount) + deliveryCharge + packagingCharge + taxAmount);
 
-        // Dates
-        const { startDate, endDate } = calculateDates(billingCycle, daysMultiplier);
+        const effectiveDays = Number(durationDays) || (billingCycle === 'weekly' ? 7 : (billingCycle === 'monthly' ? 30 : 7));
+        const { startDate, endDate } = calculateSubscriptionDates(billingCycle, effectiveDays);
 
         const tempBookingId = `SUB-FD-${Math.floor(100000 + Math.random() * 900000)}`;
         const deliveryOTP = String(Math.floor(1000 + Math.random() * 9000));
@@ -384,20 +449,26 @@ const subscribeTiffinPlan = async (req, res) => {
             rzpOrder = await createRazorpayOrder(totalAmount, `tiffin_${tempBookingId}_${Date.now()}`);
         }
 
-        // Create Database Booking Document
+        // 6. Direct Subscription Document Creation
         const newSubscription = await FoodBooking.create({
             bookingId: tempBookingId,
             userId,
-            foodId,
+            foodId: vendor._id,
             bookingType,
             subscriptionDetails: {
                 planId: String(planId || 'custom-plan'),
+                planName: resolvedTitle,
                 billingCycle: billingCycle.toLowerCase(),
+                durationDays: effectiveDays,
                 startDate,
                 endDate,
-                slotsConfiguration: verifiedSlots
+                universalDeliveryTimes: {
+                    breakfastTime: universalDeliveryTimes.breakfastTime || "08:00 AM - 09:00 AM",
+                    lunchTime: universalDeliveryTimes.lunchTime || "01:00 PM - 02:00 PM",
+                    dinnerTime: universalDeliveryTimes.dinnerTime || "08:00 PM - 09:00 PM"
+                },
+                dailyMealSchedule: verifiedSchedule
             },
-            customPlateSchedule: verifiedCustom,
             collectionType: 'Home Delivery',
             address: parsedAddress,
             billSummary: {
@@ -419,7 +490,7 @@ const subscribeTiffinPlan = async (req, res) => {
             }
         });
 
-        // COD Immediate Confirmation
+        // COD Flow Output
         if (paymentMethod === 'COD') {
             return res.status(201).json({
                 success: true,
@@ -429,7 +500,7 @@ const subscribeTiffinPlan = async (req, res) => {
             });
         }
 
-        // Online Razorpay Initiation
+        // Online Razorpay Flow Output
         const rawKey = process.env.RAZORPAY_KEY_ID || "rzp_test_T2f3swDLdaDZCP";
         const razorpayKey = rawKey.replace(/["']/g, "").trim();
 
@@ -453,17 +524,17 @@ const subscribeTiffinPlan = async (req, res) => {
 };
 
 // ==========================================
-// ⏰ 3. MODIFY DAILY SUBSCRIPTION SLOT SCHEDULE (WITH 4-HOUR LOCKOUT)
+// ⏰ 3. MODIFY DAILY SUBSCRIPTION SLOT SCHEDULE (4-HOUR LOCKOUT)
 // Full Path: PUT /api/food/tiffin/schedule/:bookingId
 // ==========================================
 const modifyTiffinSlotSchedule = async (req, res) => {
     try {
         const userId = req.user.id;
         const { bookingId } = req.params;
-        const { slotName, mealId, preferredTime } = req.body;
+        const { weekNumber = 1, dayOfWeek, slotName, mealId, deliveryTime } = req.body;
 
-        if (!slotName || !mealId) {
-            return res.status(400).json({ success: false, message: "slotName and new mealId are required." });
+        if (!dayOfWeek || !slotName || !mealId) {
+            return res.status(400).json({ success: false, message: "dayOfWeek, slotName and new mealId are required." });
         }
 
         const subscription = await FoodBooking.findOne({
@@ -472,41 +543,62 @@ const modifyTiffinSlotSchedule = async (req, res) => {
         });
 
         if (!subscription) {
-            return res.status(404).json({ success: false, message: "Subscription plan not found." });
+            return res.status(404).json({ success: false, message: "Subscription record not found." });
         }
 
-        // 🚨 4-HOUR FULFILLMENT LOCKOUT BUFFER CHECK
-        if (preferredTime) {
-            const [hours, minutes] = preferredTime.split(':');
-            const targetTime = new Date();
-            targetTime.setHours(Number(hours), Number(minutes), 0, 0);
+        // 4-Hour Lockout Buffer
+        if (deliveryTime) {
+            const timeMatch = deliveryTime.match(/(\d+):(\d+)\s*(AM|PM)/i);
+            if (timeMatch) {
+                let [_, hrs, mins, meridiem] = timeMatch;
+                hrs = Number(hrs);
+                if (meridiem.toUpperCase() === 'PM' && hrs < 12) hrs += 12;
+                if (meridiem.toUpperCase() === 'AM' && hrs === 12) hrs = 0;
 
-            const now = new Date();
-            const timeDiffInHours = (targetTime - now) / (1000 * 60 * 60);
+                const targetTime = new Date();
+                targetTime.setHours(hrs, Number(mins), 0, 0);
 
-            if (timeDiffInHours > 0 && timeDiffInHours < 4) {
-                return res.status(400).json({
-                    success: false,
-                    message: "Fulfillment lockout active: Changes to same-day delivery profiles are locked 4 hours prior to prep."
-                });
+                const now = new Date();
+                const timeDiffInHours = (targetTime - now) / (1000 * 60 * 60);
+
+                if (timeDiffInHours > 0 && timeDiffInHours < 4) {
+                    return res.status(400).json({
+                        success: false,
+                        message: "Fulfillment lockout active: Changes to same-day delivery profiles are locked 4 hours prior to prep."
+                    });
+                }
             }
         }
 
-        // Update Slot
-        const slotIndex = subscription.subscriptionDetails.slotsConfiguration.findIndex(
-            s => s.slotName.toLowerCase() === slotName.toLowerCase()
+        const newDish = await FoodService.findById(mealId);
+        if (!newDish) return res.status(404).json({ success: false, message: "New meal not found." });
+
+        const scheduleIndex = subscription.subscriptionDetails.dailyMealSchedule.findIndex(
+            s => s.weekNumber === Number(weekNumber) &&
+                 s.dayOfWeek.toLowerCase() === dayOfWeek.toLowerCase() &&
+                 s.slotName.toLowerCase() === slotName.toLowerCase()
         );
 
-        if (slotIndex !== -1) {
-            subscription.subscriptionDetails.slotsConfiguration[slotIndex].mealId = mealId;
-            if (preferredTime) {
-                subscription.subscriptionDetails.slotsConfiguration[slotIndex].preferredTime = preferredTime;
+        if (scheduleIndex !== -1) {
+            subscription.subscriptionDetails.dailyMealSchedule[scheduleIndex].mealId = newDish._id;
+            subscription.subscriptionDetails.dailyMealSchedule[scheduleIndex].mealName = newDish.name;
+            subscription.subscriptionDetails.dailyMealSchedule[scheduleIndex].mealImage = newDish.imageUrl;
+            subscription.subscriptionDetails.dailyMealSchedule[scheduleIndex].mealPrice = newDish.discountPrice > 0 ? newDish.discountPrice : newDish.price;
+            if (deliveryTime) {
+                subscription.subscriptionDetails.dailyMealSchedule[scheduleIndex].deliveryTime = deliveryTime;
             }
         } else {
-            subscription.subscriptionDetails.slotsConfiguration.push({
+            subscription.subscriptionDetails.dailyMealSchedule.push({
+                weekNumber: Number(weekNumber),
+                dayOfWeek: dayOfWeek.toLowerCase(),
                 slotName: slotName.toLowerCase(),
-                mealId,
-                preferredTime: preferredTime || '13:00'
+                mealId: newDish._id,
+                mealName: newDish.name,
+                mealImage: newDish.imageUrl,
+                mealPrice: newDish.discountPrice > 0 ? newDish.discountPrice : newDish.price,
+                calories: newDish.calories,
+                dietType: newDish.dietType,
+                deliveryTime: deliveryTime || "01:00 PM - 02:00 PM"
             });
         }
 
@@ -514,8 +606,8 @@ const modifyTiffinSlotSchedule = async (req, res) => {
 
         res.json({
             success: true,
-            message: `Delivery schedule for '${slotName}' updated successfully!`,
-            slotsConfiguration: subscription.subscriptionDetails.slotsConfiguration
+            message: `Meal for ${dayOfWeek} (${slotName}) updated successfully!`,
+            dailyMealSchedule: subscription.subscriptionDetails.dailyMealSchedule
         });
 
     } catch (error) {
@@ -524,7 +616,7 @@ const modifyTiffinSlotSchedule = async (req, res) => {
 };
 
 // ==========================================
-// 🔍 4. GET MY ACTIVE TIFFIN SUBSCRIPTION DETAILS
+// 🔍 4. GET ACTIVE TIFFIN SUBSCRIPTION FULL DETAILS
 // Full Path: GET /api/food/tiffin/my-subscription/:bookingId
 // ==========================================
 const getMyTiffinSubscriptionDetails = async (req, res) => {
@@ -537,7 +629,7 @@ const getMyTiffinSubscriptionDetails = async (req, res) => {
             userId
         })
         .populate('foodId', 'name profileImage address city phone')
-        .populate('subscriptionDetails.slotsConfiguration.mealId', 'name imageUrl price discountPrice calories dietType')
+        .populate('subscriptionDetails.dailyMealSchedule.mealId', 'name imageUrl price discountPrice calories dietType ingredients tags foodEffectCategory')
         .lean();
 
         if (!subscription) {
