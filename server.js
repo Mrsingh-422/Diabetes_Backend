@@ -287,10 +287,13 @@ app.use('/provider/coupons', require('./routes/provider/Common/CouponRoute')); /
 // app.use('/provider/availability', require('./routes/provider/Common/AvailabilityRoute')); // Availability Management Route (Doctors, Labs, Ambulances)
 app.use('/provider/driver', require('./routes/provider/Common/DriverRoute')); // Availability Management Route (Doctors, Labs, Ambulances)
 app.use('/provider/delivery-charges', require('./routes/provider/Common/DeliveryRoute')); // Delivery Charges Management Route
+
+
 // =================== Food Provider Routes =========================
 app.use('/provider/food/inventory', require('./routes/provider/Food/FoodInventoryRoute')); // Food Inventory Management
 app.use('/provider/food/orders', require('./routes/provider/Food/FoodOrderRoute')); 
 app.use('/provider/food/profile', require('./routes/provider/Food/ProfileRoute')); 
+app.use('/provider/food/tiffin', require('./routes/provider/Food/VendorTiffinOrderRoute')); 
 // =================== Food Provider Routes END=========================
 
 // --- Provider Lab Routes ---
