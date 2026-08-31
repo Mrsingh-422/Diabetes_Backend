@@ -254,6 +254,7 @@ app.use('/api/foodpage', require('./routes/user/Food/FoodPageRoute')); // Food P
 app.use('/api/food/checkout', require('./routes/user/Food/FoodCheckoutRoute')); 
 app.use('/admin/food/tiffin/plans', require('./routes/user/Food/FoodCheckoutRoute')); 
 app.use('/api/food/tiffin', require('./routes/user/Food/UserTiffinSubscriptionRoute')); 
+app.use('/api/food/custom-tiffin', require('./routes/user/Food/CustomTiffinRoute')); 
 
 
 //////////////// Doctor Routes ///////////////////////

@@ -615,8 +615,68 @@ const modifyTiffinSlotSchedule = async (req, res) => {
     }
 };
 
+// controllers/user/Food/UserTiffinSubscriptionController.js
+
 // ==========================================
-// 🔍 4. GET ACTIVE TIFFIN SUBSCRIPTION FULL DETAILS
+// 📋 4. GET ALL MY TIFFIN SUBSCRIPTIONS (Lightweight Card View)
+// Full Path: GET /api/food/tiffin/my-subscriptions
+// ==========================================
+const getAllMyTiffinSubscriptions = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const { status, bookingType } = req.query;
+
+        const query = {
+            userId,
+            bookingType: { $in: ['Subscription', 'Custom Plate'] }
+        };
+
+        if (status) query.status = status;
+        if (bookingType) query.bookingType = bookingType;
+
+        // 🚨 Sirf zaroori fields query honge (Fast & Lightweight)
+        const subscriptions = await FoodBooking.find(query)
+            .select('_id bookingId status bookingType subscriptionDetails customTiffinDetails billSummary.totalAmount createdAt')
+            .sort({ createdAt: -1 })
+            .lean();
+
+        // 🛡️ Format exact clean keys requested by you
+        const cleanList = subscriptions.map(sub => {
+            const isCustom = sub.bookingType === 'Custom Plate';
+            
+            const planName = sub.subscriptionDetails?.planName || 
+                             (isCustom ? `Custom ${sub.customTiffinDetails?.packageDays || 10}-Day Tiffin` : 'Tiffin Plan');
+            
+            const billingCycle = sub.subscriptionDetails?.billingCycle || (isCustom ? 'custom' : 'weekly');
+            
+            const start = sub.subscriptionDetails?.startDate || sub.customTiffinDetails?.startDate;
+            const end = sub.subscriptionDetails?.endDate || sub.customTiffinDetails?.endDate;
+
+            return {
+                _id: sub._id,
+                bookingId: sub.bookingId,
+                planName: planName,
+                billingCycle: billingCycle,
+                status: sub.status,                                                       // 👈 Important Key 1
+                totalAmount: sub.billSummary?.totalAmount || 0,                           // 👈 Important Key 2
+                startDate: start ? new Date(start).toISOString().split('T')[0] : null,
+                endDate: end ? new Date(end).toISOString().split('T')[0] : null
+            };
+        });
+
+        res.json({
+            success: true,
+            count: cleanList.length,
+            data: cleanList
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// ==========================================
+// 🔍 5. GET SINGLE TIFFIN SUBSCRIPTION DETAILS BY ID
 // Full Path: GET /api/food/tiffin/my-subscription/:bookingId
 // ==========================================
 const getMyTiffinSubscriptionDetails = async (req, res) => {
@@ -628,12 +688,32 @@ const getMyTiffinSubscriptionDetails = async (req, res) => {
             $or: [{ _id: bookingId }, { bookingId }],
             userId
         })
-        .populate('foodId', 'name profileImage address city phone')
-        .populate('subscriptionDetails.dailyMealSchedule.mealId', 'name imageUrl price discountPrice calories dietType ingredients tags foodEffectCategory')
+        .populate('foodId', 'name profileImage address city phone rating')
+        .populate({
+            path: 'subscriptionDetails.dailyMealSchedule.mealId',
+            select: 'name imageUrl price discountPrice calories dietType ingredients tags foodEffectCategory',
+            strictPopulate: false
+        })
+        .populate({
+            path: 'customTiffinDetails.selectedFoods.breakfast.mealId',
+            select: 'name imageUrl price calories dietType',
+            strictPopulate: false
+        })
+        .populate({
+            path: 'customTiffinDetails.selectedFoods.lunch.mealId',
+            select: 'name imageUrl price calories dietType',
+            strictPopulate: false
+        })
+        .populate({
+            path: 'customTiffinDetails.selectedFoods.dinner.mealId',
+            select: 'name imageUrl price calories dietType',
+            strictPopulate: false
+        })
+        .populate('billSummary.couponId', 'couponName discountPercentage maxDiscount')
         .lean();
 
         if (!subscription) {
-            return res.status(404).json({ success: false, message: "Subscription not found." });
+            return res.status(404).json({ success: false, message: "Subscription record not found." });
         }
 
         res.json({
@@ -645,10 +725,10 @@ const getMyTiffinSubscriptionDetails = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
-
 module.exports = {
     calculateTiffinSubscriptionBill,
     subscribeTiffinPlan,
     modifyTiffinSlotSchedule,
-    getMyTiffinSubscriptionDetails
+    getMyTiffinSubscriptionDetails,
+    getAllMyTiffinSubscriptions
 };

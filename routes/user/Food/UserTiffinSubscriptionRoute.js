@@ -8,7 +8,8 @@ const {
     calculateTiffinSubscriptionBill,
     subscribeTiffinPlan,
     modifyTiffinSlotSchedule,
-    getMyTiffinSubscriptionDetails
+    getMyTiffinSubscriptionDetails,
+    getAllMyTiffinSubscriptions
 } = require('../../../controllers/user/Food/UserTiffinSubscription');
 
 // Base URL: /api/food/tiffin
@@ -21,6 +22,9 @@ router.post('/subscribe', protect('user'), subscribeTiffinPlan);
 
 // 3. Modify Schedule with 4-Hour Lockout (PUT)
 router.put('/schedule/:bookingId', protect('user'), modifyTiffinSlotSchedule);
+
+// 4. 🌟 Get All My Subscriptions List (GET) - Placed above dynamic ID
+router.get('/my-subscriptions', protect('user'), getAllMyTiffinSubscriptions);
 
 // 4. Get Subscription Details (GET)
 router.get('/my-subscription/:bookingId', protect('user'), getMyTiffinSubscriptionDetails);
