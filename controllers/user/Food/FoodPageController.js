@@ -1092,6 +1092,191 @@ const getFoodCoupons = async (req, res) => {
     }
 };
 
+// ==========================================
+//  GET ALL NEAREST FOOD ITEMS (Optimized & Lightweight)
+// Full Path: POST /api/foodpage/all-foods
+// ==========================================
+const getAllNearestFoodItems = async (req, res) => {
+    try {
+        const { lat, lng } = req.body;
+        const { 
+            search, 
+            dietType, 
+            categoryId, 
+            page = 1, 
+            limit = 20 
+        } = req.query;
+
+        const pageNum = parseInt(page, 10) || 1;
+        const limitNum = parseInt(limit, 10) || 20;
+
+        if (!lat || !lng) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "User latitude (lat) and longitude (lng) are required." 
+            });
+        }
+
+        // 1. Get platform KM limit (e.g. 10 km)
+        const limitConfig = await VendorKMLimit.findOne({ vendorType: 'Food', isActive: true });
+        const maxDistanceLimit = limitConfig ? limitConfig.kmLimit : 10;
+
+        // 2. Fetch approved, active, and online kitchen vendors
+        const vendors = await Food.find({ profileStatus: 'Approved', isActive: true, isOnline: true })
+            .select('name location rating address profileImage')
+            .lean();
+
+        const nearestVendorsMap = new Map();
+        const nearestVendors = [];
+
+        for (let vendor of vendors) {
+            if (!vendor.location?.lat || !vendor.location?.lng) continue;
+
+            const distance = calculateHaversineDistance(
+                Number(lat),
+                Number(lng),
+                Number(vendor.location.lat),
+                Number(vendor.location.lng)
+            );
+
+            if (distance <= maxDistanceLimit) {
+                const vendorData = {
+                    ...vendor,
+                    distance: Number(distance.toFixed(2)),
+                    distanceText: `${distance.toFixed(1)} km`
+                };
+                nearestVendorsMap.set(vendor._id.toString(), vendorData);
+                nearestVendors.push(vendorData);
+            }
+        }
+
+        nearestVendors.sort((a, b) => a.distance - b.distance);
+        const serviceableVendorIds = Array.from(nearestVendorsMap.keys());
+
+        if (nearestVendors.length === 0) {
+            return res.json({ 
+                success: true, 
+                message: `No active cloud kitchens found within ${maxDistanceLimit} km radius.`,
+                totalDocs: 0,
+                totalPages: 0,
+                currentPage: pageNum,
+                limit: limitNum,
+                data: [] 
+            });
+        }
+
+        // 3. Search & Filter Query
+        const foodQuery = { isActive: true };
+
+        if (search && search.trim() !== '') {
+            const searchRegex = new RegExp(search.trim(), 'i');
+            foodQuery.$or = [
+                { name: searchRegex },
+                { description: searchRegex },
+                { ingredients: searchRegex },
+                { tags: searchRegex }
+            ];
+        }
+
+        if (dietType && ['Veg', 'Egg', 'Non Veg'].includes(dietType)) {
+            foodQuery.dietType = dietType;
+        }
+
+        if (categoryId) {
+            foodQuery.categoryId = categoryId;
+        }
+
+        // 4. Fetch only required fields from FoodService
+        const masterMeals = await FoodService.find(foodQuery)
+            .select('name imageUrl price discountPrice servingSize dietType prepTime calories spicyLevel ingredients categoryId')
+            .populate('categoryId', 'foodCategory foodEffectCategory')
+            .lean();
+
+        // 5. Fetch Vendor inventory mappings
+        const vendorMappings = await VendorFoodItem.find({
+            vendorId: { $in: serviceableVendorIds }
+        }).lean();
+
+        const allFoodsList = [];
+
+        // 6. Map only the exact requested keys
+        for (let meal of masterMeals) {
+            const mealMappings = vendorMappings.filter(
+                m => m.foodServiceId.toString() === meal._id.toString()
+            );
+
+            const activeMapping = mealMappings.find(m => m.isAvailable === true);
+
+            let isAvailable = false;
+            let finalPrice = meal.price;
+            let finalDiscountPrice = meal.discountPrice;
+            let targetVendor = nearestVendors[0];
+
+            if (activeMapping) {
+                isAvailable = true;
+                targetVendor = nearestVendorsMap.get(activeMapping.vendorId.toString()) || nearestVendors[0];
+                if (activeMapping.price !== null) finalPrice = activeMapping.price;
+                if (activeMapping.discountPrice !== null) finalDiscountPrice = activeMapping.discountPrice;
+            } else {
+                const anyMapping = mealMappings[0];
+                if (anyMapping) {
+                    targetVendor = nearestVendorsMap.get(anyMapping.vendorId.toString()) || nearestVendors[0];
+                }
+            }
+
+            // 🎯 Clean & Exact Payload Structure
+            allFoodsList.push({
+                _id: meal._id,
+                name: meal.name,
+                imageUrl: meal.imageUrl,
+                price: finalPrice,
+                discountPrice: finalDiscountPrice,
+                servingSize: meal.servingSize,
+                dietType: meal.dietType,
+                prepTime: meal.prepTime,
+                calories: meal.calories,
+                spicyLevel: meal.spicyLevel,
+                ingredients: meal.ingredients || [],
+                categoryId: meal.categoryId,
+                isAvailable,
+                UnavailableFoodItem: !isAvailable,
+                vendorId: {
+                    _id: targetVendor._id,
+                    name: targetVendor.name,
+                    profileImage: targetVendor.profileImage
+                },
+                distance: targetVendor.distance,
+                distanceText: targetVendor.distanceText
+            });
+        }
+
+        // 7. Sort: isAvailable: true first -> Nearest Distance
+        allFoodsList.sort((a, b) => {
+            if (a.isAvailable !== b.isAvailable) return a.isAvailable ? -1 : 1;
+            return a.distance - b.distance;
+        });
+
+        // 8. In-Memory Pagination
+        const totalDocs = allFoodsList.length;
+        const skip = (pageNum - 1) * limitNum;
+        const paginatedFoods = allFoodsList.slice(skip, skip + limitNum);
+
+        res.json({
+            success: true,
+            maxDistanceLimitApplied: `${maxDistanceLimit} km`,
+            totalDocs,
+            totalPages: Math.ceil(totalDocs / limitNum),
+            currentPage: pageNum,
+            limit: limitNum,
+            count: paginatedFoods.length,
+            data: paginatedFoods
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 module.exports = {
     getNearestVendorMeals,
     getMealDetailsById,
@@ -1106,5 +1291,6 @@ module.exports = {
     getWeeklySpecialById,
     getUserFoodCategories,
     getUserFoodEffectCategories,
-    getFoodCoupons
+    getFoodCoupons,
+    getAllNearestFoodItems
 };

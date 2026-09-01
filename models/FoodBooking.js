@@ -124,7 +124,9 @@ const foodBookingSchema = new mongoose.Schema({
         fastDeliveryCharge: { type: Number, default: 0 },
         taxAmount: { type: Number, default: 0 },
         taxPercentage: { type: Number, default: 5 },
-        
+        peakOrderCharge: { type: Number, default: 0 },
+
+    
         fixedPrice: { type: Number, default: 40 },
         fixedDistance: { type: Number, default: 5 },
         pricePerKM: { type: Number, default: 10 },

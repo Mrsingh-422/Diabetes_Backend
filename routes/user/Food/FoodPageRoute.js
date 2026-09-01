@@ -17,7 +17,8 @@ const {
     getFoodCoupons,
     getNearestPlans,             // Geolocated nearest plans
     getPlanDetailsById,          // Single plan full details
-    getVendorPlansForUser
+    getVendorPlansForUser,
+    getAllNearestFoodItems
 } = require('../../../controllers/user/Food/FoodPageController');
 
 // Base URL : /api/foodpage
@@ -48,5 +49,7 @@ router.get('/weekly/:id', getWeeklySpecialById);
 router.get('/categories', getUserFoodCategories);
 router.get('/effects', getUserFoodEffectCategories);
 router.get('/coupons', getFoodCoupons);
+// 🍲 1. ALL NEAREST FOOD ITEMS (With Search & Pagination)
+router.post('/all-foods', getAllNearestFoodItems);
 
 module.exports = router;

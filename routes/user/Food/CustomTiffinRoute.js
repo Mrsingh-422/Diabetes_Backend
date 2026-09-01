@@ -8,7 +8,8 @@ const {
     getCustomTiffinMenuConfig,
     calculateCustomTiffinBill,
     createCustomTiffinOrder,
-    getMyCustomTiffinDetails
+    getMyCustomTiffinDetails,
+    getAllMyCustomTiffinPlans
 } = require('../../../controllers/user/Food/CustomTiffinController');
 
 // Base URL: /api/food/custom-tiffin
@@ -21,6 +22,8 @@ router.post('/calculate', protect('user'), calculateCustomTiffinBill);
 
 // 3. Direct Create & Buy Custom Tiffin Package (POST)
 router.post('/create', protect('user'), createCustomTiffinOrder);
+
+router.get('/my-custom-plans', protect('user'), getAllMyCustomTiffinPlans);
 
 // 4. Get Single Custom Plan Full Details by ID (GET)
 router.get('/my-custom-plan/:bookingId', protect('user'), getMyCustomTiffinDetails);
