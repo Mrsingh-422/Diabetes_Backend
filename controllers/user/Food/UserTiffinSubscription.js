@@ -615,50 +615,45 @@ const modifyTiffinSlotSchedule = async (req, res) => {
     }
 };
 
-// controllers/user/Food/UserTiffinSubscriptionController.js
+
 
 // ==========================================
-// 📋 4. GET ALL MY TIFFIN SUBSCRIPTIONS (Lightweight Card View)
+// 📋 4. GET ALL MY TIFFIN SUBSCRIPTIONS (Only Subscription - Lightweight View)
 // Full Path: GET /api/food/tiffin/my-subscriptions
 // ==========================================
 const getAllMyTiffinSubscriptions = async (req, res) => {
     try {
         const userId = req.user.id;
-        const { status, bookingType } = req.query;
+        const { status } = req.query;
 
+        
         const query = {
             userId,
-            bookingType: { $in: ['Subscription', 'Custom Plate'] }
+            bookingType: 'Subscription'
         };
 
         if (status) query.status = status;
-        if (bookingType) query.bookingType = bookingType;
 
-        // 🚨 Sirf zaroori fields query honge (Fast & Lightweight)
+        // 🚨 Sirf subscription se related zaroori fields query honge (Fast & Lightweight)
         const subscriptions = await FoodBooking.find(query)
-            .select('_id bookingId status bookingType subscriptionDetails customTiffinDetails billSummary.totalAmount createdAt')
+            .select('_id bookingId status bookingType subscriptionDetails billSummary.totalAmount createdAt')
             .sort({ createdAt: -1 })
             .lean();
 
-        // 🛡️ Format exact clean keys requested by you
+        // 🛡️ Format exact clean response
         const cleanList = subscriptions.map(sub => {
-            const isCustom = sub.bookingType === 'Custom Plate';
-            
-            const planName = sub.subscriptionDetails?.planName || 
-                             (isCustom ? `Custom ${sub.customTiffinDetails?.packageDays || 10}-Day Tiffin` : 'Tiffin Plan');
-            
-            const billingCycle = sub.subscriptionDetails?.billingCycle || (isCustom ? 'custom' : 'weekly');
-            
-            const start = sub.subscriptionDetails?.startDate || sub.customTiffinDetails?.startDate;
-            const end = sub.subscriptionDetails?.endDate || sub.customTiffinDetails?.endDate;
+            const subDetails = sub.subscriptionDetails || {};
+
+            const start = subDetails.startDate;
+            const end = subDetails.endDate;
 
             return {
                 _id: sub._id,
                 bookingId: sub.bookingId,
-                planName: planName,
-                billingCycle: billingCycle,
-                status: sub.status,                                                       // 👈 Important Key 1
-                totalAmount: sub.billSummary?.totalAmount || 0,                           // 👈 Important Key 2
+                planName: subDetails.planName || 'Tiffin Plan',
+                billingCycle: subDetails.billingCycle || 'weekly',
+                status: sub.status,
+                totalAmount: sub.billSummary?.totalAmount || 0,
                 startDate: start ? new Date(start).toISOString().split('T')[0] : null,
                 endDate: end ? new Date(end).toISOString().split('T')[0] : null
             };
@@ -674,7 +669,6 @@ const getAllMyTiffinSubscriptions = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
-
 // ==========================================
 // 🔍 5. GET SINGLE TIFFIN SUBSCRIPTION DETAILS BY ID
 // Full Path: GET /api/food/tiffin/my-subscription/:bookingId

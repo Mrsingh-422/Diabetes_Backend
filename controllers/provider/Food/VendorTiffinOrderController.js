@@ -3,7 +3,7 @@
 const FoodBooking = require('../../../models/FoodBooking');
 
 // ==========================================
-// 🍱 1. GET ALL VENDOR STANDARD SUBSCRIPTIONS (List View)
+// 🍱 1. GET ALL VENDOR STANDARD SUBSCRIPTIONS (Lightweight Card List)
 // Full Path: GET /provider/food/tiffin/subscriptions
 // ==========================================
 const getVendorTiffinSubscriptions = async (req, res) => {
@@ -29,26 +29,48 @@ const getVendorTiffinSubscriptions = async (req, res) => {
             ];
         }
 
-        const skip = (parseInt(page) - 1) * parseInt(limit);
+        const skip = (parseInt(page, 10) - 1) * parseInt(limit, 10);
         const totalDocs = await FoodBooking.countDocuments(query);
 
+        // Essential fields for clean lightweight card rendering
         const subscriptions = await FoodBooking.find(query)
-            .populate('userId', 'name phone email profilePic')
-            .populate('driverId', 'name phone vehicleType vehicleNumber')
-            .populate('billSummary.couponId', 'couponName discountPercentage')
+            .select('_id bookingId status bookingType subscriptionDetails.planName subscriptionDetails.billingCycle subscriptionDetails.startDate subscriptionDetails.endDate billSummary.totalAmount address.name address.phone createdAt')
+            .populate('userId', 'name phone')
             .sort({ createdAt: -1 })
             .skip(skip)
-            .limit(parseInt(limit))
+            .limit(parseInt(limit, 10))
             .lean();
+
+        // 🛡️ Format clean card payload with explicit discriminator keys
+        const cleanList = subscriptions.map(sub => {
+            const start = sub.subscriptionDetails?.startDate;
+            const end = sub.subscriptionDetails?.endDate;
+
+            return {
+                _id: sub._id,
+                bookingId: sub.bookingId,
+                bookingType: "Subscription",                                              // 👈 🌟 Discriminator Key
+                planType: "Subscription",                                                 // 👈 🌟 Helper Key
+                customerName: sub.userId?.name || sub.address?.name || "Customer",
+                customerPhone: sub.userId?.phone || sub.address?.phone || "",
+                planName: sub.subscriptionDetails?.planName || "Tiffin Subscription Plan",
+                billingCycle: sub.subscriptionDetails?.billingCycle || "weekly",
+                status: sub.status,
+                totalAmount: sub.billSummary?.totalAmount || 0,
+                startDate: start ? new Date(start).toISOString().split('T')[0] : null,
+                endDate: end ? new Date(end).toISOString().split('T')[0] : null,
+                createdAt: sub.createdAt
+            };
+        });
 
         res.json({
             success: true,
             totalDocs,
-            totalPages: Math.ceil(totalDocs / parseInt(limit)),
-            currentPage: parseInt(page),
-            limit: parseInt(limit),
-            count: subscriptions.length,
-            data: subscriptions
+            totalPages: Math.ceil(totalDocs / parseInt(limit, 10)),
+            currentPage: parseInt(page, 10),
+            limit: parseInt(limit, 10),
+            count: cleanList.length,
+            data: cleanList
         });
 
     } catch (error) {
@@ -72,7 +94,11 @@ const getVendorTiffinSubscriptionById = async (req, res) => {
         })
         .populate('userId', 'name phone email gender dob profilePic')
         .populate('driverId', 'name phone vehicleType vehicleNumber profilePic status location')
-        .populate('subscriptionDetails.dailyMealSchedule.mealId', 'name imageUrl price discountPrice calories dietType ingredients tags foodEffectCategory')
+        .populate({
+            path: 'subscriptionDetails.dailyMealSchedule.mealId',
+            select: 'name imageUrl price discountPrice calories dietType ingredients tags foodEffectCategory',
+            strictPopulate: false
+        })
         .populate('billSummary.couponId', 'couponName discountPercentage maxDiscount')
         .lean();
 
@@ -85,7 +111,11 @@ const getVendorTiffinSubscriptionById = async (req, res) => {
 
         res.json({
             success: true,
-            data: subscription
+            data: {
+                ...subscription,
+                bookingType: "Subscription", // 👈 🌟 Explicit Key in Detail View
+                planType: "Subscription"     // 👈 🌟 Explicit Key in Detail View
+            }
         });
 
     } catch (error) {
@@ -94,7 +124,7 @@ const getVendorTiffinSubscriptionById = async (req, res) => {
 };
 
 // ==========================================
-// 🎨 3. GET ALL CUSTOM TIFFIN REQUESTS (Incoming Custom Packages)
+// 🎨 3. GET ALL CUSTOM TIFFIN REQUESTS (Lightweight Card List)
 // Full Path: GET /provider/food/tiffin/custom-requests
 // ==========================================
 const getVendorCustomTiffinRequests = async (req, res) => {
@@ -118,27 +148,48 @@ const getVendorCustomTiffinRequests = async (req, res) => {
             ];
         }
 
-        const skip = (parseInt(page) - 1) * parseInt(limit);
+        const skip = (parseInt(page, 10) - 1) * parseInt(limit, 10);
         const totalDocs = await FoodBooking.countDocuments(query);
 
+        // Essential fields for clean lightweight card rendering
         const customRequests = await FoodBooking.find(query)
-            .populate('userId', 'name phone email profilePic')
-            .populate('customTiffinDetails.selectedFoods.breakfast.mealId', 'name imageUrl price calories dietType')
-            .populate('customTiffinDetails.selectedFoods.lunch.mealId', 'name imageUrl price calories dietType')
-            .populate('customTiffinDetails.selectedFoods.dinner.mealId', 'name imageUrl price calories dietType')
+            .select('_id bookingId status bookingType customTiffinDetails.packageDays customTiffinDetails.startDate customTiffinDetails.endDate customTiffinDetails.dietaryType billSummary.totalAmount address.name address.phone createdAt')
+            .populate('userId', 'name phone')
             .sort({ createdAt: -1 })
             .skip(skip)
-            .limit(parseInt(limit))
+            .limit(parseInt(limit, 10))
             .lean();
+
+        // 🛡️ Format clean card payload with explicit discriminator keys
+        const cleanList = customRequests.map(plan => {
+            const start = plan.customTiffinDetails?.startDate;
+            const end = plan.customTiffinDetails?.endDate;
+
+            return {
+                _id: plan._id,
+                bookingId: plan.bookingId,
+                bookingType: "Custom Plate",                                            // 👈 🌟 Discriminator Key
+                planType: "Custom Plate",                                               // 👈 🌟 Helper Key
+                customerName: plan.userId?.name || plan.address?.name || "Customer",
+                customerPhone: plan.userId?.phone || plan.address?.phone || "",
+                packageDays: plan.customTiffinDetails?.packageDays || 10,
+                dietaryType: plan.customTiffinDetails?.dietaryType || 'veg',
+                status: plan.status,
+                totalAmount: plan.billSummary?.totalAmount || 0,
+                startDate: start ? new Date(start).toISOString().split('T')[0] : null,
+                endDate: end ? new Date(end).toISOString().split('T')[0] : null,
+                createdAt: plan.createdAt
+            };
+        });
 
         res.json({
             success: true,
             totalDocs,
-            totalPages: Math.ceil(totalDocs / parseInt(limit)),
-            currentPage: parseInt(page),
-            limit: parseInt(limit),
-            count: customRequests.length,
-            data: customRequests
+            totalPages: Math.ceil(totalDocs / parseInt(limit, 10)),
+            currentPage: parseInt(page, 10),
+            limit: parseInt(limit, 10),
+            count: cleanList.length,
+            data: cleanList
         });
 
     } catch (error) {
@@ -162,9 +213,21 @@ const getVendorCustomTiffinRequestById = async (req, res) => {
         })
         .populate('userId', 'name phone email gender dob profilePic')
         .populate('driverId', 'name phone vehicleType vehicleNumber status')
-        .populate('customTiffinDetails.selectedFoods.breakfast.mealId', 'name imageUrl price discountPrice calories dietType ingredients tags foodEffectCategory')
-        .populate('customTiffinDetails.selectedFoods.lunch.mealId', 'name imageUrl price discountPrice calories dietType ingredients tags foodEffectCategory')
-        .populate('customTiffinDetails.selectedFoods.dinner.mealId', 'name imageUrl price discountPrice calories dietType ingredients tags foodEffectCategory')
+        .populate({
+            path: 'customTiffinDetails.weeklyCustomSchedule.breakfast.mealId',
+            select: 'name imageUrl price discountPrice calories dietType ingredients tags foodEffectCategory',
+            strictPopulate: false
+        })
+        .populate({
+            path: 'customTiffinDetails.weeklyCustomSchedule.lunch.mealId',
+            select: 'name imageUrl price discountPrice calories dietType ingredients tags foodEffectCategory',
+            strictPopulate: false
+        })
+        .populate({
+            path: 'customTiffinDetails.weeklyCustomSchedule.dinner.mealId',
+            select: 'name imageUrl price discountPrice calories dietType ingredients tags foodEffectCategory',
+            strictPopulate: false
+        })
         .populate('billSummary.couponId', 'couponName discountPercentage maxDiscount')
         .lean();
 
@@ -177,7 +240,11 @@ const getVendorCustomTiffinRequestById = async (req, res) => {
 
         res.json({
             success: true,
-            data: customOrder
+            data: {
+                ...customOrder,
+                bookingType: "Custom Plate", // 👈 🌟 Explicit Key in Detail View
+                planType: "Custom Plate"     // 👈 🌟 Explicit Key in Detail View
+            }
         });
 
     } catch (error) {
@@ -224,7 +291,7 @@ const handleCustomTiffinRequestAction = async (req, res) => {
 
         // --- ACTION 1: ACCEPT CUSTOM REQUEST ---
         if (action === 'Accept') {
-            customOrder.status = 'Active'; // Kitchen accepts & activates meal preparation cycle
+            customOrder.status = 'Active';
             await customOrder.save();
 
             return res.json({
@@ -232,6 +299,8 @@ const handleCustomTiffinRequestAction = async (req, res) => {
                 message: `Custom Tiffin package (${customOrder.bookingId}) accepted successfully!`,
                 data: {
                     bookingId: customOrder.bookingId,
+                    bookingType: "Custom Plate",
+                    planType: "Custom Plate",
                     status: customOrder.status,
                     updatedAt: customOrder.updatedAt
                 }
@@ -256,6 +325,8 @@ const handleCustomTiffinRequestAction = async (req, res) => {
                 message: `Custom Tiffin package (${customOrder.bookingId}) rejected. Reason logged.`,
                 data: {
                     bookingId: customOrder.bookingId,
+                    bookingType: "Custom Plate",
+                    planType: "Custom Plate",
                     status: customOrder.status,
                     cancelReason: customOrder.cancelReason,
                     updatedAt: customOrder.updatedAt

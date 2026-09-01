@@ -4,7 +4,7 @@ const mongoose = require('mongoose');
 const foodBookingSchema = new mongoose.Schema({
     bookingId: { type: String, unique: true, required: true }, 
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-    foodId: { type: mongoose.Schema.Types.ObjectId, ref: 'Food', required: true }, // Assigned Kitchen Vendor ID
+    foodId: { type: mongoose.Schema.Types.ObjectId, ref: 'Food', required: true }, // Kitchen ID
 
     bookingType: { 
         type: String, 
@@ -51,7 +51,7 @@ const foodBookingSchema = new mongoose.Schema({
         }]
     },
 
-    // 🎨 C. DEDICATED CUSTOM TIFFIN BUILDER (From CustomTiffinPage Frontend)
+    // 🎨 C. 7-DAY CYCLICAL CUSTOM TIFFIN BUILDER (Monday to Sunday Custom Rotation)
     customTiffinDetails: {
         packageDays: { type: Number, default: 10 },
         startDate: { type: Date },
@@ -66,7 +66,19 @@ const foodBookingSchema = new mongoose.Schema({
             dinner: { type: Boolean, default: false }
         },
         
-        selectedFoods: {
+        universalDeliveryTimes: {
+            breakfastTime: { type: String, default: "08:00 AM - 09:00 AM" },
+            lunchTime: { type: String, default: "01:00 PM - 02:00 PM" },
+            dinnerTime: { type: String, default: "08:00 PM - 09:00 PM" }
+        },
+
+        // 🌟 7-Day Day-Wise Custom Selection (Monday to Sunday)
+        weeklyCustomSchedule: [{
+            dayOfWeek: { 
+                type: String, 
+                enum: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'], 
+                required: true 
+            },
             breakfast: {
                 mealId: { type: mongoose.Schema.Types.ObjectId, ref: 'FoodService', default: null },
                 mealName: { type: String, default: null },
@@ -88,7 +100,7 @@ const foodBookingSchema = new mongoose.Schema({
                 calories: { type: Number, default: 0 },
                 deliverySlot: { type: String, default: "07:00 PM - 08:00 PM" }
             }
-        }
+        }]
     },
 
     // LOGISTICS & ROUTING
@@ -122,11 +134,10 @@ const foodBookingSchema = new mongoose.Schema({
         packagingCharge: { type: Number, default: 15 },
         rapidCharge: { type: Number, default: 0 },
         fastDeliveryCharge: { type: Number, default: 0 },
+        peakOrderCharge: { type: Number, default: 0 },
         taxAmount: { type: Number, default: 0 },
         taxPercentage: { type: Number, default: 5 },
-        peakOrderCharge: { type: Number, default: 0 },
-
-    
+        
         fixedPrice: { type: Number, default: 40 },
         fixedDistance: { type: Number, default: 5 },
         pricePerKM: { type: Number, default: 10 },
