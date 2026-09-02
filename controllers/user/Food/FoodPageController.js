@@ -173,6 +173,132 @@ const getNearestVendorMeals = async (req, res) => {
 };
 
 // ==========================================
+// 🌟 CORE LANDING PAGE API (POST /daywise - With Search, Pagination & Lat/Lng)
+// ==========================================
+const getFoodPageLayout = async (req, res) => {
+    try {
+        const { lat, lng, search: bodySearch, page: bodyPage, limit: bodyLimit } = req.body || {};
+        const { 
+            search: querySearch, 
+            dietType, 
+            page = bodyPage || 1, 
+            limit = bodyLimit || 20 
+        } = req.query;
+
+        const searchTerm = (querySearch || bodySearch || '').trim();
+        const pageNum = parseInt(page, 10) || 1;
+        const limitNum = parseInt(limit, 10) || 20;
+        const skip = (pageNum - 1) * limitNum;
+
+        // 1. Fetch Categories for Horizontal Slider
+        const categories = await FoodCategory.find().sort({ createdAt: -1 });
+
+        // 2. Resolve Nearest Vendor if lat & lng are passed (10km Radius)
+        let nearestVendor = null;
+        let maxDistanceLimit = 10;
+
+        if (lat && lng) {
+            const limitConfig = await VendorKMLimit.findOne({ vendorType: 'Food', isActive: true });
+            maxDistanceLimit = limitConfig ? limitConfig.kmLimit : 10;
+
+            const vendors = await Food.find({ profileStatus: 'Approved', isActive: true, isOnline: true })
+                .select('name location rating address profileImage')
+                .lean();
+
+            for (let vendor of vendors) {
+                if (!vendor.location?.lat || !vendor.location?.lng) continue;
+                const dist = calculateHaversineDistance(Number(lat), Number(lng), Number(vendor.location.lat), Number(vendor.location.lng));
+                if (dist <= maxDistanceLimit) {
+                    if (!nearestVendor || dist < nearestVendor.distance) {
+                        nearestVendor = {
+                            _id: vendor._id,
+                            name: vendor.name,
+                            address: vendor.address,
+                            rating: vendor.rating,
+                            profileImage: vendor.profileImage,
+                            distance: Number(dist.toFixed(2)),
+                            distanceText: `${dist.toFixed(1)} km`
+                        };
+                    }
+                }
+            }
+        }
+
+        // 3. Build Search & Filter Criteria for Food Items
+        const foodSearchQuery = { isActive: true };
+
+        if (searchTerm !== '') {
+            const searchRegex = new RegExp(searchTerm, 'i');
+            foodSearchQuery.$or = [
+                { name: searchRegex },
+                { description: searchRegex },
+                { ingredients: searchRegex },
+                { tags: searchRegex },
+                { foodEffectCategory: searchRegex }
+            ];
+        }
+
+        if (dietType && ['Veg', 'Egg', 'Non Veg'].includes(dietType)) {
+            foodSearchQuery.dietType = dietType;
+        }
+
+        // 4. Fetch Paginated Today's Specials with Search Filter
+        const matchingFoodIds = await FoodService.find(foodSearchQuery).distinct('_id');
+        const specialFilter = { foodItemId: { $in: matchingFoodIds } };
+
+        const totalDocs = await TodaySpecial.countDocuments(specialFilter);
+        const rawSpecials = await TodaySpecial.find(specialFilter)
+            .populate({
+                path: 'foodItemId',
+                select: 'name description imageUrl price discountPrice calories dietType foodEffectCategory ingredients tags',
+                populate: { path: 'categoryId', select: 'foodCategory foodEffectCategory' }
+            })
+            .skip(skip)
+            .limit(limitNum)
+            .sort({ createdAt: -1 })
+            .lean();
+
+        const todaySpecials = rawSpecials
+            .filter(s => s.foodItemId !== null)
+            .map(s => s.foodItemId); 
+
+        // 5. Fetch Popular Meals with Search Filter (Top 6)
+        const popularMeals = await FoodService.find({ ...foodSearchQuery, isPopular: true })
+            .limit(6)
+            .select('name description imageUrl price discountPrice calories dietType foodEffectCategory')
+            .sort({ createdAt: -1 })
+            .lean();
+
+        // 6. Fetch Recommended Meals with Search Filter (Top 6)
+        const recommendedMeals = await FoodService.find({ ...foodSearchQuery, isRecommended: true })
+            .limit(6)
+            .select('name description imageUrl price discountPrice calories dietType foodEffectCategory')
+            .sort({ createdAt: -1 })
+            .lean();
+
+        // 7. Structured Response
+        res.json({
+            success: true,
+            data: {
+                categories,
+                todaySpecials, 
+                popularMeals,
+                recommendedMeals,
+                nearestVendor: nearestVendor || undefined,
+                pagination: { 
+                    totalDocs,
+                    totalPages: Math.ceil(totalDocs / limitNum),
+                    currentPage: pageNum,
+                    limit: limitNum
+                }
+            }
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+// ==========================================
 // 🍔 2. GET SINGLE MEAL DETAILS BY ID
 // ==========================================
 const getMealDetailsById = async (req, res) => {
@@ -903,60 +1029,7 @@ const getVendorPlansForUser = async (req, res) => {
     }
 };
 
-// ==========================================
-// 🔴 8. CORE LANDING PAGE APIS (Layout, Specials, Categories, Coupons)
-// ==========================================
-const getFoodPageLayout = async (req, res) => {
-    try {
-        const { page = 1, limit = 20 } = req.query;
-        const skip = (parseInt(page) - 1) * parseInt(limit);
 
-        const categories = await FoodCategory.find().sort({ createdAt: -1 });
-
-        const totalDocs = await TodaySpecial.countDocuments();
-        const rawSpecials = await TodaySpecial.find()
-            .populate({
-                path: 'foodItemId',
-                populate: { path: 'categoryId', select: 'foodCategory' }
-            })
-            .skip(skip)
-            .limit(parseInt(limit))
-            .sort({ createdAt: -1 });
-
-        const todaySpecials = rawSpecials
-            .filter(s => s.foodItemId !== null)
-            .map(s => s.foodItemId); 
-
-        const popularMeals = await FoodService.find({ isPopular: true, isActive: true })
-            .limit(6)
-            .select('name description imageUrl price discountPrice calories dietType foodEffectCategory')
-            .sort({ createdAt: -1 });
-
-        const recommendedMeals = await FoodService.find({ isRecommended: true, isActive: true })
-            .limit(6)
-            .select('name description imageUrl price discountPrice calories dietType foodEffectCategory')
-            .sort({ createdAt: -1 });
-
-        res.json({
-            success: true,
-            data: {
-                categories,
-                todaySpecials, 
-                popularMeals,
-                recommendedMeals,
-                pagination: { 
-                    totalDocs,
-                    totalPages: Math.ceil(totalDocs / parseInt(limit)),
-                    currentPage: parseInt(page),
-                    limit: parseInt(limit)
-                }
-            }
-        });
-
-    } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
-    }
-};
 
 const getTodaySpecialById = async (req, res) => {
     try {
@@ -974,32 +1047,125 @@ const getTodaySpecialById = async (req, res) => {
     }
 };
 
+// ==========================================
+// 📅 GET USER WEEKLY ROTATING MENU (With Lat/Lng, Search & Pagination)
+// Full Path: POST /api/foodpage/weekly
+// ==========================================
 const getUserWeeklyMenu = async (req, res) => {
     try {
-        const weeklyMenu = await WeeklySpecial.find()
-            .populate('meals', 'name price calories imageUrl dietType');
+        const { lat, lng, search: bodySearch } = req.body || {};
+        const { 
+            search: querySearch, 
+            dietType, 
+            day,
+            page = 1, 
+            limit = 7 
+        } = req.query;
 
-        const weekdays = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
-        
-        const calendarPlan = weekdays.map(day => {
-            const foundDay = weeklyMenu.find(m => m.dayOfWeek === day);
+        const searchTerm = (querySearch || bodySearch || '').trim();
+        const pageNum = parseInt(page, 10) || 1;
+        const limitNum = parseInt(limit, 10) || 7;
+
+        // 1. 🌟 Fetch Categories for Horizontal Slider (Same as /daywise)
+        const categories = await FoodCategory.find().sort({ createdAt: -1 });
+
+        // 2. Resolve Nearest Vendor if coordinates passed (10km Radius)
+        let nearestVendor = null;
+        let maxDistanceLimit = 10;
+
+        if (lat && lng) {
+            const limitConfig = await VendorKMLimit.findOne({ vendorType: 'Food', isActive: true });
+            maxDistanceLimit = limitConfig ? limitConfig.kmLimit : 10;
+
+            const vendors = await Food.find({ profileStatus: 'Approved', isActive: true, isOnline: true })
+                .select('name location rating address profileImage')
+                .lean();
+
+            for (let vendor of vendors) {
+                if (!vendor.location?.lat || !vendor.location?.lng) continue;
+                const dist = calculateHaversineDistance(Number(lat), Number(lng), Number(vendor.location.lat), Number(vendor.location.lng));
+                if (dist <= maxDistanceLimit) {
+                    if (!nearestVendor || dist < nearestVendor.distance) {
+                        nearestVendor = {
+                            _id: vendor._id,
+                            name: vendor.name,
+                            address: vendor.address,
+                            rating: vendor.rating,
+                            profileImage: vendor.profileImage,
+                            distance: Number(dist.toFixed(2)),
+                            distanceText: `${dist.toFixed(1)} km`
+                        };
+                    }
+                }
+            }
+        }
+
+        // 3. Build Search Filter for Meals
+        let mealMatchQuery = { isActive: true };
+
+        if (searchTerm !== '') {
+            const searchRegex = new RegExp(searchTerm, 'i');
+            mealMatchQuery.$or = [
+                { name: searchRegex },
+                { description: searchRegex },
+                { ingredients: searchRegex },
+                { tags: searchRegex }
+            ];
+        }
+
+        if (dietType && ['Veg', 'Egg', 'Non Veg'].includes(dietType)) {
+            mealMatchQuery.dietType = dietType;
+        }
+
+        // 4. Fetch 7-Day Weekly Menu with description & discountPrice
+        const weeklyMenu = await WeeklySpecial.find()
+            .populate({
+                path: 'meals',
+                match: mealMatchQuery,
+                select: 'name description price discountPrice calories imageUrl dietType foodEffectCategory'
+            })
+            .lean();
+
+        let weekdays = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+
+        // Optional single day filter (?day=monday)
+        if (day && weekdays.includes(day.toLowerCase())) {
+            weekdays = [day.toLowerCase()];
+        }
+
+        // 5. Construct Day-Wise Schedule
+        const calendarPlan = weekdays.map(weekday => {
+            const foundDay = weeklyMenu.find(m => m.dayOfWeek?.toLowerCase() === weekday);
+            const activeMeals = foundDay ? (foundDay.meals || []).filter(Boolean) : [];
+
             return {
-                dayOfWeek: day,
-                mealsCount: foundDay ? foundDay.meals.length : 0,
-                meals: foundDay ? foundDay.meals : []
+                dayOfWeek: weekday,
+                mealsCount: activeMeals.length,
+                meals: activeMeals
             };
         });
 
+        // 6. Pagination over Calendar Days
+        const totalDocs = calendarPlan.length;
+        const skip = (pageNum - 1) * limitNum;
+        const paginatedCalendar = calendarPlan.slice(skip, skip + limitNum);
+
         res.json({
             success: true,
-            data: calendarPlan
+            maxDistanceLimitApplied: `${maxDistanceLimit} km`,
+            nearestVendor: nearestVendor || undefined,
+            categories, // 👈 🌟 Categories array added here
+            totalDays: totalDocs,
+            totalPages: Math.ceil(totalDocs / limitNum),
+            currentPage: pageNum,
+            limit: limitNum,
+            data: paginatedCalendar
         });
 
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
 };
-
 const getWeeklySpecialById = async (req, res) => {
     try {
         const { id } = req.params;
@@ -1277,6 +1443,133 @@ const getAllNearestFoodItems = async (req, res) => {
     }
 };
 
+// ==========================================
+// 🔍 SINGLE LIVE FOOD SEARCH SUGGESTIONS (POST ONLY)
+// Full Path: POST /api/foodpage/search-suggestions
+// ==========================================
+const getFoodSearchSuggestions = async (req, res) => {
+    try {
+        const { query, q, search, limit = 10 } = req.body || {};
+        const queryTerm = (query || q || search || '').trim();
+
+        // 🛡️ Agar input khali ya 2 characters se kam hai toh empty list return karein
+        if (!queryTerm || queryTerm.length < 2) {
+            return res.json({
+                success: true,
+                query: queryTerm,
+                count: 0,
+                data: []
+            });
+        }
+
+        const searchRegex = new RegExp(queryTerm, 'i');
+        const limitNum = parseInt(limit, 10) || 10;
+
+        // 1. Search in Master Food Items (FoodService)
+        const dishes = await FoodService.find({
+            isActive: true,
+            $or: [
+                { name: searchRegex },
+                { description: searchRegex },
+                { ingredients: searchRegex },
+                { tags: searchRegex },
+                { foodEffectCategory: searchRegex }
+            ]
+        })
+        .select('name description price discountPrice calories dietType imageUrl categoryId foodEffectCategory')
+        .populate('categoryId', 'foodCategory foodEffectCategory')
+        .limit(limitNum)
+        .lean();
+
+        const formattedDishes = dishes.map(dish => ({
+            id: dish._id,
+            _id: dish._id,
+            name: dish.name,
+            price: dish.price,
+            discountPrice: dish.discountPrice > 0 ? dish.discountPrice : dish.price,
+            description: dish.description,
+            dietType: dish.dietType,
+            category: dish.categoryId?.foodCategory || dish.foodEffectCategory || "General",
+            categoryId: dish.categoryId?._id || null,
+            imageUrl: dish.imageUrl,
+            calories: dish.calories,
+            itemType: "MealItem",                           // 👈 Frontend navigation discriminator
+            redirectPath: `/food/dish/${dish._id}`          // 👈 Frontend click URL
+        }));
+
+        // 2. Search in Food Categories (FoodCategory)
+        const categories = await FoodCategory.find({
+            $or: [
+                { foodCategory: searchRegex },
+                { foodEffectCategory: searchRegex }
+            ]
+        })
+        .limit(5)
+        .lean();
+
+        const formattedCategories = categories.map(cat => ({
+            id: cat._id,
+            _id: cat._id,
+            name: cat.foodCategory || cat.foodEffectCategory,
+            price: null,
+            discountPrice: null,
+            description: cat.foodEffectCategory ? `Clinical Focus: ${cat.foodEffectCategory}` : "Food Category",
+            dietType: null,
+            category: cat.foodCategory || "Category",
+            categoryId: cat._id,
+            imageUrl: null,
+            calories: null,
+            itemType: "Category",
+            redirectPath: `/food/category/${cat._id}`
+        }));
+
+        // 3. Search in Combo Offers (FoodComboOffer)
+        const combos = await FoodComboOffer.find({
+            isActive: true,
+            $or: [
+                { name: searchRegex },
+                { description: searchRegex }
+            ]
+        })
+        .select('comboId name description basePrice comboPrice')
+        .limit(5)
+        .lean();
+
+        const formattedCombos = combos.map(combo => ({
+            id: combo._id,
+            _id: combo._id,
+            name: combo.name,
+            price: combo.basePrice,
+            discountPrice: combo.comboPrice,
+            description: combo.description,
+            dietType: "Combo Pack",
+            category: "Combo Offer",
+            categoryId: null,
+            imageUrl: null,
+            calories: null,
+            itemType: "Combo",
+            redirectPath: `/food/combo/${combo._id}`
+        }));
+
+        // 4. Combine All Search Results
+        const allResults = [
+            ...formattedDishes,
+            ...formattedCombos,
+            ...formattedCategories
+        ];
+
+        res.json({
+            success: true,
+            query: queryTerm,
+            count: allResults.length,
+            data: allResults.slice(0, 15) // Top 15 matching suggestions
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 module.exports = {
     getNearestVendorMeals,
     getMealDetailsById,
@@ -1292,5 +1585,6 @@ module.exports = {
     getUserFoodCategories,
     getUserFoodEffectCategories,
     getFoodCoupons,
-    getAllNearestFoodItems
+    getAllNearestFoodItems,
+    getFoodSearchSuggestions
 };

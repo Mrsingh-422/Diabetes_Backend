@@ -18,16 +18,21 @@ const {
     getNearestPlans,             // Geolocated nearest plans
     getPlanDetailsById,          // Single plan full details
     getVendorPlansForUser,
-    getAllNearestFoodItems
+    getAllNearestFoodItems,
+    getFoodSearchSuggestions
+
 } = require('../../../controllers/user/Food/FoodPageController');
 
 // Base URL : /api/foodpage
 
-// 🍔 Meals Endpoints
+// 🔍 1. LIVE SEARCH SUGGESTIONS & AUTOCOMPLETE (SEPARATE ENDPOINTS)
+router.post('/search-suggestions', getFoodSearchSuggestions);
+
+//  Meals Endpoints
 router.post('/nearest-meals', getNearestVendorMeals);
 router.get('/meals/:id', getMealDetailsById);
 
-// 🍱 Combo Bundles Endpoints
+//  Combo Bundles Endpoints
 router.post('/nearest-combos', getNearestCombos);
 router.get('/combos/:id', getComboDetailsById);
 
@@ -40,9 +45,10 @@ router.get('/plans/:id', getPlanDetailsById);
 router.get('/vendor-plans/:vendorId', getVendorPlansForUser);
 
 // 📅 Specials & Calendar Endpoints
-router.get('/daywise', getFoodPageLayout);
+router.post('/daywise', getFoodPageLayout);
 router.get('/daywise/:id', getTodaySpecialById);
-router.get('/weekly', getUserWeeklyMenu);
+
+router.post('/weekly', getUserWeeklyMenu);
 router.get('/weekly/:id', getWeeklySpecialById);
 
 // 🏷️ Categories & Coupons
