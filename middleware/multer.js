@@ -20,8 +20,9 @@ const docFileFilter = (req, file, cb) => {
 };
 
 // ==========================================
-// 2. CLINIC CONFIGURATION (Replaced hospitalUploads)
+// 2. CLINIC CONFIGURATION (Replaced ClinicUploads)
 // ==========================================
+
 const clinicDir = 'public/uploads/clinics';
 ensureDir(clinicDir);
 
@@ -31,19 +32,37 @@ const clinicUploads = multer({
         filename: (req, file, cb) => cb(null, `clinic-${Date.now()}${path.extname(file.originalname)}`)
     }),
     fileFilter: docFileFilter,
-    limits: { fileSize: 5 * 1024 * 1024 } // 5MB limit per file
+    limits: { fileSize: 5 * 1024 * 1024 } // 5MB limit
 }).fields([
-    // Humne saare possible clinic files fields ko define kar diya hai taaki unexpected field error kabhi na aaye:
-    { name: 'image', maxCount: 1 },                 // Profile Image
-    { name: 'posterimage', maxCount: 1 },           // Poster Image
-    { name: 'certificateImage', maxCount: 1 },      // Certificate Image (Figma: Registration Certificate)
-    { name: 'licenceCertificate', maxCount: 1 },    // Licence Certificate (Figma: Licence Certificate)
-    { name: 'clinicImages', maxCount: 10 },         // Figma: Clinic Photos (Max 10)
-    { name: 'achievementImages', maxCount: 10 },    // Figma: Achievement Images (Max 10)
-    
-    // Safety ke liye niche ke fields bhi rehne diye hain agar kabhi use ho skein:
-    { name: 'licenseDocument', maxCount: 5 },  
-    { name: 'otherDocuments', maxCount: 10 }   
+    { name: 'image', maxCount: 1 },
+    { name: 'posterimage', maxCount: 1 },
+    { name: 'certificateImage', maxCount: 1 },
+    { name: 'licenceCertificate', maxCount: 1 },
+    { name: 'clinicImages', maxCount: 10 },
+    { name: 'achievementImages', maxCount: 10 },
+    { name: 'licenseDocument', maxCount: 5 },
+    { name: 'otherDocuments', maxCount: 10 }
+]);
+
+// ==========================================
+// CLINIC DOCTOR CONFIGURATION 
+// ==========================================
+const clinicDoctorDir = 'public/uploads/doctors';
+ensureDir(clinicDoctorDir);
+
+const clinicDoctorUploads = multer({ 
+    storage: multer.diskStorage({
+        destination: (req, file, cb) => cb(null, clinicDoctorDir),
+        filename: (req, file, cb) => cb(null, `clinic-doc-${Date.now()}${path.extname(file.originalname)}`)
+    }),
+    fileFilter: docFileFilter,
+    limits: { fileSize: 5 * 1024 * 1024 }
+}).fields([
+    { name: 'profileImage', maxCount: 1 },       // Section 5: Doctor Profile Photo
+    { name: 'licenseCert', maxCount: 1 },        // Section 5: Medical License
+    { name: 'idProof', maxCount: 1 },            // Section 5: Aadhar / Govt ID
+    { name: 'signature', maxCount: 1 },          // Section 5: Digital Signature
+    { name: 'degreeCertificates', maxCount: 10 } // Section 3: Degree Certificates
 ]);
 // ==========================================
 // 3. DOCTOR CONFIGURATION
@@ -1192,6 +1211,6 @@ module.exports = {
     labReportUpload,
     docPrescriptionUpload,hospitalPrescriptionUploads,hospitalDischargeFieldsUpload,blogUploads,
     videoUploads,videoUpdateUploads ,footerUploads,aboutUsUploads,
-    foodDocUploads,foodServiceImageUpload,bannerUploadParser,foodAddonImageUpload
+    foodDocUploads,foodServiceImageUpload,bannerUploadParser,foodAddonImageUpload,clinicDoctorUploads
 
 };  

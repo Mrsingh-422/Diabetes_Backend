@@ -9,10 +9,12 @@ const doctorSchema = new mongoose.Schema({
     password: { type: String, required: true, select: false },
     role: { type: String, enum: ['doctor', 'clinic-doctor'], default: 'doctor' },
 
-    // Location
+    // Location & Personal Details
+    gender: { type: String, enum: ['Male', 'Female', 'Other'], default: 'Male' }, //  UI Form Sync
     country: { type: String, default: null },
     state: { type: String, default: null },
     city: { type: String, default: null },
+    pincode: { type: String, default: null }, //  UI Form Sync
     address: { type: String, default: null },
 
     dutyStatus: { type: String, enum: ['On Duty', 'Off Duty', 'On Leave', 'Busy'], default: 'Off Duty' },
@@ -25,7 +27,16 @@ const doctorSchema = new mongoose.Schema({
     alternatePhone: { type: String, default: null },
 
     // Professional Info
-    qualification: { type: String, default: null },
+    qualification: { type: String, default: null }, // Primary degree summary string (e.g., "MBBS, MD")
+    
+    //  UI Form Dynamic Multiple Degrees Array Sync
+    qualifications: [{
+        degree: { type: String },
+        college: { type: String },
+        year: { type: String },
+        certFile: { type: String, default: null }
+    }],
+
     speciality: { type: String, default: null },
     licenseNumber: { type: String, default: null },
     councilNumber: { type: String, default: null },
@@ -59,7 +70,7 @@ const doctorSchema = new mongoose.Schema({
     treatedConditions: [{ type: String }],
     competencies: [{ type: String }],
 
-    // Stats
+    // Stats & Media
     averageRating: { type: Number, default: 0 },
     totalReviews: { type: Number, default: 0 },
     profileImage: { type: String, default: null },
