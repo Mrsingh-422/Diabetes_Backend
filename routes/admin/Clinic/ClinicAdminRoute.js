@@ -5,21 +5,23 @@ const {
     getClinics,
     approveClinicStatus,
     toggleClinicActiveStatus,
-    adminGetApprovedClinics
+    adminGetApprovedClinics,
+    getClinicDoctorsAdmin,
+    getClinicDoctorDetailsAdmin,
+    approveClinicDoctorStatus
 } = require('../../../controllers/clinic/ClinicAdmin.js'); 
 
 // Base route : /api/admin/clinic
 
-// --- 1. Get Clinics with Search, Filter & Pagination ---
+// --- CLINIC VERIFICATION & LIST ---
 router.get('/list', protect('admin'), getClinics);
-
-// --- 2. Approve or Reject Clinic ---
 router.patch('/approve/:id', protect('admin'), approveClinicStatus);
-
-// --- 3. Active / Inactive Toggle ---
 router.patch('/toggle-active/:id', protect('admin'), toggleClinicActiveStatus);
-
-// --- 4. Approved List (Limit 25) ---
 router.get('/approved-list', protect('admin'), adminGetApprovedClinics);
+
+// --- 🚀 CLINIC DOCTOR MODERATION ---
+router.get('/doctors/list', protect('admin'), getClinicDoctorsAdmin);
+router.get('/doctors/details/:id', protect('admin'), getClinicDoctorDetailsAdmin);
+router.patch('/doctors/approve/:id', protect('admin'), approveClinicDoctorStatus);
 
 module.exports = router;

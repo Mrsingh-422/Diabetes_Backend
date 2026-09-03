@@ -30,11 +30,15 @@ const doctorSchema = new mongoose.Schema({
     qualification: { type: String, default: null }, // Primary degree summary string (e.g., "MBBS, MD")
     
     //  UI Form Dynamic Multiple Degrees Array Sync
+    // Educational Qualifications with Council Details
     qualifications: [{
         degree: { type: String },
         college: { type: String },
         year: { type: String },
-        certFile: { type: String, default: null }
+        certFile: { type: String, default: null },
+        councilName: { type: String, default: "" },    // 👈 Medical Council Name
+        registrationNo: { type: String, default: "" }, // 👈 Registration No
+        stateName: { type: String, default: "" }       // 👈 State Name
     }],
 
     speciality: { type: String, default: null },

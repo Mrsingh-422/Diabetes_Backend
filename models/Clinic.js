@@ -139,6 +139,40 @@ const clinicSchema = new Schema(
       type: Boolean,
       default: true
     },
+    // --- Operational Facilities & 24/7 Config ---
+    is24x7: {
+      type: Boolean,
+      default: false
+    },
+    isOPD: {
+      type: Boolean,
+      default: true
+    },
+    isIPD: {
+      type: Boolean,
+      default: false
+    },
+    isEmergency: {
+      type: Boolean,
+      default: false
+    },
+
+    // Custom Timings for Emergency, IPD & OPD (Agar 24x7 na ho)
+    emergencyTimings: {
+      is24x7: { type: Boolean, default: false },
+      startTime: { type: String, default: "" }, // e.g. "08:00 PM"
+      endTime: { type: String, default: "" }   // e.g. "08:00 AM"
+    },
+    ipdTimings: {
+      is24x7: { type: Boolean, default: false },
+      startTime: { type: String, default: "" }, // e.g. "10:00 AM"
+      endTime: { type: String, default: "" }   // e.g. "07:00 PM"
+    },
+    opdTimings: {
+      is24x7: { type: Boolean, default: false },
+      startTime: { type: String, default: "" },
+      endTime: { type: String, default: "" }
+    },
     location: {
       type: {
         type: String,

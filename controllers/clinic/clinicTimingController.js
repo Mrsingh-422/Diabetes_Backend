@@ -3,12 +3,22 @@ const Clinic = require('../../models/Clinic');
 const Availability = require('../../models/Availability');
 const moment = require('moment');
 
-// --- HELPER: Shift Duration & Metrics Calculator ---
-const calculateMetrics = (startDay, endDay, morningStart, morningEnd, eveningStart, eveningEnd, holiday) => {
+// Helper: Calculate Metrics (Considers 24x7 & Shifts)
+const calculateMetrics = (startDay, endDay, morningStart, morningEnd, eveningStart, eveningEnd, holiday, is24x7) => {
     const daysOrder = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
     
-    // 1. Calculate Working Days Count
-    let workingDaysCount = 6; // Default
+    // If 24/7, all 7 days with 24 hours
+    if (is24x7) {
+        return {
+            workingDaysCount: 7,
+            dailyHours: '24.0h',
+            weeklyHours: '168.0h',
+            morningDurationHours: 12,
+            eveningDurationHours: 12
+        };
+    }
+
+    let workingDaysCount = 6;
     if (startDay && endDay) {
         const startIndex = daysOrder.indexOf(startDay);
         const endIndex = daysOrder.indexOf(endDay);
@@ -21,12 +31,10 @@ const calculateMetrics = (startDay, endDay, morningStart, morningEnd, eveningSta
         }
     }
 
-    // Adjust if holiday falls in the working range
     if (holiday && holiday !== 'None') {
         workingDaysCount = Math.max(1, workingDaysCount);
     }
 
-    // 2. Parse Shift Timings (supports "09:00 AM" or "09:00")
     const parseTime = (tStr) => {
         if (!tStr) return null;
         return moment(tStr, ['hh:mm A', 'HH:mm', 'h:mm A']);
@@ -59,7 +67,7 @@ const calculateMetrics = (startDay, endDay, morningStart, morningEnd, eveningSta
     };
 };
 
-// --- HELPER: Generate Discrete OPD Booking Slots ---
+// Helper: Generate Discrete OPD Booking Slots
 const generateShiftSlots = (startTimeStr, endTimeStr, slotDuration = 30) => {
     if (!startTimeStr || !endTimeStr) return [];
     const slots = [];
@@ -80,21 +88,19 @@ const generateShiftSlots = (startTimeStr, endTimeStr, slotDuration = 30) => {
 };
 
 // ==========================================
-// 1. GET CLINIC TIMINGS & SUMMARY METRICS
+// 1. GET CLINIC TIMINGS & FACILITIES CONFIG
 // Endpoint: GET /api/clinic/timings
 // ==========================================
 const getClinicTimings = async (req, res) => {
     try {
         const clinicId = req.user.id;
-        const clinic = await Clinic.findById(clinicId).select(
-            'startDay endDay MorningStartTime MorningEndTime eveningStartTime eveningEndTime holiday clinicName'
-        );
+        const clinic = await Clinic.findById(clinicId);
 
         if (!clinic) {
             return res.status(404).json({ success: false, message: "Clinic profile not found." });
         }
 
-        // Default fallbacks matching UI screenshot
+        const is24x7 = Boolean(clinic.is24x7);
         const startDay = clinic.startDay || 'Monday';
         const endDay = clinic.endDay || 'Saturday';
         const morningStart = clinic.MorningStartTime || '09:00 AM';
@@ -104,12 +110,38 @@ const getClinicTimings = async (req, res) => {
         const holiday = clinic.holiday || 'Sunday';
 
         const metrics = calculateMetrics(
-            startDay, endDay, morningStart, morningEnd, eveningStart, eveningEnd, holiday
+            startDay, endDay, morningStart, morningEnd, eveningStart, eveningEnd, holiday, is24x7
         );
 
         res.json({
             success: true,
             data: {
+                // Facilities Switches
+                facilities: {
+                    is24x7: is24x7,
+                    isOPD: clinic.isOPD !== undefined ? clinic.isOPD : true,
+                    isIPD: clinic.isIPD || false,
+                    isEmergency: clinic.isEmergency || false
+                },
+                // Service-Specific Custom Timings
+                serviceTimings: {
+                    emergency: clinic.emergencyTimings || {
+                        is24x7: is24x7,
+                        startTime: is24x7 ? "12:00 AM" : "08:00 PM",
+                        endTime: is24x7 ? "11:59 PM" : "08:00 AM"
+                    },
+                    ipd: clinic.ipdTimings || {
+                        is24x7: is24x7,
+                        startTime: "09:00 AM",
+                        endTime: "08:00 PM"
+                    },
+                    opd: clinic.opdTimings || {
+                        is24x7: is24x7,
+                        startTime: morningStart,
+                        endTime: eveningEnd
+                    }
+                },
+                // General Shifts
                 workingDaysRange: {
                     startDay,
                     endDay
@@ -117,19 +149,19 @@ const getClinicTimings = async (req, res) => {
                 morningShift: {
                     shiftStartTime: morningStart,
                     shiftEndTime: morningEnd,
-                    displayTime: `${morningStart} - ${morningEnd}`
+                    displayTime: is24x7 ? "24 Hours Active" : `${morningStart} - ${morningEnd}`
                 },
                 eveningShift: {
                     shiftStartTime: eveningStart,
                     shiftEndTime: eveningEnd,
-                    displayTime: `${eveningStart} - ${eveningEnd}`
+                    displayTime: is24x7 ? "24 Hours Active" : `${eveningStart} - ${eveningEnd}`
                 },
-                weeklyHoliday: holiday,
+                weeklyHoliday: is24x7 ? "Open All Days" : holiday,
                 summary: {
-                    workingDays: `${startDay} - ${endDay}`,
-                    weeklyHoliday: holiday,
-                    morningShiftFormatted: `${moment(morningStart, ['hh:mm A', 'HH:mm']).format('HH:mm')} - ${moment(morningEnd, ['hh:mm A', 'HH:mm']).format('HH:mm')}`,
-                    eveningShiftFormatted: `${moment(eveningStart, ['hh:mm A', 'HH:mm']).format('HH:mm')} - ${moment(eveningEnd, ['hh:mm A', 'HH:mm']).format('HH:mm')}`
+                    workingDays: is24x7 ? "Open 7 Days (24x7)" : `${startDay} - ${endDay}`,
+                    weeklyHoliday: is24x7 ? "No Holiday" : holiday,
+                    morningShiftFormatted: is24x7 ? "00:00 - 23:59" : `${moment(morningStart, ['hh:mm A', 'HH:mm']).format('HH:mm')} - ${moment(morningEnd, ['hh:mm A', 'HH:mm']).format('HH:mm')}`,
+                    eveningShiftFormatted: is24x7 ? "00:00 - 23:59" : `${moment(eveningStart, ['hh:mm A', 'HH:mm']).format('HH:mm')} - ${moment(eveningEnd, ['hh:mm A', 'HH:mm']).format('HH:mm')}`
                 },
                 bandwidthMetrics: {
                     days: metrics.workingDaysCount,
@@ -145,13 +177,25 @@ const getClinicTimings = async (req, res) => {
 };
 
 // ==========================================
-// 2. SAVE & UPDATE CLINIC TIMINGS
-// Endpoint: POST /api/clinic/timings OR PUT /api/clinic/timings
+// 2. SAVE & UPDATE CLINIC TIMINGS & FACILITIES
+// Endpoint: POST /api/clinic/timings/create OR PUT /api/clinic/timings/update
 // ==========================================
 const updateClinicTimings = async (req, res) => {
     try {
         const clinicId = req.user.id;
         const {
+            // Facilities Toggles
+            is24x7 = false,
+            isOPD = true,
+            isIPD = false,
+            isEmergency = false,
+
+            // Specific Service Timing Objects
+            emergencyTimings,
+            ipdTimings,
+            opdTimings,
+
+            // Standard Shift Timings
             startDay,
             endDay,
             morningStartTime,
@@ -162,37 +206,61 @@ const updateClinicTimings = async (req, res) => {
             slotDuration = 30
         } = req.body;
 
-        // 1. Update Clinic Model directly
+        const is24x7Bool = Boolean(is24x7);
+
+        // Prepare update object
+        const updatePayload = {
+            is24x7: is24x7Bool,
+            isOPD: Boolean(isOPD),
+            isIPD: Boolean(isIPD),
+            isEmergency: Boolean(isEmergency),
+
+            startDay: startDay || 'Monday',
+            endDay: endDay || 'Saturday',
+            holiday: is24x7Bool ? 'None' : (holiday || 'Sunday'),
+
+            MorningStartTime: is24x7Bool ? '12:00 AM' : (morningStartTime || '09:00 AM'),
+            MorningEndTime: is24x7Bool ? '12:00 PM' : (morningEndTime || '01:00 PM'),
+            eveningStartTime: is24x7Bool ? '12:00 PM' : (eveningStartTime || '02:00 PM'),
+            eveningEndTime: is24x7Bool ? '11:59 PM' : (eveningEndTime || '06:00 PM'),
+
+            emergencyTimings: {
+                is24x7: is24x7Bool || Boolean(emergencyTimings?.is24x7),
+                startTime: is24x7Bool ? "12:00 AM" : (emergencyTimings?.startTime || "08:00 PM"),
+                endTime: is24x7Bool ? "11:59 PM" : (emergencyTimings?.endTime || "08:00 AM")
+            },
+            ipdTimings: {
+                is24x7: is24x7Bool || Boolean(ipdTimings?.is24x7),
+                startTime: is24x7Bool ? "12:00 AM" : (ipdTimings?.startTime || "09:00 AM"),
+                endTime: is24x7Bool ? "11:59 PM" : (ipdTimings?.endTime || "08:00 PM")
+            },
+            opdTimings: {
+                is24x7: is24x7Bool || Boolean(opdTimings?.is24x7),
+                startTime: is24x7Bool ? "12:00 AM" : (opdTimings?.startTime || morningStartTime || "09:00 AM"),
+                endTime: is24x7Bool ? "11:59 PM" : (opdTimings?.endTime || eveningEndTime || "06:00 PM")
+            }
+        };
+
         const updatedClinic = await Clinic.findByIdAndUpdate(
             clinicId,
-            {
-                $set: {
-                    startDay: startDay || 'Monday',
-                    endDay: endDay || 'Saturday',
-                    MorningStartTime: morningStartTime || '09:00 AM',
-                    MorningEndTime: morningEndTime || '01:00 PM',
-                    eveningStartTime: eveningStartTime || '02:00 PM',
-                    eveningEndTime: eveningEndTime || '06:00 PM',
-                    holiday: holiday || 'Sunday'
-                }
-            },
+            { $set: updatePayload },
             { new: true }
         );
 
-        // 2. Sync / Upsert Availability Model for Slot Engine
+        // Sync to Availability engine
         await Availability.findOneAndUpdate(
             { vendorId: clinicId, vendorType: 'Clinic' },
             {
                 $set: {
                     vendorId: clinicId,
                     vendorType: 'Clinic',
-                    morningSlots: !!morningStartTime && !!morningEndTime,
+                    morningSlots: true,
                     afternoonSlots: true,
-                    eveningSlots: !!eveningStartTime && !!eveningEndTime,
-                    startTime: moment(morningStartTime || '09:00 AM', ['hh:mm A', 'HH:mm']).format('HH:mm'),
-                    endTime: moment(eveningEndTime || '06:00 PM', ['hh:mm A', 'HH:mm']).format('HH:mm'),
+                    eveningSlots: true,
+                    startTime: is24x7Bool ? "00:00" : moment(updatePayload.MorningStartTime, ['hh:mm A', 'HH:mm']).format('HH:mm'),
+                    endTime: is24x7Bool ? "23:59" : moment(updatePayload.eveningEndTime, ['hh:mm A', 'HH:mm']).format('HH:mm'),
                     slotDuration: Number(slotDuration),
-                    offDays: holiday ? [holiday] : ['Sunday']
+                    offDays: is24x7Bool ? [] : [updatePayload.holiday]
                 }
             },
             { upsert: true, new: true }
@@ -205,13 +273,25 @@ const updateClinicTimings = async (req, res) => {
             updatedClinic.MorningEndTime,
             updatedClinic.eveningStartTime,
             updatedClinic.eveningEndTime,
-            updatedClinic.holiday
+            updatedClinic.holiday,
+            updatedClinic.is24x7
         );
 
         res.json({
             success: true,
-            message: "Clinic timings & shift schedule updated successfully.",
+            message: "Clinic facilities, 24x7 mode & shift timings updated successfully.",
             data: {
+                facilities: {
+                    is24x7: updatedClinic.is24x7,
+                    isOPD: updatedClinic.isOPD,
+                    isIPD: updatedClinic.isIPD,
+                    isEmergency: updatedClinic.isEmergency
+                },
+                serviceTimings: {
+                    emergency: updatedClinic.emergencyTimings,
+                    ipd: updatedClinic.ipdTimings,
+                    opd: updatedClinic.opdTimings
+                },
                 workingDaysRange: {
                     startDay: updatedClinic.startDay,
                     endDay: updatedClinic.endDay
@@ -225,12 +305,6 @@ const updateClinicTimings = async (req, res) => {
                     shiftEndTime: updatedClinic.eveningEndTime
                 },
                 weeklyHoliday: updatedClinic.holiday,
-                summary: {
-                    workingDays: `${updatedClinic.startDay} - ${updatedClinic.endDay}`,
-                    weeklyHoliday: updatedClinic.holiday,
-                    morningShiftFormatted: `${moment(updatedClinic.MorningStartTime, ['hh:mm A', 'HH:mm']).format('HH:mm')} - ${moment(updatedClinic.MorningEndTime, ['hh:mm A', 'HH:mm']).format('HH:mm')}`,
-                    eveningShiftFormatted: `${moment(updatedClinic.eveningStartTime, ['hh:mm A', 'HH:mm']).format('HH:mm')} - ${moment(updatedClinic.eveningEndTime, ['hh:mm A', 'HH:mm']).format('HH:mm')}`
-                },
                 bandwidthMetrics: {
                     days: metrics.workingDaysCount,
                     daily: metrics.dailyHours,
@@ -245,34 +319,40 @@ const updateClinicTimings = async (req, res) => {
 };
 
 // ==========================================
-// 3. RESET / DELETE TIMINGS (Back to Default 9 to 6)
-// Endpoint: DELETE /api/clinic/timings
+// 3. RESET / DELETE TIMINGS
+// Endpoint: DELETE /api/clinic/timings/delete
 // ==========================================
 const resetClinicTimings = async (req, res) => {
     try {
         const clinicId = req.user.id;
 
-        const updatedClinic = await Clinic.findByIdAndUpdate(
+        await Clinic.findByIdAndUpdate(
             clinicId,
             {
                 $set: {
+                    is24x7: false,
+                    isOPD: true,
+                    isIPD: false,
+                    isEmergency: false,
                     startDay: 'Monday',
                     endDay: 'Saturday',
                     MorningStartTime: '09:00 AM',
                     MorningEndTime: '01:00 PM',
                     eveningStartTime: '02:00 PM',
                     eveningEndTime: '06:00 PM',
-                    holiday: 'Sunday'
+                    holiday: 'Sunday',
+                    emergencyTimings: { is24x7: false, startTime: "", endTime: "" },
+                    ipdTimings: { is24x7: false, startTime: "", endTime: "" },
+                    opdTimings: { is24x7: false, startTime: "", endTime: "" }
                 }
-            },
-            { new: true }
+            }
         );
 
         await Availability.findOneAndDelete({ vendorId: clinicId, vendorType: 'Clinic' });
 
         res.json({
             success: true,
-            message: "Clinic timings reset to default working schedule (Mon-Sat, 9AM-6PM, Sun Off)."
+            message: "Clinic timings and facility schedules reset to default."
         });
 
     } catch (error) {
@@ -281,7 +361,7 @@ const resetClinicTimings = async (req, res) => {
 };
 
 // ==========================================
-// 4. GET GENERATED TIME SLOTS FOR PATIENT OPD BOOKING
+// 4. GET BOOKING TIME SLOTS (Handles 24x7 vs Holiday vs Shifts)
 // Endpoint: GET /api/clinic/timings/slots?date=YYYY-MM-DD
 // ==========================================
 const getAvailableBookingSlots = async (req, res) => {
@@ -295,10 +375,10 @@ const getAvailableBookingSlots = async (req, res) => {
         }
 
         const targetDate = date ? moment(date) : moment();
-        const dayName = targetDate.format('dddd'); // e.g. "Sunday"
+        const dayName = targetDate.format('dddd');
 
-        // Check if target date is clinic's weekly holiday
-        if (clinic.holiday && clinic.holiday.toLowerCase() === dayName.toLowerCase()) {
+        // If not 24/7, check holiday
+        if (!clinic.is24x7 && clinic.holiday && clinic.holiday.toLowerCase() === dayName.toLowerCase()) {
             return res.json({
                 success: true,
                 isClosed: true,
@@ -308,21 +388,28 @@ const getAvailableBookingSlots = async (req, res) => {
             });
         }
 
+        // 24/7 Full Day Generation vs Shift Generation
         const morningSlots = generateShiftSlots(
-            clinic.MorningStartTime || '09:00 AM',
-            clinic.MorningEndTime || '01:00 PM',
+            clinic.is24x7 ? '00:00' : (clinic.MorningStartTime || '09:00 AM'),
+            clinic.is24x7 ? '12:00' : (clinic.MorningEndTime || '01:00 PM'),
             Number(slotDuration)
         );
 
         const eveningSlots = generateShiftSlots(
-            clinic.eveningStartTime || '02:00 PM',
-            clinic.eveningEndTime || '06:00 PM',
+            clinic.is24x7 ? '12:00' : (clinic.eveningStartTime || '02:00 PM'),
+            clinic.is24x7 ? '23:59' : (clinic.eveningEndTime || '06:00 PM'),
             Number(slotDuration)
         );
 
         res.json({
             success: true,
             isClosed: false,
+            is24x7: Boolean(clinic.is24x7),
+            facilities: {
+                isOPD: clinic.isOPD,
+                isIPD: clinic.isIPD,
+                isEmergency: clinic.isEmergency
+            },
             date: targetDate.format('YYYY-MM-DD'),
             day: dayName,
             totalSlotsCount: morningSlots.length + eveningSlots.length,
