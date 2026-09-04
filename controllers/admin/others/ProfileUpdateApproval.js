@@ -1,6 +1,6 @@
 // controllers/admin/others/ProfileUpdateApproval.js
 const ProfileUpdateRequest = require('../../../models/ProfileUpdateRequest');
-const { deleteFile } = require('../../../utils/fileHandler'); // Path relative to file location
+const { deleteFile } = require('../../../utils/fileHandler');
 
 // Models mapping for dynamic resolution
 const Doctor = require('../../../models/Doctor');
@@ -8,6 +8,8 @@ const Food = require('../../../models/Food');
 const Pharmacy = require('../../../models/Pharmacy');
 const Lab = require('../../../models/Lab');
 const Driver = require('../../../models/Driver');
+const Clinic = require('../../../models/Clinic');       //  Added Clinic
+const Ambulance = require('../../../models/Ambulance'); //  Added Ambulance
 
 const modelMap = {
     'Doctor': Doctor,
@@ -15,6 +17,8 @@ const modelMap = {
     'Lab': Lab,
     'Food': Food, 
     'Driver': Driver,
+    'Clinic': Clinic,       //  Mapped Clinic
+    'Ambulance': Ambulance  //  Mapped Ambulance
 };
 
 // 1. GET: List Profile Update Requests (With Pagination & Filters)
@@ -41,6 +45,7 @@ const getProfileUpdateRequests = async (req, res) => {
             total,
             currentPage: parseInt(page),
             totalPages: Math.ceil(total / parseInt(limit)),
+            count: requests.length,
             data: requests
         });
     } catch (error) {
@@ -61,7 +66,7 @@ const getProfileUpdateRequestDetails = async (req, res) => {
 
         const TargetModel = modelMap[request.vendorModel];
         if (!TargetModel) {
-            return res.status(400).json({ success: false, message: "Invalid model mapping." });
+            return res.status(400).json({ success: false, message: `Invalid model mapping for ${request.vendorModel}` });
         }
 
         // Fetch current active profile data to allow side-by-side comparison on Admin UI
@@ -97,61 +102,74 @@ const handleProfileUpdateAction = async (req, res) => {
 
         const TargetModel = modelMap[request.vendorModel];
         if (!TargetModel) {
-            return res.status(400).json({ success: false, message: "Invalid vendor model type." });
+            return res.status(400).json({ success: false, message: `Invalid vendor model type: ${request.vendorModel}` });
         }
 
-        const fileKeysToClean = ['profileImage', 'signatureImage', 'profilePic'];
+        const singleFileKeys = ['profileImage', 'signatureImage', 'profilePic', 'image', 'posterimage', 'certificateImage', 'licenceCertificate'];
 
         if (action === 'Approve') {
-            // --- CLEANUP OLD FILE ON APPROVAL ---
+            // --- 1. CLEANUP OLD FILES ON APPROVAL ---
             const currentProfile = await TargetModel.findById(request.vendorId).lean();
             if (currentProfile) {
-                fileKeysToClean.forEach(key => {
-                    // If a new file is approved, delete the old file from server disk
-                    if (request.updatedFields[key] && currentProfile[key]) {
+                singleFileKeys.forEach(key => {
+                    if (request.updatedFields[key] && currentProfile[key] && request.updatedFields[key] !== currentProfile[key]) {
                         deleteFile(currentProfile[key]);
-                        console.log(`[Disk Cleanup - Approval]: Deleted old file at path: ${currentProfile[key]}`);
                     }
                 });
             }
 
-            // 🛠️ FIX: Safely map dot-notation keys (like 'documents.fssaiCertificates') for Mongoose $set
-            let setQuery = {};
-            for (let key in request.updatedFields) {
-                if (request.updatedFields.hasOwnProperty(key)) {
-                    setQuery[key] = request.updatedFields[key];
-                }
-            }
+            // --- 2. PREPARE UPDATE PAYLOAD ---
+            let setQuery = { ...request.updatedFields };
 
-            // Ensure profileStatus is updated to Approved on the primary vendor document
+            // 🎯 SIRF profileStatus ko 'Approved' kiya gaya hai (Accountverify ko nahi chheda hai)
             setQuery['profileStatus'] = 'Approved';
+            setQuery['rejectionReason'] = null;
+            setQuery['rejectReason'] = null;
 
-            // Apply the staged update fields directly to the primary vendor document
-            await TargetModel.findByIdAndUpdate(
+            // Apply update to actual vendor document (runValidators: false avoids schema validation crash)
+            const updatedVendor = await TargetModel.findByIdAndUpdate(
                 request.vendorId,
                 { $set: setQuery },
-                { new: true, runValidators: true }
+                { new: true, runValidators: false }
             );
+
+            if (!updatedVendor) {
+                return res.status(404).json({ success: false, message: "Target vendor record not found to update." });
+            }
             
             request.status = 'Approved';
+            request.rejectionReason = "";
 
         } else if (action === 'Reject') {
-            // --- CLEANUP NEW REJECTED FILE ON REJECTION ---
-            fileKeysToClean.forEach(key => {
-                // Since the request is rejected, the newly uploaded file is deleted to save server space
+            const rejectMsg = reason || "Request declined by Administrator.";
+
+            // --- 1. CLEANUP REJECTED NEW FILES ---
+            singleFileKeys.forEach(key => {
                 if (request.updatedFields[key]) {
                     deleteFile(request.updatedFields[key]);
-                    console.log(`[Disk Cleanup - Rejection]: Deleted unused pending file at path: ${request.updatedFields[key]}`);
                 }
             });
 
+            // --- 2. UPDATE VENDOR PROFILE STATUS TO REJECTED ---
+            await TargetModel.findByIdAndUpdate(
+                request.vendorId,
+                { 
+                    $set: { 
+                        profileStatus: 'Rejected',
+                        rejectionReason: rejectMsg 
+                    } 
+                },
+                { new: true, runValidators: false }
+            );
+
             request.status = 'Rejected';
-            request.rejectionReason = reason || "Request declined by Administrator.";
+            request.rejectionReason = rejectMsg;
+
         } else {
             return res.status(400).json({ success: false, message: "Invalid action type. Expected 'Approve' or 'Reject'." });
         }
 
-        request.adminId = req.user.id;
+        request.adminId = req.user ? req.user.id : null;
         await request.save();
 
         res.json({
@@ -161,6 +179,7 @@ const handleProfileUpdateAction = async (req, res) => {
         });
 
     } catch (error) {
+        console.error("Profile update action error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
