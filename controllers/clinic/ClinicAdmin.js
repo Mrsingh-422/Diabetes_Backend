@@ -156,7 +156,7 @@ const adminGetApprovedClinics = async (req, res) => {
 };
 
 // ==========================================
-// 🚀 5. ADMIN: GET CLINIC DOCTORS (With Filters & Search)
+//  5. ADMIN: GET CLINIC DOCTORS (With Filters & Search)
 // Endpoint: GET /api/admin/clinic/doctors/list?status=Pending&clinicId=...&search=...
 // ==========================================
 const getClinicDoctorsAdmin = async (req, res) => {
@@ -221,7 +221,7 @@ const getClinicDoctorsAdmin = async (req, res) => {
 };
 
 // ==========================================
-// 🚀 6. ADMIN: GET SINGLE CLINIC DOCTOR DETAILS
+// 6. ADMIN: GET SINGLE CLINIC DOCTOR DETAILS
 // Endpoint: GET /api/admin/clinic/doctors/details/:id
 // ==========================================
 const getClinicDoctorDetailsAdmin = async (req, res) => {
@@ -246,7 +246,7 @@ const getClinicDoctorDetailsAdmin = async (req, res) => {
 };
 
 // ==========================================
-// 🚀 7. ADMIN: APPROVE OR REJECT CLINIC DOCTOR
+//  7. ADMIN: APPROVE OR REJECT CLINIC DOCTOR
 // Endpoint: PATCH /api/admin/clinic/doctors/approve/:id
 // ==========================================
 const approveClinicDoctorStatus = async (req, res) => {
