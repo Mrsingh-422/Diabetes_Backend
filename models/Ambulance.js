@@ -2,19 +2,18 @@
 const mongoose = require('mongoose');
 
 const ambulanceSchema = new mongoose.Schema({
-    clinicId: { type: mongoose.Schema.Types.ObjectId, ref: 'Clinic', required: true }, // 🚀 Strictly Clinic-Owned
+    clinicId: { type: mongoose.Schema.Types.ObjectId, ref: 'Clinic', default: null },
     name: { type: String, required: true }, // Vehicle / Driver Display Name
     email: { type: String, unique: true, sparse: true, lowercase: true },
     phone: { type: String, unique: true, sparse: true },
     password: { type: String, required: true, select: false },
     role: { 
         type: String, 
-        enum: ['clinic-ambulance'], 
-        default: 'clinic-ambulance',
-        immutable: true 
+        enum: ['clinic-ambulance', 'ambulance', ], 
+        default: 'clinic-ambulance'
     },
 
-    country: { type: String, default: null },
+    country: { type: String, default: 'India' },
     state: { type: String, default: null },
     city: { type: String, default: null },
     address: { type: String, default: null },
@@ -26,29 +25,35 @@ const ambulanceSchema = new mongoose.Schema({
     bloodGroup: { type: String, default: null },
     vehicleType: { 
         type: String, 
-        enum: ['Van', 'Mini Van', 'Advance Life Support'], 
+        enum: ['Van', 'Mini Van', 'Advance Life Support', 'ICU Ambulance'], 
         default: 'Van' 
     },
 
+    // Vehicle Information
     vehicleNumber: { type: String, default: null },
     rcNumber: { type: String, default: null },
     insuranceNumber: { type: String, default: null },
 
+    // Documents
     documents: {
         drivingLicenseFile: { type: String, default: null },
         rcFile: { type: String, default: null },
-        insuranceFile: { type: String, default: null }
+        insuranceFile: { type: String, default: null },
+        fitnessCertificate: { type: String, default: null },
+        ambulancePermit: { type: String, default: null }
     },
 
     serviceRadius: { type: String, default: '15 km' }, 
     availableForEmergency: { type: Boolean, default: true },
+    isActive: { type: Boolean, default: true },
+    isOnline: { type: Boolean, default: true },
 
-    // 🚀 NEW: Clinic Private Ride Pricing Structure
+    // 🚀 Clinic Private Ride & Fixed Pricing Structure
     pricing: {
-        singleRidePrice: { type: Number, default: 400 }, // Ghar se clinic aane ka fixed charge
-        doubleRidePrice: { type: Number, default: 700 }, // Round trip packages rate
-        baseDistance: { type: Number, default: 5 },     // Base covered KM
-        pricePerKM: { type: Number, default: 12 }        // Extra charges beyond base distance
+        singleRidePrice: { type: Number, default: 400 }, // One-way fixed rate
+        doubleRidePrice: { type: Number, default: 700 }, // Round-trip package rate
+        baseDistance: { type: Number, default: 5 },     // Base KM
+        pricePerKM: { type: Number, default: 12 }        // Extra per KM charge
     },
 
     location: {
@@ -58,12 +63,22 @@ const ambulanceSchema = new mongoose.Schema({
 
     isPhoneVerified: { type: Boolean, default: false },
     token: { type: String, default: null },
+    fcmToken: { type: String, default: null },
     profileStatus: { 
         type: String, 
         enum: ['Incomplete', 'Pending', 'Approved', 'Rejected'], 
-        default: 'Incomplete' 
+        default: 'Approved' 
     },
-    rejectionReason: { type: String, default: null }
+    rejectionReason: { type: String, default: null },
+    bankDetails: {
+        accountType: { type: String, enum: ['Savings', 'Current'], default: 'Savings' },
+        bankName: { type: String, default: "" },
+        accountHolderName: { type: String, default: "" },
+        accountNumber: { type: String, default: "" },
+        ifscCode: { type: String, default: "" },
+        upiId: { type: String, default: "" },
+        isVerified: { type: Boolean, default: false }
+    }
 
 }, { timestamps: true });
 
