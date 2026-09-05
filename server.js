@@ -269,6 +269,7 @@ app.use('/doctor/availability', require('./routes/doctor/DoctorSlotsRoute')); //
 app.use('/doctor/video-call', require('./routes/doctor/VideoCallRoute')); // Doctor Video Call Route
 
 
+
  
 
 //////////////// Clinic Routes /////////////////////
@@ -279,6 +280,7 @@ app.use('/api/clinic/doctors', require('./routes/clinic/clinicDoctorRoute')); //
 app.use('/api/clinic/timings', require('./routes/clinic/clinicTimingRoute'));
 app.use('/api/clinic/wards', require('./routes/clinic/clinicWardBedRoute'));
 app.use('/api/user/clinics', require('./routes/user/Clinic/clinicManageRoute')); // Clinic User Management Route
+app.use('/api/user/clinic-checkout', require('./routes/user/Clinic/clinicCheckoutRoute'));
 
 ////////////////////////////// Food Routes User /////////////////////////////////
 app.use('/api/foodpage', require('./routes/user/Food/FoodPageRoute')); // Food Page Management Route

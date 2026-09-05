@@ -4,6 +4,7 @@ const Doctor = require('../../../models/Doctor');
 const Ward = require('../../../models/Ward');
 const Bed = require('../../../models/Bed'); 
 const Review = require('../../../models/Review');
+Coupon = require('../../../models/Coupon');
 const VendorKMLimit = require('../../../models/VendorKMLimit');
 const { calculateHaversine } = require('../../../utils/helpers');
 const mongoose = require('mongoose');
@@ -504,11 +505,57 @@ const getClinicDoctorsAndBeds = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+// ==========================================
+// 🎟️ GET APPLICABLE COUPONS FOR CLINIC (User Side)
+// Endpoint: GET /api/user/clinics/coupons/:clinicId
+// (Clinic ke khud ke coupons + Admin ke banaye Clinic & All coupons)
+// ==========================================
+const getClinicCouponsForUser = async (req, res) => {
+    try {
+        const { clinicId } = req.params;
+        const now = new Date();
 
+        // Query: Active coupons only + Expiry date must be in future
+        let couponQuery = {
+            isActive: true,
+            expiryDate: { $gt: now },
+            startDate: { $lte: now },
+            $or: [
+                { isAdminCreated: true, vendorType: { $in: ['Clinic', 'All'] } } // 1. Admin Global Coupons
+            ]
+        };
+
+        // 2. Agar clinicId aayi hai toh us clinic ke specific coupons bhi include karein
+        if (clinicId && mongoose.Types.ObjectId.isValid(clinicId)) {
+            couponQuery.$or.push({ 
+                vendorId: clinicId, 
+                vendorType: 'Clinic',
+                isAdminCreated: false 
+            });
+        }
+
+        const coupons = await Coupon.find(couponQuery)
+            .select('couponName discountPercentage maxDiscount minOrderAmount maxUsagePerUser startDate expiryDate vendorType isAdminCreated')
+            .sort({ discountPercentage: -1 }) // Highest discount first
+            .lean();
+
+        res.json({
+            success: true,
+            count: coupons.length,
+            data: coupons
+        });
+
+    } catch (error) {
+        console.error("Get Clinic Coupons Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
 
 module.exports = {
     getNearestClinics,
     getClinicDetailsForUser,
-    getClinicDoctorsAndBeds
+    getClinicDoctorsAndBeds,
+    getClinicCouponsForUser
+
     
 };

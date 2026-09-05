@@ -53,8 +53,10 @@ const getProfileUpdateRequests = async (req, res) => {
     }
 };
 
-// 2. GET: Request Details & Side-by-Side Comparison
+// ==========================================
+// 2. GET: Request Details
 // Endpoint: GET /api/admin/profile-update/:requestId
+// ==========================================
 const getProfileUpdateRequestDetails = async (req, res) => {
     try {
         const { requestId } = req.params;
@@ -69,16 +71,43 @@ const getProfileUpdateRequestDetails = async (req, res) => {
             return res.status(400).json({ success: false, message: `Invalid model mapping for ${request.vendorModel}` });
         }
 
-        // Fetch current active profile data to allow side-by-side comparison on Admin UI
-        const currentProfile = await TargetModel.findById(request.vendorId).select('-password -token').lean();
+        // 1. Fetch current live profile from database
+        const currentFullProfile = await TargetModel.findById(request.vendorId).select('-password -token').lean();
 
+        // 2.  FILTER: Sirf wahi keys nikalenge jo 'updatedFields' me bheji gayi hain
+        const updatedKeys = Object.keys(request.updatedFields || {});
+        
+        const filteredCurrentFields = {
+            _id: currentFullProfile?._id || request.vendorId,
+            vendorName: currentFullProfile?.clinicName || currentFullProfile?.name || "N/A"
+        };
+
+        if (currentFullProfile) {
+            updatedKeys.forEach(key => {
+                // Current DB me us field ki kya purani value thi
+                filteredCurrentFields[key] = currentFullProfile[key] !== undefined ? currentFullProfile[key] : null;
+            });
+        }
+
+        // 3. Clean Response (Only changed fields comparison)
         res.json({
             success: true,
             data: {
-                request,
-                currentProfile: currentProfile || null
+                requestId: request._id,
+                vendorId: request.vendorId,
+                vendorModel: request.vendorModel,
+                status: request.status,
+                rejectionReason: request.rejectionReason,
+                createdAt: request.createdAt,
+                
+                //  Nayi values jo approve hone aayi hain
+                updatedFields: request.updatedFields,
+
+                //  Purani values database se (Sirf unhi fields ki)
+                currentFields: filteredCurrentFields
             }
         });
+
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }

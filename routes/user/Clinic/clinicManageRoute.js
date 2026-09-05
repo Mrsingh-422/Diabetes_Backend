@@ -4,7 +4,8 @@ const router = express.Router();
 const {
     getNearestClinics,
     getClinicDetailsForUser,
-    getClinicDoctorsAndBeds
+    getClinicDoctorsAndBeds,
+    getClinicCouponsForUser
 
 } = require('../../../controllers/user/Clinic/clinicManageController');
 
@@ -18,6 +19,7 @@ router.get('/:clinicId/doctors-and-beds', getClinicDoctorsAndBeds);
 // 2. Full Clinic Details & Doctors List on Card Click
 
 router.get('/:id', getClinicDetailsForUser);
+router.get('/coupons/:clinicId', getClinicCouponsForUser);
 
 
 module.exports = router;

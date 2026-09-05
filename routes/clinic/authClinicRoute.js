@@ -10,7 +10,7 @@ const {
     loginClinic, 
     toggleClinicOnlineStatus,
     updateClinicProfile,
-    getLatestClinicProfileRequest, // 👈 Active import
+    getLatestClinicProfileRequest, //  Active import
     getMyClinicProfile,
     changeClinicPassword
 } = require('../../controllers/clinic/authClinic.js');
