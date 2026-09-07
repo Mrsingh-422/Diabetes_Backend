@@ -20,12 +20,12 @@ const {
 // 1. Auth & Onboarding
 router.post('/register', registerAmbulance);
 router.post('/login', loginAmbulance);
-router.put('/complete-profile', protect('ambulance'), ambulanceDocUploads, completeAmbulanceProfile);
+router.put('/complete-profile', protect(['ambulance', 'clinic-ambulance']), ambulanceDocUploads, completeAmbulanceProfile);
 
 // 2. Status & Profile
-router.patch('/status/toggle', protect('ambulance'), toggleDriverAvailability);
-router.get('/profile', protect('ambulance'), getMyAmbulanceProfile);
-router.patch('/profile/update', protect('ambulance'), updateAmbulanceProfile);
+router.patch('/status/toggle', protect(['ambulance', 'clinic-ambulance']), toggleDriverAvailability);
+router.get('/profile', protect(['ambulance', 'clinic-ambulance']), getMyAmbulanceProfile);
+router.patch('/profile/update', protect(['ambulance', 'clinic-ambulance']), updateAmbulanceProfile);
 
 // 3. Password Recovery Flow
 router.post('/forgot-password', forgotPasswordAmbulance);
