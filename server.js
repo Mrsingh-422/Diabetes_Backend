@@ -324,6 +324,7 @@ app.use('/driver/pharmacy', require('./routes/driver/driverPharmacy/OrdersRoute'
 app.use('/driver/lab', require('./routes/driver/driverLab/driverLabOrdersRoute')); 
 
 //////////////// Ambulance Routes /////////////////////
+app.use('/api/auth/ambulance', require('./routes/ambulance/authAmbulanceRoute'));
 
 //////////////// others Routes or public routes  /////////////////////
 app.use('/api/public', require('./routes/others/locationRoutes'));

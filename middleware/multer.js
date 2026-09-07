@@ -152,30 +152,27 @@ const nurseDocUploads = multer({
 ]);
 
 // ==========================================
-// 7. AMBULANCE CONFIGURATION
+// 7. AMBULANCE CONFIGURATION (Fixed with 5MB Limit)
 // ==========================================
 const ambulanceDir = 'public/uploads/ambulances';
 ensureDir(ambulanceDir);
+
 const ambulanceDocUploads = multer({
     storage: multer.diskStorage({
         destination: (req, file, cb) => cb(null, ambulanceDir),
         filename: (req, file, cb) => cb(null, `amb-${Date.now()}${path.extname(file.originalname)}`)
     }),
-    fileFilter: docFileFilter
+    fileFilter: docFileFilter,
+    limits: { fileSize: 5 * 1024 * 1024 } // 👈 5MB File Limit
 }).fields([
-    { name: 'drivingLicenseFile', maxCount: 1 },
-    { name: 'rcFile', maxCount: 1 },
+    { name: 'drivingLicenseFile', maxCount: 2 },
+    { name: 'rcFile', maxCount: 2 },
     { name: 'insuranceFile', maxCount: 1 },
     { name: 'fitnessCertificate', maxCount: 1 },
     { name: 'ambulancePermit', maxCount: 1 },
-
-     { name: 'vehicleImages', maxCount: 5 },
-    { name: 'rcFile', maxCount: 2 },
-    { name: 'drivingLicenseFile', maxCount: 2 },
-    { name: 'insuranceFile', maxCount: 1 },
+    { name: 'vehicleImages', maxCount: 5 },
     { name: 'referralCard', maxCount: 1 },
-    { name: 'incidentPhoto', maxCount: 1 },
-
+    { name: 'incidentPhoto', maxCount: 1 }
 ]);
 
 // ==========================================

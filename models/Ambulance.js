@@ -9,7 +9,7 @@ const ambulanceSchema = new mongoose.Schema({
     password: { type: String, required: true, select: false },
     role: { 
         type: String, 
-        enum: ['clinic-ambulance', 'ambulance', ], 
+        enum: ['clinic-ambulance', 'ambulance'], 
         default: 'clinic-ambulance'
     },
 
@@ -48,7 +48,19 @@ const ambulanceSchema = new mongoose.Schema({
     isActive: { type: Boolean, default: true },
     isOnline: { type: Boolean, default: true },
 
-    // 🚀 Clinic Private Ride & Fixed Pricing Structure
+    //  Support Staff (Nurse & Doctor in Ambulance)
+    supportStaff: {
+        nurse: {
+            available: { type: Boolean, default: false },
+            price: { type: Number, default: 0 }
+        },
+        doctor: {
+            available: { type: Boolean, default: false },
+            price: { type: Number, default: 0 }
+        }
+    },
+
+    //  Clinic Private Ride & Fixed Pricing Structure
     pricing: {
         singleRidePrice: { type: Number, default: 400 }, // One-way fixed rate
         doubleRidePrice: { type: Number, default: 700 }, // Round-trip package rate
@@ -67,7 +79,7 @@ const ambulanceSchema = new mongoose.Schema({
     profileStatus: { 
         type: String, 
         enum: ['Incomplete', 'Pending', 'Approved', 'Rejected'], 
-        default: 'Approved' 
+        default: 'Pending' 
     },
     rejectionReason: { type: String, default: null },
     bankDetails: {
@@ -78,7 +90,9 @@ const ambulanceSchema = new mongoose.Schema({
         ifscCode: { type: String, default: "" },
         upiId: { type: String, default: "" },
         isVerified: { type: Boolean, default: false }
-    }
+    },
+    averageRating: { type: Number, default: 0 },
+    totalReviews: { type: Number, default: 0 }
 
 }, { timestamps: true });
 

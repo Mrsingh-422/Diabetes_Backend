@@ -189,6 +189,7 @@ const updateClinicTimings = async (req, res) => {
             isOPD = true,
             isIPD = false,
             isEmergency = false,
+            isAmbulanceAvailable = false, // 👈 Added Ambulance Facility Toggle
 
             // Specific Service Timing Objects
             emergencyTimings,
@@ -214,6 +215,7 @@ const updateClinicTimings = async (req, res) => {
             isOPD: Boolean(isOPD),
             isIPD: Boolean(isIPD),
             isEmergency: Boolean(isEmergency),
+            isAmbulanceAvailable: Boolean(isAmbulanceAvailable), // 👈 Saved to Clinic Profile
 
             startDay: startDay || 'Monday',
             endDay: endDay || 'Saturday',
@@ -226,12 +228,12 @@ const updateClinicTimings = async (req, res) => {
 
             emergencyTimings: {
                 is24x7: is24x7Bool || Boolean(emergencyTimings?.is24x7),
-                startTime: is24x7Bool ? "12:00 AM" : (emergencyTimings?.startTime || "08:00 PM"),
-                endTime: is24x7Bool ? "11:59 PM" : (emergencyTimings?.endTime || "08:00 AM")
+                startTime: is24x7Bool ? "12:00 AM" : (emergencyTimings?.startTime || "06:00 PM"),
+                endTime: is24x7Bool ? "11:59 PM" : (emergencyTimings?.endTime || "09:00 AM")
             },
             ipdTimings: {
                 is24x7: is24x7Bool || Boolean(ipdTimings?.is24x7),
-                startTime: is24x7Bool ? "12:00 AM" : (ipdTimings?.startTime || "09:00 AM"),
+                startTime: is24x7Bool ? "12:00 AM" : (ipdTimings?.startTime || "10:00 AM"),
                 endTime: is24x7Bool ? "11:59 PM" : (ipdTimings?.endTime || "08:00 PM")
             },
             opdTimings: {
@@ -279,13 +281,14 @@ const updateClinicTimings = async (req, res) => {
 
         res.json({
             success: true,
-            message: "Clinic facilities, 24x7 mode & shift timings updated successfully.",
+            message: "Clinic facilities, ambulance service & shift timings updated successfully.",
             data: {
                 facilities: {
                     is24x7: updatedClinic.is24x7,
                     isOPD: updatedClinic.isOPD,
                     isIPD: updatedClinic.isIPD,
-                    isEmergency: updatedClinic.isEmergency
+                    isEmergency: updatedClinic.isEmergency,
+                    isAmbulanceAvailable: Boolean(updatedClinic.isAmbulanceAvailable) // 👈 Returned in facilities
                 },
                 serviceTimings: {
                     emergency: updatedClinic.emergencyTimings,

@@ -4,6 +4,9 @@ const Doctor = require('../../../models/Doctor');
 const Ward = require('../../../models/Ward');
 const Bed = require('../../../models/Bed'); 
 const Review = require('../../../models/Review');
+const Ambulance = require('../../../models/Ambulance');
+const Specialization = require('../../../models/Specialization'); 
+
 Coupon = require('../../../models/Coupon');
 const VendorKMLimit = require('../../../models/VendorKMLimit');
 const { calculateHaversine } = require('../../../utils/helpers');
@@ -62,15 +65,34 @@ const getDisplayTimings = (clinic) => {
 };
 
 // ==========================================
-// 🏥 1. GET NEAREST CLINICS (POST API - Dynamic Admin KM Limit)
+// 🏥 1. GET NEAREST CLINICS (Filter, Search, Pagination & Exact Response Keys)
 // Endpoint: POST /api/user/clinics/nearest
 // ==========================================
 const getNearestClinics = async (req, res) => {
     try {
-        const { lat, lng, search: bodySearch, city: bodyCity, page: bodyPage, limit: bodyLimit } = req.body || {};
-        const { search: querySearch, city: queryCity, page = bodyPage || 1, limit = bodyLimit || 12 } = req.query;
+        const { 
+            lat, 
+            lng, 
+            search: bodySearch, 
+            city: bodyCity, 
+            state: bodyState,
+            is24x7,
+            isEmergency,
+            isOPD,
+            isIPD,
+            page: bodyPage, 
+            limit: bodyLimit 
+        } = req.body || {};
 
-        // User location fallback to Mohali if location is OFF
+        const { 
+            search: querySearch, 
+            city: queryCity, 
+            state: queryState,
+            page = bodyPage || 1, 
+            limit = bodyLimit || 12 
+        } = req.query;
+
+        // User location fallback to Mohali Center if location is OFF
         const userLat = lat ? Number(lat) : DEFAULT_MOHALI_LAT;
         const userLng = lng ? Number(lng) : DEFAULT_MOHALI_LNG;
         const isDefaultLocation = (!lat || !lng);
@@ -79,14 +101,14 @@ const getNearestClinics = async (req, res) => {
         const limitNum = parseInt(limit, 10) || 12;
         const searchTerm = (querySearch || bodySearch || '').trim();
         const cityFilter = (queryCity || bodyCity || '').trim();
+        const stateFilter = (queryState || bodyState || '').trim();
 
-        // 🚀 1. DYNAMIC KM LIMIT: Admin configured distance from VendorKMLimit (Case-Insensitive)
+        // 1. Dynamic Admin KM Limit (VendorKMLimit)
         const limitConfig = await VendorKMLimit.findOne({ 
             vendorType: { $regex: /^clinic$/i },
             $or: [{ isActive: true }, { isActive: { $exists: false } }]
         }).lean();
 
-        // Admin database me jo value hogi (e.g. 500) wo yahan dynamically aayegi
         const maxDistanceLimit = (limitConfig && limitConfig.kmLimit !== undefined && limitConfig.kmLimit !== null)
             ? Number(limitConfig.kmLimit) 
             : 500;
@@ -100,9 +122,12 @@ const getNearestClinics = async (req, res) => {
             isActive: true
         };
 
-        if (cityFilter !== "") {
-            query.city = new RegExp(cityFilter, 'i');
-        }
+        if (cityFilter !== "") query.city = new RegExp(cityFilter, 'i');
+        if (stateFilter !== "") query.state = new RegExp(stateFilter, 'i');
+        if (is24x7 !== undefined) query.is24x7 = is24x7 === true || is24x7 === 'true';
+        if (isEmergency !== undefined) query.isEmergency = isEmergency === true || isEmergency === 'true';
+        if (isOPD !== undefined) query.isOPD = isOPD === true || isOPD === 'true';
+        if (isIPD !== undefined) query.isIPD = isIPD === true || isIPD === 'true';
 
         if (searchTerm !== "") {
             const searchRegex = new RegExp(searchTerm, 'i');
@@ -114,7 +139,7 @@ const getNearestClinics = async (req, res) => {
             ];
         }
 
-        // 3. Fetch all active clinics
+        // 3. Fetch all matching active clinics
         const clinics = await Clinic.find(query)
             .select('clinicName name image posterimage address city state location phoneNumber MorningStartTime eveningEndTime is24x7 isOPD isIPD isEmergency holiday')
             .lean();
@@ -122,7 +147,8 @@ const getNearestClinics = async (req, res) => {
         if (clinics.length === 0) {
             return res.json({
                 success: true,
-                message: "No active approved clinics found in database.",
+                message: "No active approved clinics found.",
+                locationUsed: isDefaultLocation ? "Mohali (Default)" : "User Live Location",
                 maxDistanceLimitApplied: `${maxDistanceLimit} km`,
                 totalDocs: 0,
                 totalPages: 0,
@@ -136,7 +162,7 @@ const getNearestClinics = async (req, res) => {
         const allClinicsWithDistance = [];
         const withinRadiusClinics = [];
 
-        // 4. Calculate Distance for every clinic
+        // 4. Calculate Distance & Format Exact Requested Response Keys
         for (let clinic of clinics) {
             const { lat: clinicLat, lng: clinicLng } = resolveCoordinates(clinic.location);
 
@@ -147,19 +173,20 @@ const getNearestClinics = async (req, res) => {
                 clinicLng
             );
 
-            // Fetch live average rating
+            // Fetch live review stats
             const reviews = await Review.find({ targetId: clinic._id, targetType: 'Clinic' }).select('rating').lean();
             const totalReviews = reviews.length;
             const avgRating = totalReviews > 0
                 ? Number((reviews.reduce((acc, r) => acc + r.rating, 0) / totalReviews).toFixed(1))
                 : 4.8;
 
+            // 🎯 EXACT REQUESTED RESPONSE OBJECT
             const cardItem = {
                 _id: clinic._id,
                 clinicName: clinic.clinicName || clinic.name,
                 doctorIncharge: clinic.name,
                 image: clinic.image || clinic.posterimage || "/uploads/clinics/default-clinic.jpg",
-                posterimage: clinic.posterimage || clinic.image,
+                posterimage: clinic.posterimage || clinic.image || "/uploads/clinics/default-clinic.jpg",
                 address: clinic.address || "",
                 city: clinic.city || "",
                 state: clinic.state || "",
@@ -179,7 +206,6 @@ const getNearestClinics = async (req, res) => {
 
             allClinicsWithDistance.push(cardItem);
 
-            // Dynamic distance filtering based on Admin KM Limit
             if (distance <= maxDistanceLimit) {
                 withinRadiusClinics.push(cardItem);
             }
@@ -212,7 +238,6 @@ const getNearestClinics = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
-
 // ==========================================
 // 🏥 2. GET SINGLE CLINIC DETAILS & CLINIC DOCTORS (Full Data on Card Click)
 // Endpoint: GET /api/user/clinics/:id
@@ -550,12 +575,241 @@ const getClinicCouponsForUser = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+// ==========================================
+// 🚑 GET ALL AMBULANCES OF A CLINIC (User View)
+// Endpoint: GET /api/user/clinics/ambulances/:clinicId?lat=...&lng=...
+// ==========================================
+const getClinicAmbulancesForUser = async (req, res) => {
+    try {
+        const { clinicId } = req.params;
+        const { lat, lng } = req.query;
 
+        if (!mongoose.Types.ObjectId.isValid(clinicId)) {
+            return res.status(400).json({ success: false, message: `Invalid Clinic ID: '${clinicId}'` });
+        }
+
+        // 1. Check if Clinic exists & has Ambulance service enabled
+        const clinic = await Clinic.findById(clinicId).select('clinicName name isAmbulanceAvailable location').lean();
+        if (!clinic) {
+            return res.status(404).json({ success: false, message: "Clinic not found." });
+        }
+
+        if (clinic.isAmbulanceAvailable === false) {
+            return res.json({
+                success: true,
+                clinicId,
+                clinicName: clinic.clinicName || clinic.name,
+                isAmbulanceAvailable: false,
+                message: "Ambulance facility is currently not offered by this clinic.",
+                count: 0,
+                data: []
+            });
+        }
+
+        // 2. Fetch all Approved & Active Ambulances for this Clinic
+        const ambulances = await Ambulance.find({
+            clinicId,
+            profileStatus: 'Approved',
+            isActive: true
+        })
+        .select('-password -token -fcmToken -bankDetails -hospitalId')
+        .lean();
+
+        const userLat = lat ? Number(lat) : null;
+        const userLng = lng ? Number(lng) : null;
+
+        // 3. Format Response with Support Staff, Pricing & Live Distance
+        const formattedAmbulances = ambulances.map(amb => {
+            let distanceText = null;
+            let rawDistance = null;
+
+            if (userLat && userLng && amb.location?.lat && amb.location?.lng && (amb.location.lat !== 0 || amb.location.lng !== 0)) {
+                const dist = calculateHaversine(userLat, userLng, Number(amb.location.lat), Number(amb.location.lng));
+                rawDistance = Number(dist.toFixed(1));
+                distanceText = `${dist.toFixed(1)} km away`;
+            }
+
+            return {
+                _id: amb._id,
+                clinicId: amb.clinicId,
+                driverName: amb.name,
+                phone: amb.phone,
+                email: amb.email || "",
+                vehicleNumber: amb.vehicleNumber,
+                vehicleType: amb.vehicleType || "Van",
+                bloodGroup: amb.bloodGroup || "",
+                experienceYears: amb.experienceYears ? `${amb.experienceYears} Years` : "",
+                availableForEmergency: Boolean(amb.availableForEmergency),
+                isOnline: Boolean(amb.isOnline),
+                serviceRadius: amb.serviceRadius || "15 km",
+                rating: amb.averageRating || 4.8,
+                reviewsCount: amb.totalReviews || 0,
+                
+                // 🚀 Support Staff (Nurse & Doctor)
+                supportStaff: {
+                    nurse: {
+                        available: Boolean(amb.supportStaff?.nurse?.available),
+                        price: amb.supportStaff?.nurse?.price || 0
+                    },
+                    doctor: {
+                        available: Boolean(amb.supportStaff?.doctor?.available),
+                        price: amb.supportStaff?.doctor?.price || 0
+                    }
+                },
+
+                // 🚀 Ride Pricing Structure
+                pricing: {
+                    singleRidePrice: amb.pricing?.singleRidePrice || 400,
+                    doubleRidePrice: amb.pricing?.doubleRidePrice || 700,
+                    baseDistance: amb.pricing?.baseDistance || 5,
+                    pricePerKM: amb.pricing?.pricePerKM || 12
+                },
+
+                location: amb.location || { lat: 0, lng: 0 },
+                distance: rawDistance,
+                distanceText
+            };
+        });
+
+        res.json({
+            success: true,
+            clinicId,
+            clinicName: clinic.clinicName || clinic.name,
+            isAmbulanceAvailable: true,
+            count: formattedAmbulances.length,
+            data: formattedAmbulances
+        });
+
+    } catch (error) {
+        console.error("Get Clinic Ambulances Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
+// ==========================================
+// 🔍 2. LIVE CLINIC, DOCTOR & SPECIALITY SEARCH SUGGESTIONS (2-Letter Auto-Suggest)
+// Endpoint: POST /api/user/clinics/search-suggestions
+// ==========================================
+const getClinicSearchSuggestions = async (req, res) => {
+    try {
+        const { query, q, search, limit = 10 } = req.body || {};
+        const queryTerm = (query || q || search || '').trim();
+
+        // 🛡️ 2 characters se kam hone par empty list return karein
+        if (!queryTerm || queryTerm.length < 2) {
+            return res.json({
+                success: true,
+                query: queryTerm,
+                count: 0,
+                data: []
+            });
+        }
+
+        const searchRegex = new RegExp(queryTerm, 'i');
+        const limitNum = parseInt(limit, 10) || 10;
+
+        // 1. Search in Verified Clinics
+        const clinics = await Clinic.find({
+            $or: [
+                { Accountverify: 'Approved' },
+                { profileStatus: 'Approved' }
+            ],
+            isActive: true,
+            $and: [
+                {
+                    $or: [
+                        { clinicName: searchRegex },
+                        { name: searchRegex },
+                        { address: searchRegex },
+                        { city: searchRegex }
+                    ]
+                }
+            ]
+        })
+        .select('clinicName name image address city state')
+        .limit(limitNum)
+        .lean();
+
+        const formattedClinics = clinics.map(c => ({
+            id: c._id,
+            _id: c._id,
+            name: c.clinicName || c.name,
+            description: `${c.city || ''}, ${c.state || ''} • ${c.address || 'Clinic Center'}`,
+            imageUrl: c.image || null,
+            itemType: "Clinic",
+            redirectPath: `/clinic/clinicdetail/${c._id}` // Direct click navigation
+        }));
+
+        // 2. Search in Clinic Doctors
+        const doctors = await Doctor.find({
+            profileStatus: 'Approved',
+            isActive: true,
+            clinicId: { $ne: null, $exists: true },
+            $or: [
+                { name: searchRegex },
+                { speciality: searchRegex },
+                { qualification: searchRegex }
+            ]
+        })
+        .select('name speciality qualification profileImage clinicId fees experienceYears')
+        .populate('clinicId', 'clinicName name city')
+        .limit(limitNum)
+        .lean();
+
+        const formattedDoctors = doctors.map(doc => ({
+            id: doc._id,
+            _id: doc._id,
+            name: doc.name,
+            description: `${doc.speciality || 'Specialist'} (${doc.qualification || 'MBBS'}) • ${doc.clinicId?.clinicName || 'Clinic Doctor'}`,
+            imageUrl: doc.profileImage || null,
+            itemType: "Doctor",
+            redirectPath: `/clinic/clinicdetail/${doc.clinicId?._id || doc.clinicId}` //  Navigates to that Clinic profile
+        }));
+
+        // 3. Search in Master Specializations
+        const specializations = await Specialization.find({
+            isActive: true,
+            name: searchRegex
+        })
+        .limit(5)
+        .lean();
+
+        const formattedSpecializations = specializations.map(spec => ({
+            id: spec._id,
+            _id: spec._id,
+            name: spec.name,
+            description: "Medical Speciality",
+            imageUrl: null,
+            itemType: "Speciality",
+            redirectPath: `/clinics?speciality=${encodeURIComponent(spec.name)}`
+        }));
+
+        // 4. Combine Results (Top 15 suggestions)
+        const allSuggestions = [
+            ...formattedClinics,
+            ...formattedDoctors,
+            ...formattedSpecializations
+        ];
+
+        res.json({
+            success: true,
+            query: queryTerm,
+            count: allSuggestions.length,
+            data: allSuggestions.slice(0, 15)
+        });
+
+    } catch (error) {
+        console.error("Search Suggestions Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
 module.exports = {
     getNearestClinics,
     getClinicDetailsForUser,
     getClinicDoctorsAndBeds,
-    getClinicCouponsForUser
-
+    getClinicCouponsForUser,
+    getClinicAmbulancesForUser,
+    getClinicSearchSuggestions,
     
 };

@@ -3,6 +3,9 @@ const Ambulance = require('../../models/Ambulance');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { deleteFile } = require('../../utils/fileHandler');
+const Clinic = require('../../models/Clinic');
+const ProfileUpdateRequest = require('../../models/ProfileUpdateRequest');
+const { notifyAdminsAndVendor } = require('../../utils/notification');
 
 // Helper: Generate JWT Token
 const generateToken = (id, role) => {
@@ -11,12 +14,26 @@ const generateToken = (id, role) => {
 };
 
 // ==========================================
-// 1. ADD AMBULANCE (By Clinic)
+// 1. ADD AMBULANCE (With isAmbulanceAvailable & Support Staff check)
 // Endpoint: POST /api/clinic/ambulance/add
 // ==========================================
 const addClinicAmbulance = async (req, res) => {
     try {
         const clinicId = req.user.id;
+
+        // 🛡️ 1. Check if Clinic has Ambulance Service Enabled
+        const clinic = await Clinic.findById(clinicId);
+        if (!clinic) {
+            return res.status(404).json({ success: false, message: "Clinic profile not found." });
+        }
+
+        if (clinic.isAmbulanceAvailable !== true) {
+            return res.status(403).json({
+                success: false,
+                message: "Ambulance facility is disabled for your clinic. Please enable 'isAmbulanceAvailable' in clinic settings/profile first."
+            });
+        }
+
         const {
             name,
             email,
@@ -39,7 +56,14 @@ const addClinicAmbulance = async (req, res) => {
             baseDistance = 5,
             pricePerKM = 12,
             latitude = 0,
-            longitude = 0
+            longitude = 0,
+
+            // 👇 Support Staff Fields
+            hasNurse = false,
+            nursePrice = 0,
+            hasDoctor = false,
+            doctorPrice = 0,
+            supportStaff
         } = req.body;
 
         // Validations
@@ -54,11 +78,11 @@ const addClinicAmbulance = async (req, res) => {
             return res.status(400).json({ success: false, message: "Password is required." });
         }
 
-        // Duplicate Check
+        const cleanVehicleNumber = vehicleNumber.toUpperCase().trim();
         const query = [];
         if (email) query.push({ email: email.toLowerCase() });
         if (phone) query.push({ phone });
-        if (vehicleNumber) query.push({ vehicleNumber: vehicleNumber.toUpperCase().trim() });
+        if (vehicleNumber) query.push({ vehicleNumber: cleanVehicleNumber });
 
         const exists = await Ambulance.findOne({ $or: query });
         if (exists) {
@@ -70,10 +94,31 @@ const addClinicAmbulance = async (req, res) => {
 
         const hashedPassword = await bcrypt.hash(String(password), 10);
 
-        // Process Uploaded Files
+        // Uploaded files
         const files = req.files || {};
         const getPath = (key) => (files[key] && files[key][0] ? `/uploads/ambulances/${files[key][0].filename}` : null);
 
+        const documents = {
+            drivingLicenseFile: getPath('drivingLicenseFile'),
+            rcFile: getPath('rcFile'),
+            insuranceFile: getPath('insuranceFile'),
+            fitnessCertificate: getPath('fitnessCertificate'),
+            ambulancePermit: getPath('ambulancePermit')
+        };
+
+        // Support Staff Structure Builder
+        const supportStaffData = {
+            nurse: {
+                available: hasNurse === 'true' || hasNurse === true || Boolean(supportStaff?.nurse?.available),
+                price: Number(nursePrice ?? supportStaff?.nurse?.price ?? 0)
+            },
+            doctor: {
+                available: hasDoctor === 'true' || hasDoctor === true || Boolean(supportStaff?.doctor?.available),
+                price: Number(doctorPrice ?? supportStaff?.doctor?.price ?? 0)
+            }
+        };
+
+        // 2. Create Ambulance with 'Pending' Status
         const newAmbulance = await Ambulance.create({
             clinicId,
             name,
@@ -85,7 +130,7 @@ const addClinicAmbulance = async (req, res) => {
             state,
             city,
             address,
-            vehicleNumber: vehicleNumber.toUpperCase().trim(),
+            vehicleNumber: cleanVehicleNumber,
             vehicleType,
             drivingLicenseNumber,
             rcNumber,
@@ -93,10 +138,12 @@ const addClinicAmbulance = async (req, res) => {
             bloodGroup,
             experienceYears,
             serviceRadius,
-            availableForEmergency: true,
+            availableForEmergency: false,
             isActive: true,
-            isOnline: true,
-            profileStatus: 'Approved', // Clinic's owned ambulances are pre-approved
+            isOnline: false,
+            profileStatus: 'Pending',
+
+            supportStaff: supportStaffData,
 
             pricing: {
                 singleRidePrice: Number(singleRidePrice),
@@ -110,21 +157,52 @@ const addClinicAmbulance = async (req, res) => {
                 lng: Number(longitude)
             },
 
-            documents: {
-                drivingLicenseFile: getPath('drivingLicenseFile'),
-                rcFile: getPath('rcFile'),
-                insuranceFile: getPath('insuranceFile'),
-                fitnessCertificate: getPath('fitnessCertificate'),
-                ambulancePermit: getPath('ambulancePermit')
-            }
+            documents
         });
 
-        newAmbulance.password = undefined;
+        const clinicName = clinic.clinicName || clinic.name || "Clinic";
+
+        // 3. 🚀 Create Admin Approval Request
+        await ProfileUpdateRequest.create({
+            vendorId: newAmbulance._id,
+            vendorModel: 'Ambulance',
+            updatedFields: {
+                name: newAmbulance.name,
+                phone: newAmbulance.phone,
+                email: newAmbulance.email,
+                vehicleNumber: newAmbulance.vehicleNumber,
+                vehicleType: newAmbulance.vehicleType,
+                supportStaff: supportStaffData,
+                pricing: newAmbulance.pricing,
+                serviceRadius: newAmbulance.serviceRadius,
+                clinicId: clinicId,
+                clinicName: clinicName,
+                documents: documents
+            },
+            status: 'Pending'
+        });
+
+        // 4. 🔔 Notify Admin
+        try {
+            await notifyAdminsAndVendor(
+                newAmbulance._id,
+                'ambulance',
+                "New Clinic Ambulance Approval Request",
+                `${clinicName} has registered Ambulance (${newAmbulance.vehicleNumber}) with medical support staff. Please review for approval.`
+            );
+        } catch (notifErr) {
+            console.error("Admin Notification error on ambulance registration:", notifErr.message);
+        }
+
+        const responseData = newAmbulance.toObject();
+        delete responseData.password;
+        delete responseData.hospitalId;
 
         res.status(201).json({
             success: true,
-            message: `Ambulance '${newAmbulance.vehicleNumber}' added successfully.`,
-            data: newAmbulance
+            message: `Ambulance '${newAmbulance.vehicleNumber}' registered successfully and submitted to Admin for approval.`,
+            profileStatus: 'Pending',
+            data: responseData
         });
 
     } catch (error) {
@@ -134,27 +212,7 @@ const addClinicAmbulance = async (req, res) => {
 };
 
 // ==========================================
-// 2. GET ALL AMBULANCES OF LOGGED-IN CLINIC
-// Endpoint: GET /api/clinic/ambulance/my-ambulances
-// ==========================================
-const getMyClinicAmbulances = async (req, res) => {
-    try {
-        const clinicId = req.user.id;
-        const ambulances = await Ambulance.find({ clinicId })
-            .select('-hospitalId -password') // 👈 hospitalId exclude
-            .sort({ createdAt: -1 });
-
-        res.json({
-            success: true,
-            count: ambulances.length,
-            data: ambulances
-        });
-    } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
-    }
-};
-// ==========================================
-// 3. UPDATE AMBULANCE DETAILS & DOCUMENTS
+// 3. UPDATE AMBULANCE (With Support Staff)
 // Endpoint: PUT /api/clinic/ambulance/update/:id
 // ==========================================
 const updateClinicAmbulance = async (req, res) => {
@@ -167,20 +225,6 @@ const updateClinicAmbulance = async (req, res) => {
         const ambulance = await Ambulance.findOne({ _id: id, clinicId });
         if (!ambulance) {
             return res.status(404).json({ success: false, message: "Ambulance not found or unauthorized." });
-        }
-
-        // Email uniqueness
-        if (updates.email && updates.email.toLowerCase() !== ambulance.email) {
-            const emailExists = await Ambulance.findOne({ _id: { $ne: id }, email: updates.email.toLowerCase() });
-            if (emailExists) return res.status(400).json({ success: false, message: "Email is already in use." });
-            ambulance.email = updates.email.toLowerCase();
-        }
-
-        // Phone uniqueness
-        if (updates.phone && updates.phone !== ambulance.phone) {
-            const phoneExists = await Ambulance.findOne({ _id: { $ne: id }, phone: updates.phone });
-            if (phoneExists) return res.status(400).json({ success: false, message: "Phone number is already in use." });
-            ambulance.phone = updates.phone;
         }
 
         // Basic Info Updates
@@ -198,6 +242,17 @@ const updateClinicAmbulance = async (req, res) => {
         if (updates.serviceRadius !== undefined) ambulance.serviceRadius = updates.serviceRadius;
         if (updates.availableForEmergency !== undefined) ambulance.availableForEmergency = updates.availableForEmergency === 'true' || updates.availableForEmergency === true;
 
+        // Support Staff Update
+        if (updates.hasNurse !== undefined || updates.nursePrice !== undefined || updates.hasDoctor !== undefined || updates.doctorPrice !== undefined) {
+            if (!ambulance.supportStaff) {
+                ambulance.supportStaff = { nurse: { available: false, price: 0 }, doctor: { available: false, price: 0 } };
+            }
+            if (updates.hasNurse !== undefined) ambulance.supportStaff.nurse.available = updates.hasNurse === 'true' || updates.hasNurse === true;
+            if (updates.nursePrice !== undefined) ambulance.supportStaff.nurse.price = Number(updates.nursePrice);
+            if (updates.hasDoctor !== undefined) ambulance.supportStaff.doctor.available = updates.hasDoctor === 'true' || updates.hasDoctor === true;
+            if (updates.doctorPrice !== undefined) ambulance.supportStaff.doctor.price = Number(updates.doctorPrice);
+        }
+
         // Pricing Updates
         if (updates.singleRidePrice !== undefined || updates.doubleRidePrice !== undefined || updates.baseDistance !== undefined || updates.pricePerKM !== undefined) {
             ambulance.pricing = {
@@ -208,25 +263,12 @@ const updateClinicAmbulance = async (req, res) => {
             };
         }
 
-        // Location Updates
-        if (updates.latitude !== undefined || updates.longitude !== undefined) {
-            ambulance.location = {
-                lat: updates.latitude ? Number(updates.latitude) : ambulance.location.lat,
-                lng: updates.longitude ? Number(updates.longitude) : ambulance.location.lng
-            };
-        }
-
-        // Password Update (Optional)
-        if (updates.password) {
-            ambulance.password = await bcrypt.hash(String(updates.password), 10);
-        }
-
-        // File Updates with Disk Cleanup
+        // File Updates
         const docKeys = ['drivingLicenseFile', 'rcFile', 'insuranceFile', 'fitnessCertificate', 'ambulancePermit'];
         docKeys.forEach(key => {
             if (files[key] && files[key][0]) {
                 if (ambulance.documents && ambulance.documents[key]) {
-                    deleteFile(ambulance.documents[key]); // Purani file delete karein
+                    deleteFile(ambulance.documents[key]);
                 }
                 if (!ambulance.documents) ambulance.documents = {};
                 ambulance.documents[key] = `/uploads/ambulances/${files[key][0].filename}`;
@@ -235,10 +277,14 @@ const updateClinicAmbulance = async (req, res) => {
 
         await ambulance.save();
 
+        const responseData = ambulance.toObject();
+        delete responseData.password;
+        delete responseData.hospitalId;
+
         res.json({
             success: true,
             message: `Ambulance '${ambulance.vehicleNumber}' updated successfully.`,
-            data: ambulance
+            data: responseData
         });
 
     } catch (error) {
@@ -246,6 +292,28 @@ const updateClinicAmbulance = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
+// ==========================================
+// 3. GET ALL AMBULANCES OF LOGGED-IN CLINIC
+// Endpoint: GET /api/clinic/ambulance/my-ambulances
+// ==========================================
+const getMyClinicAmbulances = async (req, res) => {
+    try {
+        const clinicId = req.user.id;
+        const ambulances = await Ambulance.find({ clinicId })
+            .select(' -password') // 👈 hospitalId exclude
+            .sort({ createdAt: -1 });
+
+        res.json({
+            success: true,
+            count: ambulances.length,
+            data: ambulances
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 
 // ==========================================
 // 4. TOGGLE EMERGENCY DUTY STATUS

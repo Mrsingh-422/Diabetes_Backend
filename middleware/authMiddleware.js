@@ -3,7 +3,7 @@ const Admin = require('../models/Admin');
 const User = require('../models/User');
 const Doctor = require('../models/Doctor');
 const Clinic = require('../models/Clinic');
-
+const Ambulance = require('../models/Ambulance'); 
 const Lab = require('../models/Lab');
 const Pharmacy = require('../models/Pharmacy');
 const Food = require('../models/Food');
@@ -46,9 +46,13 @@ const protect = (modelType) => async (req, res, next) => {
                 case 'clinic-doctor':
                     user = await Doctor.findById(decoded.id);
                     break;
-                case 'clinic': // 👈 Added Clinic case here
+                case 'clinic': 
                     user = await Clinic.findById(decoded.id);
                     break;
+                    case 'ambulance':
+                        case 'clinic-ambulance':
+                            user = await Ambulance.findById(decoded.id);
+                            break;
                 case 'lab':
                     user = await Lab.findById(decoded.id);
                     break;

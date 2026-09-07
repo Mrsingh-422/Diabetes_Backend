@@ -8,7 +8,8 @@ const {
     
     getLabsList, approveLab, rejectLab,
     getPharmaciesList, approvePharmacy, rejectPharmacy,
-    getFoodsList, approveFood, rejectFood
+    getFoodsList, approveFood, rejectFood,
+    getClinicAmbulancesList, approveClinicAmbulance, rejectClinicAmbulance
 
 } = require('../../controllers/admin/approvalController');
 
@@ -35,6 +36,10 @@ router.get('/food', protect('admin'), checkRoleAccess(30), getFoodsList);
 router.patch('/food/approve/:id', protect('admin'), checkRoleAccess(30), approveFood);
 router.patch('/food/reject/:id', protect('admin'), checkRoleAccess(30), rejectFood);
 
+// --- CLINIC AMBULANCE (ID: 32) ---
+router.get('/ambulance', protect('admin'), checkRoleAccess(32), getClinicAmbulancesList);
+router.patch('/ambulance/approve/:id', protect('admin'), checkRoleAccess(32), approveClinicAmbulance);
+router.patch('/ambulance/reject/:id', protect('admin'), checkRoleAccess(32), rejectClinicAmbulance);
 
 
 

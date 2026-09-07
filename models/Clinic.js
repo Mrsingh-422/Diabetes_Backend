@@ -44,6 +44,11 @@ const clinicSchema = new Schema(
       type: String,
       default: "",
     },
+    // --- Operational Facilities & Ambulance Toggle ---
+    isAmbulanceAvailable: {
+      type: Boolean,
+      default: false
+    },
     phnOtp: {
       type: String,
       default: "",
