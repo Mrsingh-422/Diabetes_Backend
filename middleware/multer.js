@@ -44,6 +44,7 @@ const clinicUploads = multer({
     { name: 'otherDocuments', maxCount: 10 }
 ]);
 
+
 // ==========================================
 // CLINIC DOCTOR CONFIGURATION 
 // ==========================================
@@ -1158,6 +1159,8 @@ const foodAddonImageUpload = multer({
     fileFilter: docFileFilter,
     limits: { fileSize: 5 * 1024 * 1024 } // 5MB limit
 }).single('imageUrl'); // Key for Postman upload: 'imageUrl'
+
+
 
 module.exports = { 
     clinicUploads,
