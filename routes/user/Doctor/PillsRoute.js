@@ -6,7 +6,8 @@ const {
     addPill,
     recordPillAction,
     updatePill,
-    deletePill,updatePillSettings
+    deletePill,
+    updatePillSettings
 } = require('../../../controllers/user/Doctor/Pills');
 
 // Base route: /user/doctor/pills

@@ -6,6 +6,8 @@ const Doctor = require('../../../models/Doctor');
 const Ambulance = require('../../../models/Ambulance');
 const Coupon = require('../../../models/Coupon');
 const CodConfig = require('../../../models/CodConfig');
+const Ward = require('../../../models/Ward');
+const Bed = require('../../../models/Bed');
 
 const crypto = require('crypto');
 const { 
@@ -313,6 +315,21 @@ const bookClinicOrder = async (req, res) => {
             });
         }
 
+        const targetWardId = calculation.verifiedWard?.wardId || ward?.wardId || null;
+        const targetBedId = calculation.verifiedWard?.bedId || ward?.bedId || null;
+        const targetAmbulanceId = calculation.verifiedAmbulance?.ambulanceId || ambulance?.ambulanceId || null;
+
+        // 🛡️ BED AVAILABILITY VALIDATION
+        if (targetBedId) {
+            const existingBed = await Bed.findById(targetBedId);
+            if (!existingBed) {
+                return res.status(404).json({ success: false, message: "Selected bed unit not found." });
+            }
+            if (existingBed.status === 'Occupied' || existingBed.status === 'Maintenance') {
+                return res.status(400).json({ success: false, message: "Selected bed is already occupied or under maintenance." });
+            }
+        }
+
         const totalPayable = calculation.pricingBreakdown.totalPrice;
         const tempBookingId = `CLN-ORD-${Math.floor(100000 + Math.random() * 900000)}`;
 
@@ -320,10 +337,6 @@ const bookClinicOrder = async (req, res) => {
         if (paymentMethod !== 'COD' && totalPayable > 0) {
             rzpOrder = await createRazorpayOrder(totalPayable, `cln_${tempBookingId}_${Date.now()}`);
         }
-
-        const targetWardId = calculation.verifiedWard?.wardId || ward?.wardId || null;
-        const targetBedId = calculation.verifiedWard?.bedId || ward?.bedId || null;
-        const targetAmbulanceId = calculation.verifiedAmbulance?.ambulanceId || ambulance?.ambulanceId || null;
 
         // Create Master Appointment Document
         const newAppointment = await Appointment.create({
@@ -394,7 +407,7 @@ const bookClinicOrder = async (req, res) => {
                 discountValue: calculation.pricingBreakdown.discountAmount
             } : undefined,
 
-            status: 'Pending',
+            status: paymentMethod === 'COD' || totalPayable === 0 ? 'Confirmed' : 'Pending',
             paymentMethod,
             paymentStatus: 'Pending',
             paymentDetails: {
@@ -402,11 +415,27 @@ const bookClinicOrder = async (req, res) => {
             }
         });
 
+        // 🚨 UPDATE BED STATUS IN DATABASE (For COD or 0 Amount Bookings)
+        if (targetBedId && (paymentMethod === 'COD' || totalPayable === 0)) {
+            await Bed.findByIdAndUpdate(targetBedId, {
+                status: 'Occupied',
+                currentAppointmentId: newAppointment._id
+            });
+            if (targetWardId) {
+                await Ward.findByIdAndUpdate(targetWardId, {
+                    $inc: { availableBeds: -1 }
+                });
+            }
+        } else if (targetBedId) {
+            // Online Payment Pending: Bed is Reserved
+            await Bed.findByIdAndUpdate(targetBedId, {
+                status: 'Reserved',
+                currentAppointmentId: newAppointment._id
+            });
+        }
+
         // COD Flow
         if (paymentMethod === 'COD' || totalPayable === 0) {
-            newAppointment.status = 'Confirmed';
-            await newAppointment.save();
-
             return res.status(201).json({
                 success: true,
                 isOnlinePayment: false,

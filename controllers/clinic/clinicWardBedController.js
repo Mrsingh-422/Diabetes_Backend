@@ -74,58 +74,126 @@ const createClinicWardUnit = async (req, res) => {
 };
 
 // ==========================================
-// 2. GET ALL WARDS OF CLINIC (With Live Capacity)
-// Endpoint: GET /api/clinic/wards/list
+// 🏥 1. GET CLINIC WARDS (With Real-Time Available/Occupied Beds Count)
 // ==========================================
 const getClinicWards = async (req, res) => {
     try {
-        const clinicId = req.user.id;
-        const wards = await Ward.find({ clinicId }).sort({ createdAt: -1 });
+        const clinicId = req.params.clinicId || req.user.id;
+        const { date } = req.query;
 
-        const data = wards.map(ward => ({
-            _id: ward._id,
-            name: ward.name,
-            type: ward.type,
-            totalBeds: ward.totalBeds,
-            availableBeds: ward.availableBeds,
-            occupiedBeds: Math.max(0, ward.totalBeds - ward.availableBeds),
-            pricePerDay: ward.pricePerDay,
-            isActive: ward.isActive,
-            createdAt: ward.createdAt
-        }));
+        const checkDate = date ? new Date(date) : new Date();
+
+        // 1. Fetch all wards for this clinic
+        const wards = await Ward.find({ clinicId }).lean();
+
+        // 2. Fetch all active/confirmed bed appointments for this clinic on this date
+        const activeBookings = await Appointment.find({
+            clinicId,
+            bookingType: { $in: ['Admission', 'Emergency', 'IPD', 'EMERGENCY'] },
+            status: { $in: ['Confirmed', 'In-Progress', 'Admitted', 'Pending'] },
+            startDate: { $lte: checkDate },
+            endDate: { $gte: checkDate }
+        }).select('bedId bedNumber wardName').lean();
+
+        const bookedBedIds = new Set(activeBookings.map(b => b.bedId?.toString()).filter(Boolean));
+        const bookedBedNumbers = new Set(activeBookings.map(b => b.bedNumber).filter(Boolean));
+
+        // 3. Dynamically calculate available vs occupied count
+        const updatedWards = wards.map(ward => {
+            const totalBeds = Array.isArray(ward.beds) ? ward.beds.length : (ward.totalBeds || 0);
+            
+            let occupiedCount = 0;
+            if (Array.isArray(ward.beds)) {
+                occupiedCount = ward.beds.filter(bed => {
+                    const isIdBooked = bed._id && bookedBedIds.has(bed._id.toString());
+                    const isNumBooked = bed.bedNumber && bookedBedNumbers.has(bed.bedNumber);
+                    const isManuallyOccupied = bed.status === 'Occupied' || bed.status === 'Reserved' || bed.isOccupied === true;
+                    return isIdBooked || isNumBooked || isManuallyOccupied;
+                }).length;
+            }
+
+            const availableBedsCount = Math.max(0, totalBeds - occupiedCount);
+
+            return {
+                ...ward,
+                totalBeds,
+                availableBeds: availableBedsCount,
+                occupiedBeds: occupiedCount,
+                availabilityText: `${availableBedsCount} of ${totalBeds} Free` // 👈 Frontend Badge (e.g. 7 of 8 Free)
+            };
+        });
 
         res.json({
             success: true,
-            count: data.length,
-            data
+            count: updatedWards.length,
+            data: updatedWards
         });
+
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
 };
 
+
 // ==========================================
-// 3. GET ALL BEDS IN A SPECIFIC WARD (Grid View)
-// Endpoint: GET /api/clinic/wards/:wardId/beds
+// 🛏️ 2. GET BEDS IN CLINIC WARD (With Real-Time Reserved/Occupied Flags)
 // ==========================================
 const getBedsInClinicWard = async (req, res) => {
     try {
         const { wardId } = req.params;
-        const clinicId = req.user.id;
+        const { startDate, endDate } = req.query;
 
-        const beds = await Bed.find({ wardId, clinicId })
-            .populate({
-                path: 'currentAppointmentId',
-                select: 'bookingId appointmentDate patients userId',
-                populate: { path: 'userId', select: 'name phone' }
-            })
-            .sort({ bedNumber: 1 });
+        const ward = await Ward.findById(wardId).lean();
+        if (!ward) {
+            return res.status(404).json({ success: false, message: "Ward not found." });
+        }
+
+        // Admission Date Range Check
+        const start = startDate ? new Date(startDate) : new Date();
+        const end = endDate ? new Date(endDate) : new Date(start);
+
+        // 🚨 Check conflicting active appointments in database
+        const activeAppointments = await Appointment.find({
+            wardId,
+            status: { $in: ['Confirmed', 'In-Progress', 'Admitted', 'Pending'] },
+            $or: [
+                { startDate: { $lte: end }, endDate: { $gte: start } } // Overlapping stay dates
+            ]
+        }).select('bedId bedNumber bookingId status').lean();
+
+        const occupiedBedIds = new Set(activeAppointments.map(a => a.bedId?.toString()).filter(Boolean));
+        const occupiedBedNumbers = new Set(activeAppointments.map(a => a.bedNumber).filter(Boolean));
+
+        // 🛡️ Map each bed with real-time status
+        const bedsList = (ward.beds || []).map(bed => {
+            const isBookedById = bed._id && occupiedBedIds.has(bed._id.toString());
+            const isBookedByNum = bed.bedNumber && occupiedBedNumbers.has(bed.bedNumber);
+            const isManuallyOccupied = bed.status === 'Occupied' || bed.status === 'Reserved' || bed.isOccupied === true;
+
+            const isOccupied = isBookedById || isBookedByNum || isManuallyOccupied;
+
+            return {
+                _id: bed._id,
+                bedId: bed._id,
+                bedNumber: bed.bedNumber,
+                dailyCharge: bed.dailyCharge || ward.pricePerDay || 600,
+                status: isOccupied ? 'Occupied' : 'Available',  // 👈 Frontend matches: 'Occupied' (Grey) / 'Available' (Green)
+                isAvailable: !isOccupied,
+                isOccupied: isOccupied
+            };
+        });
 
         res.json({
             success: true,
-            count: beds.length,
-            data: beds
+            wardId: ward._id,
+            wardName: ward.wardName,
+            wardType: ward.wardType,
+            pricePerDay: ward.pricePerDay || 600,
+            availableBedsCount: bedsList.filter(b => b.isAvailable).length,
+            totalBedsCount: bedsList.length,
+            beds: bedsList
         });
+
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
