@@ -32,16 +32,22 @@ const clinicUploads = multer({
         filename: (req, file, cb) => cb(null, `clinic-${Date.now()}${path.extname(file.originalname)}`)
     }),
     fileFilter: docFileFilter,
-    limits: { fileSize: 5 * 1024 * 1024 } // 5MB limit
+    limits: { fileSize: 10 * 1024 * 1024 } 
 }).fields([
-    { name: 'image', maxCount: 1 },
-    { name: 'posterimage', maxCount: 1 },
-    { name: 'certificateImage', maxCount: 1 },
-    { name: 'licenceCertificate', maxCount: 1 },
-    { name: 'clinicImages', maxCount: 10 },
-    { name: 'achievementImages', maxCount: 10 },
-    { name: 'licenseDocument', maxCount: 5 },
-    { name: 'otherDocuments', maxCount: 10 }
+    { name: 'image', maxCount: 1 },                 
+    { name: 'posterimage', maxCount: 1 },           
+    { name: 'certificateImage', maxCount: 1 },      
+    { name: 'licenceCertificate', maxCount: 1 },    
+    { name: 'clinicImages', maxCount: 10 },         
+    { name: 'achievementImages', maxCount: 10 },    
+    { name: 'licenseDocument', maxCount: 5 },       
+    { name: 'otherDocuments', maxCount: 10 },       
+
+    //these are for clinic checkout form
+    { name: 'medicalDocument', maxCount: 1 },
+    { name: 'prescription', maxCount: 1 },
+    { name: 'file', maxCount: 1 },
+    { name: 'reports', maxCount: 5 }
 ]);
 
 

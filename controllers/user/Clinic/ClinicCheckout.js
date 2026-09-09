@@ -276,11 +276,11 @@ const bookClinicOrder = async (req, res) => {
         if (req.files) {
             const file = req.files['medicalDocument']?.[0] || req.files['prescription']?.[0] || req.files['file']?.[0];
             if (file) {
-                uploadedFileUrl = `/uploads/prescriptions/${file.filename}`;
+                uploadedFileUrl = `/uploads/clinics/${file.filename}`;
                 uploadedFileName = file.originalname;
             }
         } else if (req.file) {
-            uploadedFileUrl = `/uploads/prescriptions/${req.file.filename}`;
+            uploadedFileUrl = `/uploads/clinics/${req.file.filename}`;
             uploadedFileName = req.file.originalname;
         }
 
