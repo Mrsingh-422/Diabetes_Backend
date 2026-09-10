@@ -17,7 +17,7 @@ const parseField = (val) => {
 };
 
 // ==========================================
-// 🏥 1. CREATE CLINIC APPOINTMENT / ADMISSION (Updated with Auto-User & Family Support)
+// 🏥 1. CREATE CLINIC APPOINTMENT / ADMISSION
 // Full Path: POST /api/clinic/booking/create
 // ==========================================
 const createClinicAppointmentByClinic = async (req, res) => {
@@ -29,44 +29,53 @@ const createClinicAppointmentByClinic = async (req, res) => {
         const patient = parseField(body.patient);
         const address = parseField(body.address);
 
-        const patientPhone = body.phone || patient?.phone || address?.phone || "";
+        const rawPhone = body.phone || patient?.phone || address?.phone || "";
+        const patientPhone = rawPhone.toString().trim();
+        const countryCode = (body.countryCode || patient?.countryCode || "+91").trim();
         const patientName = body.name || patient?.name || patient?.patientName || "Patient";
         const patientAge = Number(body.age || patient?.age || patient?.patientAge) || 30;
         const patientGender = body.gender || patient?.gender || 'Male';
-        const relation = (body.relation || patient?.relation || 'Self').trim(); // 'Self', 'Father', 'Mother', 'Son', 'Daughter', 'Spouse', 'Other'
+        const relation = (body.relation || patient?.relation || 'Self').trim();
 
-        if (!patientPhone || patientPhone.trim() === '') {
+        if (!patientPhone || patientPhone === '') {
             return res.status(400).json({
                 success: false,
-                message: "Patient contact phone number is mandatory to link/create user account."
+                message: "Patient contact phone number is mandatory."
             });
         }
 
         // ========================================================
-        // 👤 STEP 1: USER REGISTRATION (profileStatus: 'Incomplete')
+        // 👤 STEP 1: USER REGISTRATION (NO DUMMY PASSWORD)
         // ========================================================
-        let user = await User.findOne({ phone: patientPhone });
+        let user = await User.findOne({ 
+            $or: [
+                { phone: patientPhone },
+                { phone: patientPhone, countryCode }
+            ]
+        });
         
         if (!user) {
-            // New user created ONLY with Name & Phone. userAddress is left EMPTY [].
+            // Clean User Creation with isUserRegistered: true & isPasswordAvailable: false
             user = await User.create({
                 name: relation.toLowerCase() === 'self' ? patientName : (address?.name || patientName),
                 phone: patientPhone,
-                password: crypto.randomBytes(8).toString('hex'), // Temporary secure hash
-                profileStatus: 'Incomplete',                     // 👈 User profile incomplete until full registration
+                countryCode: countryCode,
+                password: null,                // 👈 NO DUMMY PASSWORD (Clean null)
+                isUserRegistered: true,        // 👈 User is registered in system
+                isPasswordAvailable: false,    // 👈 Password is NOT available yet
+                profileStatus: 'Incomplete',   // 👈 Incomplete profile until full KYC
                 role: 'user',
-                userAddress: [],                                 // 👈 Intentionally empty as requested
+                userAddress: [],
                 familyMember: []
             });
         }
 
         // ========================================================
-        // 👨‍👩‍👦 STEP 2: FAMILY MEMBER HANDLING & LINKING
+        // 👨‍👩‍👦 STEP 2: FAMILY MEMBER HANDLING
         // ========================================================
         const isSelfBooking = relation.toLowerCase() === 'self';
         
         if (!isSelfBooking) {
-            // Check if family member already exists in user's profile
             const memberExists = user.familyMember && user.familyMember.some(
                 m => m.memberName?.toLowerCase() === patientName.toLowerCase() && m.relation?.toLowerCase() === relation.toLowerCase()
             );
@@ -84,7 +93,7 @@ const createClinicAppointmentByClinic = async (req, res) => {
         }
 
         // 2. Booking Core Configurations
-        const bookingType = body.bookingType || 'Appointment'; // 'Appointment' (OPD), 'Admission' (IPD), 'Emergency'
+        const bookingType = body.bookingType || 'Appointment';
         const consultationType = body.consultationType || 'Clinic Visit';
         const doctorId = body.doctorId || null;
         const ambulanceId = body.ambulanceId || null;
@@ -143,10 +152,10 @@ const createClinicAppointmentByClinic = async (req, res) => {
         const subtotal = Number(body.totalAmount) || (doctorFee + bedFee + ambulanceFee);
         const tempBookingId = `CLN-ADM-${Math.floor(100000 + Math.random() * 900000)}`;
 
-        // 7. Create Master Appointment (Linked strictly to user._id)
+        // 7. Create Master Appointment
         const newAppointment = await Appointment.create({
             bookingId: tempBookingId,
-            userId: user._id, // 👈 Linked to user account for future login & history
+            userId: user._id,
             clinicId,
             doctorId: verifiedDoctor ? verifiedDoctor._id : (doctorId || null),
             ambulanceId: verifiedAmbulance ? verifiedAmbulance._id : (ambulanceId || null),
@@ -160,7 +169,6 @@ const createClinicAppointmentByClinic = async (req, res) => {
             appointmentDate,
             appointmentTime,
 
-            // Patient subdocument
             patients: [{
                 patientName: patientName,
                 patientAge: patientAge,
@@ -170,7 +178,6 @@ const createClinicAppointmentByClinic = async (req, res) => {
                 isMainUser: isSelfBooking
             }],
 
-            // Delivery / Contact Address (Stored only in Appointment, not in User model)
             address: address ? {
                 name: address.name || patientName,
                 phone: patientPhone,
@@ -241,6 +248,8 @@ const createClinicAppointmentByClinic = async (req, res) => {
                 patientName: newAppointment.patients?.[0]?.patientName,
                 relation: newAppointment.patients?.[0]?.relation,
                 userProfileStatus: user.profileStatus,
+                isUserRegistered: user.isUserRegistered,
+                isPasswordAvailable: user.isPasswordAvailable,
                 wardName: newAppointment.wardName,
                 bedNumber: newAppointment.bedNumber,
                 totalAmount: newAppointment.totalAmount,
@@ -254,7 +263,6 @@ const createClinicAppointmentByClinic = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
-
 // ==========================================
 // 📋 2. GET ALL CLINIC BOOKINGS (With Pagination, OPD/IPD/Emergency Filter & Search)
 // Full Path: GET /api/clinic/booking/all-bookings

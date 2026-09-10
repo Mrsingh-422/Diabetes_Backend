@@ -32,6 +32,8 @@ const {
     removeAddress,
     removeEmergency,getUserDashboard,
     updateToUserAddress,
+    setInitialPassword,
+    checkPasswordStatus
     
 } = require('../../controllers/user/authUser.js'); 
 
@@ -41,6 +43,11 @@ router.get('/dashboard', protect('user'), getUserDashboard); // User Dashboard S
 // Auth
 router.post('/register', registerUser);
 router.post('/login', loginUser);
+router.post('/set-password', setInitialPassword); // Directly set initial password without OTP
+router.post('/check-password-status', checkPasswordStatus); // Directly set initial password without OTP
+
+
+
 
 router.post('/logout', protect('user'), logoutUser);
 

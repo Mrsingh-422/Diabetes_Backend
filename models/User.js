@@ -4,7 +4,26 @@ const userSchema = new mongoose.Schema({
     name: { type: String, required: true }, // Figma: "User" field
     email: { type: String, unique: true, sparse: true },
     phone: { type: String, unique: true, sparse: true },
-    password: { type: String, required: true, select: false },
+    password: { 
+        type: String, 
+        default: null, 
+        select: false 
+    },
+     //  NEW FLAG: Track whether user has set their own password
+     isPasswordSet: { 
+        type: Boolean, 
+        default: false 
+    },
+
+ //  FIX: Default true rahega (Normal users ke liye)
+ isPasswordAvailable: { 
+    type: Boolean, 
+    default: false 
+},
+isUserRegistered: { 
+    type: Boolean, 
+    default: false 
+},
 
     profilePic: { type: String, default: null },
 

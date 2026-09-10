@@ -28,9 +28,11 @@ const addClinicDoctor = async (req, res) => {
             clinicFee = 0,
             onlineFee = 0,
             homeFee = 0,
+
+            // 🚨 3-WAY DIRECT AVAILABILITY TOGGLES
             isClinicAvailable = true,
             isOnlineAvailable = true,
-            isHomeAvailable = true,
+            isHomeAvailable = false,
 
             // --- PRIMARY REGISTRATION DETAILS ---
             licenseNumber,
@@ -94,7 +96,7 @@ const addClinicDoctor = async (req, res) => {
             });
         }
 
-        // 4. Parse Qualifications JSON (with Council, Reg No & State Name)
+        // 4. Parse Qualifications JSON
         let parsedQualifications = [];
         let primaryDegreeString = "MBBS";
 
@@ -112,11 +114,16 @@ const addClinicDoctor = async (req, res) => {
             }
         }
 
-        // 5. Default Password Hash
+        // 5. Parse Availability Booleans
+        const clinicAvail = isClinicAvailable === 'true' || isClinicAvailable === true;
+        const onlineAvail = isOnlineAvailable === 'true' || isOnlineAvailable === true;
+        const homeAvail = isHomeAvailable === 'true' || isHomeAvailable === true;
+
+        // 6. Default Password Hash
         const rawPassword = password || phone || 'Doctor@123';
         const hashedPassword = await bcrypt.hash(String(rawPassword), 10);
 
-        // 6. Create Doctor Record with 'Pending' Status
+        // 7. Create Doctor Record with 'Pending' Status
         const newDoctor = await Doctor.create({
             clinicId: clinicId,
             name: name.startsWith('Dr.') ? name : `Dr. ${name}`,
@@ -141,7 +148,7 @@ const addClinicDoctor = async (req, res) => {
             // Professional Profile & Registration Details
             speciality: specialist,
             qualification: primaryDegreeString,
-            qualifications: parsedQualifications, // Includes councilName, registrationNo, stateName
+            qualifications: parsedQualifications,
             experienceYears: experience ? Number(experience) : 0,
             licenseNumber: licenseNumber || councilNumber || "",
             councilNumber: councilNumber || licenseNumber || "",
@@ -153,10 +160,16 @@ const addClinicDoctor = async (req, res) => {
                 online: Number(onlineFee),
                 home: Number(homeFee)
             },
+
+            // 🚨 DIRECT AVAILABILITY BOOLEAN KEYS
+            isClinicAvailable: clinicAvail,
+            isOnlineAvailable: onlineAvail,
+            isHomeAvailable: homeAvail,
+
             consultationStatus: {
-                clinic: isClinicAvailable === 'true' || isClinicAvailable === true,
-                online: isOnlineAvailable === 'true' || isOnlineAvailable === true,
-                home: isHomeAvailable === 'true' || isHomeAvailable === true
+                clinic: clinicAvail,
+                online: onlineAvail,
+                home: homeAvail
             },
 
             // Media
@@ -164,21 +177,20 @@ const addClinicDoctor = async (req, res) => {
             signatureImage: signatureImagePath,
             documents: documentPaths,
 
-            // 🚨 STATUS: PENDING FOR ADMIN APPROVAL
             profileStatus: 'Pending',
             dutyStatus: 'Off Duty',
             isActive: true,
             isOnline: false
         });
 
-        // 7. Link Doctor into Clinic model's DoctorId array
+        // 8. Link Doctor into Clinic model
         const clinic = await Clinic.findByIdAndUpdate(
             clinicId, 
             { $addToSet: { DoctorId: newDoctor._id } },
             { new: true }
         );
 
-        // 8. 🚀 CREATE ADMIN APPROVAL REQUEST
+        // 9. Create Admin Approval Request
         await ProfileUpdateRequest.create({
             vendorId: newDoctor._id,
             vendorModel: 'Doctor',
@@ -190,6 +202,9 @@ const addClinicDoctor = async (req, res) => {
                 qualification: newDoctor.qualification,
                 qualifications: parsedQualifications,
                 fees: newDoctor.fees,
+                isClinicAvailable: clinicAvail,
+                isOnlineAvailable: onlineAvail,
+                isHomeAvailable: homeAvail,
                 licenseNumber: newDoctor.licenseNumber,
                 councilName: newDoctor.councilName,
                 clinicId: clinicId,
@@ -200,7 +215,7 @@ const addClinicDoctor = async (req, res) => {
             status: 'Pending'
         });
 
-        // 9. 🔔 NOTIFY ADMINS ABOUT NEW DOCTOR VERIFICATION
+        // 10. Notify Admin
         try {
             await notifyAdminsAndVendor(
                 newDoctor._id,
@@ -209,7 +224,7 @@ const addClinicDoctor = async (req, res) => {
                 `${clinic ? clinic.clinicName : 'Clinic'} has registered Dr. ${newDoctor.name}. Please review credentials for approval.`
             );
         } catch (notifErr) {
-            console.error("Admin Notification error for doctor creation:", notifErr.message);
+            console.error("Admin Notification error:", notifErr.message);
         }
 
         res.status(201).json({
@@ -248,7 +263,7 @@ const getMyClinicDoctors = async (req, res) => {
 };
 
 // ==========================================
-// 3. UPDATE CLINIC DOCTOR
+// 3. UPDATE CLINIC DOCTOR (Sends Update Request to Admin for Approval)
 // Endpoint: PUT /api/clinic/doctors/update/:id
 // ==========================================
 const updateClinicDoctor = async (req, res) => {
@@ -256,8 +271,9 @@ const updateClinicDoctor = async (req, res) => {
         const { id } = req.params;
         const clinicId = req.user.id;
         const files = req.files || {};
-        const updates = { ...req.body };
+        const updates = req.body || {};
 
+        // 1. Verify Doctor belongs to this logged-in clinic
         const doctor = await Doctor.findOne({ _id: id, clinicId });
         if (!doctor) {
             return res.status(404).json({
@@ -266,61 +282,82 @@ const updateClinicDoctor = async (req, res) => {
             });
         }
 
-        // Email uniqueness
+        // 2. Email Uniqueness Check
         if (updates.email && updates.email.toLowerCase() !== doctor.email) {
             const emailExists = await Doctor.findOne({ _id: { $ne: id }, email: updates.email.toLowerCase() });
             if (emailExists) {
-                return res.status(400).json({ success: false, message: "This email is already in use." });
+                return res.status(400).json({ success: false, message: "This email is already in use by another doctor." });
             }
-            doctor.email = updates.email.toLowerCase();
         }
 
-        // Phone uniqueness
+        // 3. Phone Uniqueness Check
         if (updates.phone && updates.phone !== doctor.phone) {
             const phoneExists = await Doctor.findOne({ _id: { $ne: id }, phone: updates.phone });
             if (phoneExists) {
-                return res.status(400).json({ success: false, message: "This phone number is already registered." });
+                return res.status(400).json({ success: false, message: "This phone number is already registered with another doctor." });
             }
-            doctor.phone = updates.phone;
         }
 
-        // Basic Info
-        if (updates.name) doctor.name = updates.name.startsWith('Dr.') ? updates.name : `Dr. ${updates.name}`;
-        if (updates.altPhone !== undefined) doctor.alternatePhone = updates.altPhone;
-        if (updates.gender) doctor.gender = updates.gender;
-        if (updates.specialist) doctor.speciality = updates.specialist;
-        if (updates.experience !== undefined) doctor.experienceYears = Number(updates.experience);
-        if (updates.licenseNumber) doctor.licenseNumber = updates.licenseNumber;
-        if (updates.councilName !== undefined) doctor.councilName = updates.councilName;
-        if (updates.councilNumber !== undefined) doctor.councilNumber = updates.councilNumber;
-        if (updates.address !== undefined) doctor.address = updates.address;
-        if (updates.city !== undefined) doctor.city = updates.city;
-        if (updates.state !== undefined) doctor.state = updates.state;
-        if (updates.pincode !== undefined) doctor.pincode = updates.pincode;
+        // 4. Collect Proposed Updates Object
+        const proposedUpdates = {};
 
-        // 3-Way Fees Update
+        // Basic Info
+        if (updates.name) proposedUpdates.name = updates.name.startsWith('Dr.') ? updates.name : `Dr. ${updates.name}`;
+        if (updates.email) proposedUpdates.email = updates.email.toLowerCase();
+        if (updates.phone) proposedUpdates.phone = updates.phone;
+        if (updates.altPhone !== undefined) proposedUpdates.alternatePhone = updates.altPhone;
+        if (updates.gender) proposedUpdates.gender = updates.gender;
+        if (updates.specialist) proposedUpdates.speciality = updates.specialist;
+        if (updates.experience !== undefined) proposedUpdates.experienceYears = Number(updates.experience);
+        
+        // Registration & License
+        if (updates.licenseNumber) proposedUpdates.licenseNumber = updates.licenseNumber;
+        if (updates.councilName !== undefined) proposedUpdates.councilName = updates.councilName;
+        if (updates.councilNumber !== undefined) proposedUpdates.councilNumber = updates.councilNumber;
+
+        // Address & Location
+        if (updates.address !== undefined) proposedUpdates.address = updates.address;
+        if (updates.city !== undefined) proposedUpdates.city = updates.city;
+        if (updates.state !== undefined) proposedUpdates.state = updates.state;
+        if (updates.pincode !== undefined) proposedUpdates.pincode = updates.pincode;
+
+        if (updates.latitude !== undefined || updates.longitude !== undefined) {
+            proposedUpdates.location = {
+                lat: updates.latitude ? Number(updates.latitude) : doctor.location?.lat || 0,
+                lng: updates.longitude ? Number(updates.longitude) : doctor.location?.lng || 0
+            };
+        }
+
+        // 3-Way Fees
         if (updates.clinicFee !== undefined || updates.onlineFee !== undefined || updates.homeFee !== undefined) {
-            doctor.fees = {
+            proposedUpdates.fees = {
                 clinic: updates.clinicFee !== undefined ? Number(updates.clinicFee) : doctor.fees?.clinic || 0,
                 online: updates.onlineFee !== undefined ? Number(updates.onlineFee) : doctor.fees?.online || 0,
                 home: updates.homeFee !== undefined ? Number(updates.homeFee) : doctor.fees?.home || 0
             };
         }
 
-        // Location GPS
-        if (updates.latitude !== undefined || updates.longitude !== undefined) {
-            doctor.location = {
-                lat: updates.latitude ? Number(updates.latitude) : doctor.location?.lat || 0,
-                lng: updates.longitude ? Number(updates.longitude) : doctor.location?.lng || 0
+        // 🚨 DIRECT AVAILABILITY BOOLEAN KEYS UPDATE
+        if (updates.isClinicAvailable !== undefined) {
+            proposedUpdates.isClinicAvailable = (updates.isClinicAvailable === 'true' || updates.isClinicAvailable === true);
+        }
+        if (updates.isOnlineAvailable !== undefined) {
+            proposedUpdates.isOnlineAvailable = (updates.isOnlineAvailable === 'true' || updates.isOnlineAvailable === true);
+        }
+        if (updates.isHomeAvailable !== undefined) {
+            proposedUpdates.isHomeAvailable = (updates.isHomeAvailable === 'true' || updates.isHomeAvailable === true);
+        }
+
+        // Sync consultationStatus
+        if (updates.isClinicAvailable !== undefined || updates.isOnlineAvailable !== undefined || updates.isHomeAvailable !== undefined) {
+            proposedUpdates.consultationStatus = {
+                clinic: updates.isClinicAvailable !== undefined ? (updates.isClinicAvailable === 'true' || updates.isClinicAvailable === true) : doctor.isClinicAvailable,
+                online: updates.isOnlineAvailable !== undefined ? (updates.isOnlineAvailable === 'true' || updates.isOnlineAvailable === true) : doctor.isOnlineAvailable,
+                home: updates.isHomeAvailable !== undefined ? (updates.isHomeAvailable === 'true' || updates.isHomeAvailable === true) : doctor.isHomeAvailable
             };
         }
 
-        // Password change
-        if (updates.password) {
-            doctor.password = await bcrypt.hash(String(updates.password), 10);
-        }
-
-        // Qualifications with Council & State Details
+        // Qualifications Parsing
         if (updates.qualifications) {
             try {
                 const parsedQualifications = typeof updates.qualifications === 'string'
@@ -328,48 +365,98 @@ const updateClinicDoctor = async (req, res) => {
                     : updates.qualifications;
 
                 if (Array.isArray(parsedQualifications) && parsedQualifications.length > 0) {
-                    doctor.qualification = parsedQualifications.map(q => q.degree).filter(Boolean).join(', ');
-                    doctor.qualifications = parsedQualifications;
+                    proposedUpdates.qualification = parsedQualifications.map(q => q.degree).filter(Boolean).join(', ');
+                    proposedUpdates.qualifications = parsedQualifications;
                 }
             } catch (err) {
                 console.warn("Qualifications parse error:", err.message);
             }
         }
 
-        // File replacements & disk cleanup
+        // Password change (if provided)
+        if (updates.password) {
+            proposedUpdates.password = await bcrypt.hash(String(updates.password), 10);
+        }
+
+        // File Upload Handling
         if (files.profileImage && files.profileImage.length > 0) {
-            if (doctor.profileImage) deleteFile(doctor.profileImage);
-            doctor.profileImage = `/uploads/doctors/${files.profileImage[0].filename}`;
+            proposedUpdates.profileImage = `/uploads/doctors/${files.profileImage[0].filename}`;
         }
 
         if (files.signature && files.signature.length > 0) {
-            if (doctor.signatureImage) deleteFile(doctor.signatureImage);
-            doctor.signatureImage = `/uploads/doctors/${files.signature[0].filename}`;
+            proposedUpdates.signatureImage = `/uploads/doctors/${files.signature[0].filename}`;
         }
 
+        // Documents array
+        const updatedDocuments = [...(doctor.documents || [])];
         if (files.licenseCert && files.licenseCert.length > 0) {
-            doctor.documents.push(`/uploads/doctors/${files.licenseCert[0].filename}`);
+            updatedDocuments.push(`/uploads/doctors/${files.licenseCert[0].filename}`);
         }
         if (files.idProof && files.idProof.length > 0) {
-            doctor.documents.push(`/uploads/doctors/${files.idProof[0].filename}`);
+            updatedDocuments.push(`/uploads/doctors/${files.idProof[0].filename}`);
         }
         if (files.degreeCertificates && files.degreeCertificates.length > 0) {
             files.degreeCertificates.forEach(f => {
-                doctor.documents.push(`/uploads/doctors/${f.filename}`);
+                updatedDocuments.push(`/uploads/doctors/${f.filename}`);
             });
         }
+        if (updatedDocuments.length > 0) {
+            proposedUpdates.documents = updatedDocuments;
+        }
 
-        await doctor.save();
+        // Clinic details
+        const clinic = await Clinic.findById(clinicId).select('name clinicName');
 
-        res.json({
+        // 🚀 5. CREATE OR UPDATE PENDING APPROVAL REQUEST
+        const approvalRequest = await ProfileUpdateRequest.findOneAndUpdate(
+            { 
+                vendorId: doctor._id, 
+                vendorModel: 'Doctor', 
+                status: 'Pending' 
+            },
+            {
+                $set: {
+                    updatedFields: {
+                        ...proposedUpdates, // 👈 isClinicAvailable, isOnlineAvailable, isHomeAvailable included here
+                        doctorId: doctor._id,
+                        doctorCurrentName: doctor.name,
+                        clinicId: clinicId,
+                        clinicName: clinic ? (clinic.clinicName || clinic.name) : "Clinic"
+                    },
+                    status: 'Pending',
+                    rejectionReason: ""
+                }
+            },
+            { new: true, upsert: true, setDefaultsOnInsert: true }
+        );
+
+        // 6. Notify Admin
+        try {
+            await notifyAdminsAndVendor(
+                doctor._id,
+                'doctor',
+                "Clinic Doctor Update Approval Request",
+                `${clinic ? (clinic.clinicName || clinic.name) : 'Clinic'} has submitted updated details for Dr. ${doctor.name}. Please review and approve.`
+            );
+        } catch (notifErr) {
+            console.error("Admin notification error:", notifErr.message);
+        }
+
+        res.status(200).json({
             success: true,
-            message: `Dr. ${doctor.name.replace(/^Dr\.\s*/, '')} details updated successfully.`,
-            data: doctor
+            message: `Profile update request for Dr. ${doctor.name} has been submitted to Admin for approval.`,
+            status: 'Pending',
+            requestId: approvalRequest._id,
+            data: {
+                doctorId: doctor._id,
+                doctorName: doctor.name,
+                proposedUpdates: approvalRequest.updatedFields
+            }
         });
 
     } catch (error) {
         console.error("Update Clinic Doctor Error:", error);
-        res.status(500).json({ success: false, message: error.message });
+        res.status(500).json({ success: false, message: error.message || "Failed to submit update request." });
     }
 };
 

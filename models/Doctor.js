@@ -63,7 +63,19 @@ const doctorSchema = new mongoose.Schema({
         lat: { type: Number, default: 0 },
         lng: { type: Number, default: 0 }
     },
-
+         //  NEW DIRECT AVAILABILITY TOGGLE KEYS
+    isClinicAvailable: { 
+        type: Boolean, 
+        default: true 
+    },
+    isOnlineAvailable: { 
+        type: Boolean, 
+        default: true 
+    },
+    isHomeAvailable: { 
+        type: Boolean, 
+        default: false 
+    },
     slotDuration: { type: Number, default: 30 },
     availability: [{
         day: { type: String, enum: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] },

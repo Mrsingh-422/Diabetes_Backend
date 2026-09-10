@@ -84,42 +84,91 @@ const verifyOTP = async (req, res) => {
     }
 };
 
-// --- 3. UPLOAD DOCUMENTS ---
+// ==========================================
+// 3. UPLOAD DOCUMENTS (Step 3 - Fixed for All Multer Keys)
+// Endpoint: PUT /api/auth/doctor/upload-docs
+// ==========================================
 const uploadDocuments = async (req, res) => {
     try {
-        const doctorId = req.user.id; // Middleware se aayega
-        const { qualification, councilNumber, councilName, licenseNumber, speciality } = req.body;
-
-        const updateData = {
+        const doctorId = req.user.id; // protect('doctor') middleware se aayega
+        const files = req.files || {};
+        const { 
             qualification, 
             councilNumber, 
-            councilName,
+            councilName, 
             licenseNumber, 
             speciality,
-            profileStatus: 'Pending' 
+            experienceYears,
+            about
+        } = req.body;
+
+        const updateData = {
+            profileStatus: 'Pending' // Admin review ke liye status
         };
 
-        if (req.files?.profileImage) {
-            updateData.profileImage = req.files.profileImage[0].path;
+        // 1. Text Fields Map Karna
+        if (qualification) updateData.qualification = qualification;
+        if (speciality) updateData.speciality = speciality;
+        if (councilNumber) updateData.councilNumber = councilNumber;
+        if (councilName) updateData.councilName = councilName;
+        if (licenseNumber) updateData.licenseNumber = licenseNumber;
+        if (experienceYears) updateData.experienceYears = Number(experienceYears);
+        if (about) updateData.about = about;
+
+        // 2. Single Images (Profile Image & Signature)
+        if (files.profileImage && files.profileImage[0]) {
+            updateData.profileImage = `/uploads/doctors/${files.profileImage[0].filename}`;
         }
-        if (req.files?.certificates) {
-            updateData.documents = req.files.certificates.map(f => f.path);
+        if (files.signatureImage && files.signatureImage[0]) {
+            updateData.signatureImage = `/uploads/doctors/${files.signatureImage[0].filename}`;
         }
 
-        const updated = await Doctor.findByIdAndUpdate(doctorId, updateData, { new: true });
+        // 3. 🚨 ALL DOCUMENTS COLLECTION (licenseDoc + qualificationDoc + photoId + certificates)
+        const documentPaths = [];
+
+        if (files.licenseDoc && files.licenseDoc[0]) {
+            documentPaths.push(`/uploads/doctors/${files.licenseDoc[0].filename}`);
+        }
+        if (files.qualificationDoc && files.qualificationDoc[0]) {
+            documentPaths.push(`/uploads/doctors/${files.qualificationDoc[0].filename}`);
+        }
+        if (files.photoId && files.photoId[0]) {
+            documentPaths.push(`/uploads/doctors/${files.photoId[0].filename}`);
+        }
+        if (files.certificates && files.certificates.length > 0) {
+            files.certificates.forEach(f => {
+                documentPaths.push(`/uploads/doctors/${f.filename}`);
+            });
+        }
+
+        // Agar koi bhi document file aayi hai toh documents array me set karein
+        if (documentPaths.length > 0) {
+            updateData.documents = documentPaths;
+        }
+
+        // 4. Update Database
+        const updated = await Doctor.findByIdAndUpdate(
+            doctorId, 
+            { $set: updateData }, 
+            { new: true }
+        );
+
+        if (!updated) {
+            return res.status(404).json({ success: false, message: "Doctor not found." });
+        }
         
-        res.json({ 
+        res.status(200).json({ 
             success: true, 
-            message: 'Documents submitted for approval.', 
-            profileStatus: 'Pending', // Frontend ko status sync karne ke liye
+            message: 'Documents submitted successfully for approval.', 
+            profileStatus: updated.profileStatus,
             data: updated 
         });
+
     } catch (error) {
-        // Yahan success: false add kiya hai consistency ke liye
+        console.error("Upload Documents Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
-
 // --- 4. LOGIN DOCTOR (Unified Logic) ---
 // Endpoint: POST /api/auth/doctor/login
 // 1. UPDATED LOGIN DOCTOR (With Inactive check)
@@ -242,11 +291,14 @@ const toggleDoctorOnlineStatus = async (req, res) => {
 
 // --- 5. UPDATE PROFILE (Bio, Fees, Availability, etc.) ---
 
-// Endpoint: PUT /api/auth/doctor/update-profile
 
+// ==========================================
+// 5. UPDATE PROFILE (Bio, Fees, Availability, Direct Toggles, etc.)
+// Endpoint: PUT /api/auth/doctor/update-profile
+// ==========================================
 const updateDoctorProfile = async (req, res) => {
     try {
-        const doctorId = req.user.id;
+        const doctorId = req.user.id; // Logged-in doctor ID from protect('doctor')
         const updates = { ...req.body };
 
         const existingDoc = await Doctor.findById(doctorId);
@@ -263,8 +315,8 @@ const updateDoctorProfile = async (req, res) => {
         delete updates.rejectionReason;
         delete updates.documents;
  
-        // Parse multipart JSON strings
-        const arrayFields = ['availability', 'languages', 'fees', 'consultationStatus', 'treatedConditions', 'competencies'];
+        // 1. Parse Multipart JSON Strings (Arrays & Objects)
+        const arrayFields = ['availability', 'languages', 'fees', 'consultationStatus', 'treatedConditions', 'competencies', 'qualifications'];
         arrayFields.forEach(field => {
             if (updates[field]) {
                 try {
@@ -274,17 +326,42 @@ const updateDoctorProfile = async (req, res) => {
                 }
             }
         });
- 
-        // Process new files
-        if (req.files && req.files.profileImage && req.files.profileImage[0]) {
+
+        // 🚨 2. DIRECT CONSULTATION AVAILABILITY TOGGLES (Boolean Conversion)
+        if (updates.isClinicAvailable !== undefined) {
+            updates.isClinicAvailable = (updates.isClinicAvailable === 'true' || updates.isClinicAvailable === true);
+        }
+        if (updates.isOnlineAvailable !== undefined) {
+            updates.isOnlineAvailable = (updates.isOnlineAvailable === 'true' || updates.isOnlineAvailable === true);
+        }
+        if (updates.isHomeAvailable !== undefined) {
+            updates.isHomeAvailable = (updates.isHomeAvailable === 'true' || updates.isHomeAvailable === true);
+        }
+
+        // Backward compatibility sync for consultationStatus
+        if (updates.isClinicAvailable !== undefined || updates.isOnlineAvailable !== undefined || updates.isHomeAvailable !== undefined) {
+            updates.consultationStatus = {
+                clinic: updates.isClinicAvailable !== undefined ? updates.isClinicAvailable : existingDoc.isClinicAvailable,
+                online: updates.isOnlineAvailable !== undefined ? updates.isOnlineAvailable : existingDoc.isOnlineAvailable,
+                home: updates.isHomeAvailable !== undefined ? updates.isHomeAvailable : existingDoc.isHomeAvailable
+            };
+        }
+
+        // 3. Process Uploaded Files
+        if (req.files?.profileImage?.[0]) {
             updates.profileImage = `/uploads/doctors/${req.files.profileImage[0].filename}`;
         }
-        if (req.files && req.files.signatureImage && req.files.signatureImage[0]) {
+        if (req.files?.signatureImage?.[0]) {
             updates.signatureImage = `/uploads/doctors/${req.files.signatureImage[0].filename}`;
         }
 
-        // 🚨 DISK CLEANUP: Delete unapproved files from any existing PENDING request
-        const existingPending = await ProfileUpdateRequest.findOne({ vendorId: doctorId, vendorModel: 'Doctor', status: 'Pending' });
+        // 🚨 4. DISK CLEANUP: Delete unapproved files from any existing PENDING request
+        const existingPending = await ProfileUpdateRequest.findOne({ 
+            vendorId: doctorId, 
+            vendorModel: 'Doctor', 
+            status: 'Pending' 
+        });
+
         if (existingPending) {
             if (updates.profileImage && existingPending.updatedFields?.profileImage) {
                 deleteFile(existingPending.updatedFields.profileImage);
@@ -295,17 +372,38 @@ const updateDoctorProfile = async (req, res) => {
             await ProfileUpdateRequest.findByIdAndDelete(existingPending._id);
         }
 
-        // Save staged update request
+        // 5. Save Staged Update Request for Admin Review
         const request = await ProfileUpdateRequest.create({
             vendorId: doctorId,
             vendorModel: 'Doctor',
-            updatedFields: updates,
+            updatedFields: {
+                ...updates,
+                doctorName: existingDoc.name,
+                doctorPhone: existingDoc.phone
+            },
             status: 'Pending'
         });
+
+        // 6. 🔔 NOTIFY ADMINS ABOUT UPDATE REQUEST
+        try {
+            const { notifyAdminsAndVendor } = require('../../utils/notification');
+            if (notifyAdminsAndVendor) {
+                await notifyAdminsAndVendor(
+                    doctorId,
+                    'doctor',
+                    "Doctor Self-Profile Update Request",
+                    `Dr. ${existingDoc.name} has submitted updated profile changes. Please review and approve.`
+                );
+            }
+        } catch (notifErr) {
+            console.error("Admin notification error:", notifErr.message);
+        }
  
-        res.json({
+        res.status(200).json({
             success: true,
             message: 'Profile changes submitted to Admin for review. Your profile will update once approved.',
+            status: 'Pending',
+            requestId: request._id,
             data: request
         });
  
@@ -314,8 +412,6 @@ const updateDoctorProfile = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
- 
- 
 
 // --- 6. GET DOCTOR PROFILE (Self) ---
 // Endpoint: GET /api/auth/doctor/profile

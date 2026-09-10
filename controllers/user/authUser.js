@@ -17,6 +17,7 @@ const generateToken = (id) => {
 // ==========================================
 // 1. REGISTER USER (Matches Figma Register Screen)
 // endpoint: POST /api/auth/user/register
+// ==========================================
 const registerUser = async (req, res) => {
     try {
         const { 
@@ -25,9 +26,7 @@ const registerUser = async (req, res) => {
             password, confirmPassword 
         } = req.body;
 
-        // ==============================
         // 1. VALIDATION
-        // ==============================
         if (!email && !phone) {
             return res.status(400).json({ message: 'Email or Phone required' });
         }
@@ -40,35 +39,26 @@ const registerUser = async (req, res) => {
             return res.status(400).json({ message: 'Passwords do not match' });
         }
 
-        // ✅ Phone + Country Code validation
         if (phone && !countryCode) {
             return res.status(400).json({ message: 'Country code is required with phone' });
         }
 
-        // ==============================
-        // 2. DUPLICATE CHECK (FIXED)
-        // ==============================
+        // 2. DUPLICATE CHECK
         let query = [];
-
         if (email) query.push({ email });
         if (phone && countryCode) query.push({ phone, countryCode });
 
         const exists = await User.findOne({ $or: query });
-
         if (exists) {
             return res.status(400).json({ 
                 message: 'User already exists with this Email or Phone' 
             });
         }
 
-        // ==============================
         // 3. HASH PASSWORD
-        // ==============================
         const hashedPassword = await bcrypt.hash(password, 10);
 
-        // ==============================
-        // 4. CREATE USER
-        // ==============================
+        // 4. CREATE USER (🚨 Flags explicitly set to true)
         const user = await User.create({
             name,
             email: email || undefined,
@@ -78,18 +68,17 @@ const registerUser = async (req, res) => {
             state,
             city,
             password: hashedPassword,
+            isPasswordSet: true,          // 👈 Explicitly True
+            isPasswordAvailable: true,    // 👈 Explicitly True
+            isUserRegistered: true,       // 👈 Explicitly True
             role: 'user',
             profileStatus: 'Approved'
         });
 
-        // ==============================
         // 5. GENERATE TOKEN
-        // ==============================
         const token = generateToken(user._id);
 
-        // ==============================
         // 6. RESPONSE
-        // ==============================
         res.status(201).json({ 
             success: true,
             message: "User Registered Successfully",
@@ -113,33 +102,90 @@ const registerUser = async (req, res) => {
 };
 
 // ==========================================
-// 2. LOGIN USER (Matches Figma Login Screen)
+// 2. LOGIN USER (Complete Function with Direct Password Verification)
 // endpoint: POST /api/auth/user/login
+// ==========================================
 const loginUser = async (req, res) => {
     try {
         const { email, phone, countryCode, password } = req.body;
 
+        // 1. Validate Input & Build Query
         let query = {};
-
         if (email) {
-            query = { email };
-        } else if (phone && countryCode) {
-            query = { phone, countryCode }; // ✅ FIXED
+            query = { email: email.toLowerCase().trim() };
+        } else if (phone) {
+            const cleanPhone = phone.trim();
+            query = countryCode ? { phone: cleanPhone, countryCode } : { phone: cleanPhone };
         } else {
             return res.status(400).json({ 
+                success: false,
                 message: 'Provide Email or Phone with Country Code' 
             });
         }
 
+        // 2. Find User in Database with Password Field
         const user = await User.findOne(query).select('+password');
 
-        if (!user || !(await bcrypt.compare(password, user.password))) {
-            return res.status(400).json({ message: 'Invalid Credentials' });
+        if (!user) {
+            return res.status(404).json({ 
+                success: false,
+                isUserRegistered: false,
+                message: 'User not registered with this Phone/Email' 
+            });
         }
 
+        // ========================================================
+        // 🚨 3. REAL PASSWORD CHECK (Direct Database Inspection)
+        // ========================================================
+        const hasRealPassword = Boolean(
+            user.password && 
+            typeof user.password === 'string' && 
+            user.password.trim() !== '' && 
+            user.password.length > 5 &&
+            user.isPasswordAvailable !== false
+        );
+
+        // Agar user ka password empty ('') ya set nahi hai
+        if (!hasRealPassword) {
+            return res.status(200).json({
+                success: false,
+                isPasswordAvailable: false,
+                message: "You have not set your password yet. Please set your password first.",
+                data: {
+                    userId: user._id,
+                    name: user.name,
+                    phone: user.phone,
+                    countryCode: user.countryCode || "+91",
+                    profileStatus: user.profileStatus
+                }
+            });
+        }
+
+        // ========================================================
+        // 4. REGULAR PASSWORD VERIFICATION (Jab Password Database Me Maujood Hai)
+        // ========================================================
+        if (!password) {
+            return res.status(400).json({ 
+                success: false,
+                isPasswordAvailable: true,
+                message: 'Password is required to login.' 
+            });
+        }
+
+        const isMatch = await bcrypt.compare(password, user.password);
+        if (!isMatch) {
+            return res.status(400).json({ 
+                success: false,
+                message: 'Invalid Credentials. Incorrect password.' 
+            });
+        }
+
+        // ========================================================
+        // 5. JWT TOKEN GENERATION (With Dev Mode Token Reuse)
+        // ========================================================
         let token = null;
 
-        // DEV MODE TOKEN REUSE
+        // Dev Mode Token Reuse Logic
         if (process.env.NODE_ENV === 'development' && user.token) {
             try {
                 jwt.verify(user.token, process.env.JWT_SECRET);
@@ -155,24 +201,171 @@ const loginUser = async (req, res) => {
             await user.save();
         }
 
+        // Security: Remove password before returning user object
         user.password = undefined;
 
-        res.json({
+        // ========================================================
+        // 6. FINAL SUCCESS RESPONSE
+        // ========================================================
+        res.status(200).json({
             success: true,
+            isPasswordAvailable: true,
             token,
             user: {
                 ...user._doc,
                 fullPhone: user.countryCode 
                     ? `${user.countryCode}${user.phone}` 
-                    : null
+                    : (user.phone || null)
             }
         });
 
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        res.status(500).json({ 
+            success: false, 
+            message: error.message 
+        });
     }
 };
 
+// ==========================================
+// DIRECT SET INITIAL PASSWORD (Without OTP - Auto Logins User)
+// endpoint: POST /api/auth/user/set-password
+// ==========================================
+const setInitialPassword = async (req, res) => {
+    try {
+        const { phone, countryCode, newPassword, confirmPassword } = req.body;
+
+        // 1. Basic Validations
+        if (!phone || !newPassword) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Phone number and New Password are required." 
+            });
+        }
+
+        if (confirmPassword && newPassword !== confirmPassword) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Passwords do not match." 
+            });
+        }
+
+        if (newPassword.length < 6) {
+            return res.status(400).json({
+                success: false,
+                message: "Password must be at least 6 characters long."
+            });
+        }
+
+        // 2. Find User by Phone
+        const cleanPhone = phone.trim();
+        const query = countryCode ? { phone: cleanPhone, countryCode } : { phone: cleanPhone };
+        const user = await User.findOne(query);
+
+        if (!user) {
+            return res.status(404).json({ 
+                success: false, 
+                message: "User not found with this phone number." 
+            });
+        }
+
+        // 3. Hash New Password & 🚨 UPDATE ALL FLAGS
+        const hashedPassword = await bcrypt.hash(newPassword, 10);
+        user.password = hashedPassword;
+        user.isPasswordSet = true;          // 👈 Set to True
+        user.isPasswordAvailable = true;    // 👈 Set to True
+        user.isUserRegistered = true;       // 👈 Set to True
+
+        // 4. Generate Login Token for Direct App Access
+        const token = generateToken(user._id);
+        user.token = token;
+        await user.save();
+
+        user.password = undefined;
+
+        res.status(200).json({
+            success: true,
+            message: "Password set successfully! You are now logged in.",
+            token,
+            user: {
+                id: user._id,
+                name: user.name,
+                phone: user.phone,
+                countryCode: user.countryCode,
+                profileStatus: user.profileStatus,
+                isPasswordAvailable: true,
+                isUserRegistered: true
+            }
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+// ==========================================
+// 🔍 CHECK PASSWORD STATUS / AVAILABILITY (Direct Password Check Fix)
+// endpoint: POST /api/auth/user/check-password-status
+// ==========================================
+const checkPasswordStatus = async (req, res) => {
+    try {
+        const { phone, countryCode } = req.body;
+
+        if (!phone || phone.toString().trim() === '') {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Phone number is required." 
+            });
+        }
+
+        const cleanPhone = phone.toString().trim();
+
+        // 🚨 Smart Lookup: Phone direct match karega (chahe countryCode ho ya na ho)
+        const user = await User.findOne({
+            $or: [
+                { phone: cleanPhone },
+                { phone: cleanPhone, countryCode: countryCode || "+91" }
+            ]
+        }).select('+password name phone countryCode profileStatus isPasswordAvailable isUserRegistered');
+
+        // Case 1: User does not exist
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                isUserRegistered: false,
+                isPasswordAvailable: false,
+                message: "User is not registered. Please register first."
+            });
+        }
+
+        // Case 2: User exists -> Check if real password exists
+        const hasRealPassword = Boolean(
+            user.password && 
+            typeof user.password === 'string' && 
+            user.password.trim() !== '' && 
+            user.password.length > 5 &&
+            user.isPasswordAvailable === true
+        );
+
+        res.status(200).json({
+            success: true,
+            isUserRegistered: true,              // 👈 User exist karta hai
+            isPasswordAvailable: hasRealPassword, // 👈 Agar password null hai toh false aayega
+            message: hasRealPassword 
+                ? "Password is set for this account. Proceed with login." 
+                : "Password is not set yet. Please set your password.",
+            data: {
+                userId: user._id,
+                name: user.name,
+                phone: user.phone,
+                countryCode: user.countryCode || "+91",
+                profileStatus: user.profileStatus
+            }
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
 // ==========================================
 // 3. FORGOT PASSWORD FLOW (Figma Screens)
 
@@ -1152,5 +1345,7 @@ module.exports = {
     removeAddress,
     removeEmergency,
     getUserDashboard,
-    updateToUserAddress
+    updateToUserAddress,
+    setInitialPassword,
+    checkPasswordStatus
 };

@@ -82,8 +82,8 @@ const getPaginatedList = async (Model, req, res, searchFields = [], populateFiel
 };
  
 
-// --- DOCTOR ---
-// const getDoctorsList = (req, res) => getPaginatedList(Doctor, req, res, ['name', 'email', 'specialization'], { path: 'hospitalId', select: 'name email' });
+//--- DOCTOR ---
+const getDoctorsList = (req, res) => getPaginatedList(Doctor, req, res, ['name', 'email', 'specialization'], { path: 'clinicId', select: 'name email' });
 
 const approveDoctor = async (req, res) => {
     const doctor = await Doctor.findByIdAndUpdate(req.params.id, { profileStatus: 'Approved', rejectionReason: null }, { new: true });
@@ -322,7 +322,7 @@ const rejectClinicAmbulance = async (req, res) => {
 
 
 module.exports = {
-    // getDoctorsList, 
+    getDoctorsList, 
     approveDoctor, rejectDoctor,
     
     getLabsList, approveLab, rejectLab,

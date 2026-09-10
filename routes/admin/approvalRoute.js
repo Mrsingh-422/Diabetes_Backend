@@ -3,7 +3,7 @@ const router = express.Router();
 const { protect, checkRoleAccess } = require('../../middleware/authMiddleware');
 
 const {
-    // getDoctorsList,
+     getDoctorsList,
      approveDoctor, rejectDoctor,
     
     getLabsList, approveLab, rejectLab,
@@ -16,7 +16,7 @@ const {
 // Base Path: /api/admin/approval
 
 // --- DOCTOR (ID: 31) ---
-// router.get('/doctors', protect('admin'), checkRoleAccess(31), getDoctorsList);
+router.get('/doctors', protect('admin'), checkRoleAccess(31), getDoctorsList);
 router.patch('/doctors/approve/:id', protect('admin'), checkRoleAccess(31), approveDoctor);
 router.patch('/doctors/reject/:id', protect('admin'), checkRoleAccess(31), rejectDoctor);
 

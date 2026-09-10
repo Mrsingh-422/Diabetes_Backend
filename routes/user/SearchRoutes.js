@@ -17,10 +17,6 @@ router.get('/search', searchHomepage);
 // 3. New Chatbot API (Authentication protected)
 router.post('/chatbot', protect('user'), handleChatBotMessage);
 
-
-
-
-
 // 4. Get User Coupons (Authentication protected)
 router.get('/coupons', getUserCoupons);
 
