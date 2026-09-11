@@ -9,7 +9,8 @@ const {
     subscribeTiffinPlan,
     modifyTiffinSlotSchedule,
     getMyTiffinSubscriptionDetails,
-    getAllMyTiffinSubscriptions
+    getAllMyTiffinSubscriptions,
+    skipTiffinMeals
 } = require('../../../controllers/user/Food/UserTiffinSubscription');
 
 // Base URL: /api/food/tiffin
@@ -28,5 +29,7 @@ router.get('/my-subscriptions', protect('user'), getAllMyTiffinSubscriptions);
 
 // 4. Get Subscription Details (GET)
 router.get('/my-subscription/:bookingId', protect('user'), getMyTiffinSubscriptionDetails);
+
+router.patch('/skip-meals/:bookingId', protect('user'), skipTiffinMeals);
 
 module.exports = router;

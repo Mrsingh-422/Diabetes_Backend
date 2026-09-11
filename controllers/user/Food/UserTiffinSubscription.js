@@ -719,10 +719,133 @@ const getMyTiffinSubscriptionDetails = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
+// ==========================================
+// ⏸️ SKIP / PAUSE TIFFIN MEALS (WITH START & END DATES)
+// Full Path: PATCH /api/food/tiffin/skip-meals/:bookingId
+// ==========================================
+const skipTiffinMeals = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const { bookingId } = req.params;
+        const { startDate, endDate, slots = ['breakfast', 'lunch', 'dinner'], reason = "" } = req.body;
+
+        if (!startDate || !endDate) {
+            return res.status(400).json({
+                success: false,
+                message: "Both startDate and endDate are required to skip meals."
+            });
+        }
+
+        const start = new Date(startDate);
+        const end = new Date(endDate);
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+
+        if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid date format. Please use YYYY-MM-DD."
+            });
+        }
+
+        if (start < today) {
+            return res.status(400).json({
+                success: false,
+                message: "startDate cannot be in the past."
+            });
+        }
+
+        if (end < start) {
+            return res.status(400).json({
+                success: false,
+                message: "endDate cannot be before startDate."
+            });
+        }
+
+        // Fetch user booking (Standard Subscription or Custom Plate)
+        const booking = await FoodBooking.findOne({
+            $or: [{ _id: bookingId }, { bookingId }],
+            userId
+        });
+
+        if (!booking) {
+            return res.status(404).json({
+                success: false,
+                message: "Tiffin subscription/order not found."
+            });
+        }
+
+        if (['Cancelled', 'Delivered', 'Expired'].includes(booking.status)) {
+            return res.status(400).json({
+                success: false,
+                message: `Cannot skip meals for an order in '${booking.status}' status.`
+            });
+        }
+
+        // Calculate total skipped days (inclusive)
+        const diffTime = Math.abs(end - start);
+        const skippedDaysCount = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
+
+        const skipEntry = {
+            startDate: start,
+            endDate: end,
+            slots: Array.isArray(slots) ? slots : ['breakfast', 'lunch', 'dinner'],
+            daysCount: skippedDaysCount,
+            reason: reason.trim(),
+            skippedAt: new Date()
+        };
+
+        // Automatically extend subscription endDate by skippedDaysCount
+        if (booking.bookingType === 'Subscription' && booking.subscriptionDetails?.endDate) {
+            const currentEnd = new Date(booking.subscriptionDetails.endDate);
+            currentEnd.setDate(currentEnd.getDate() + skippedDaysCount);
+            booking.subscriptionDetails.endDate = currentEnd;
+        } else if (booking.bookingType === 'Custom Plate' && booking.customTiffinDetails?.endDate) {
+            const currentEnd = new Date(booking.customTiffinDetails.endDate);
+            currentEnd.setDate(currentEnd.getDate() + skippedDaysCount);
+            booking.customTiffinDetails.endDate = currentEnd;
+        }
+
+        if (!booking.skippedMeals) {
+            booking.skippedMeals = [];
+        }
+        booking.skippedMeals.push(skipEntry);
+
+        await booking.save();
+
+        const extendedEndDate = booking.bookingType === 'Subscription' 
+            ? booking.subscriptionDetails?.endDate 
+            : booking.customTiffinDetails?.endDate;
+
+        return res.json({
+            success: true,
+            message: `Meals skipped successfully from ${startDate} to ${endDate} (${skippedDaysCount} days). Subscription validity extended.`,
+            data: {
+                bookingId: booking.bookingId,
+                bookingType: booking.bookingType,
+                status: booking.status,
+                skippedDaysCount,
+                skipDetails: {
+                    startDate: start.toISOString().split('T')[0],
+                    endDate: end.toISOString().split('T')[0],
+                    slots: skipEntry.slots,
+                    reason: skipEntry.reason
+                },
+                extendedEndDate: extendedEndDate ? extendedEndDate.toISOString().split('T')[0] : null,
+                updatedAt: booking.updatedAt
+            }
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
 module.exports = {
     calculateTiffinSubscriptionBill,
     subscribeTiffinPlan,
     modifyTiffinSlotSchedule,
     getMyTiffinSubscriptionDetails,
-    getAllMyTiffinSubscriptions
+    getAllMyTiffinSubscriptions,
+    skipTiffinMeals
 };

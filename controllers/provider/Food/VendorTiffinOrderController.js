@@ -1,6 +1,7 @@
 // controllers/provider/Food/VendorTiffinOrderController.js
 
 const FoodBooking = require('../../../models/FoodBooking');
+const { sendPushNotification } = require('../../../utils/notification');
 
 // ==========================================
 // 🍱 1. GET ALL VENDOR STANDARD SUBSCRIPTIONS (Lightweight Card List)
@@ -124,7 +125,84 @@ const getVendorTiffinSubscriptionById = async (req, res) => {
 };
 
 // ==========================================
-// 🎨 3. GET ALL CUSTOM TIFFIN REQUESTS (Lightweight Card List)
+// ⚡ CANCEL STANDARD SUBSCRIPTION (ANYTIME WITH REASON)
+// Full Path: PATCH /provider/food/tiffin/subscriptions/:id/action
+// ==========================================
+const handleStandardTiffinSubscriptionAction = async (req, res) => {
+    try {
+        const vendorId = req.user.id;
+        const { id } = req.params;
+        const cancelReason = req.body.cancelReason || req.body.rejectReason || req.body.reason;
+
+        if (!cancelReason || cancelReason.trim().length === 0) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "A valid cancellation reason (cancelReason) is mandatory." 
+            });
+        }
+
+        const subscription = await FoodBooking.findOne({
+            $or: [{ _id: id }, { bookingId: id }],
+            foodId: vendorId,
+            bookingType: 'Subscription'
+        });
+
+        if (!subscription) {
+            return res.status(404).json({ 
+                success: false, 
+                message: "Tiffin subscription not found or not assigned to your kitchen." 
+            });
+        }
+
+        if (subscription.status === 'Cancelled') {
+            return res.status(400).json({
+                success: false,
+                message: "This subscription is already cancelled."
+            });
+        }
+
+        if (subscription.status === 'Delivered' || subscription.status === 'Expired') {
+            return res.status(400).json({
+                success: false,
+                message: `Cannot cancel subscription in '${subscription.status}' state.`
+            });
+        }
+
+        const previousState = subscription.status;
+        subscription.status = 'Cancelled';
+        subscription.cancelReason = cancelReason.trim();
+        await subscription.save();
+
+        if (subscription.userId) {
+            sendPushNotification(
+                subscription.userId,
+                'user',
+                'Tiffin Subscription Cancelled',
+                `Your tiffin subscription was cancelled by the kitchen. Reason: ${subscription.cancelReason}`,
+                { bookingId: subscription.bookingId, type: 'TIFFIN_SUBSCRIPTION_REJECTED' }
+            ).catch(() => {});
+        }
+
+        return res.json({
+            success: true,
+            message: `Tiffin subscription (${subscription.bookingId}) cancelled successfully. Reason logged.`,
+            data: {
+                bookingId: subscription.bookingId,
+                bookingType: "Subscription",
+                planType: "Subscription",
+                status: subscription.status,
+                cancelReason: subscription.cancelReason,
+                previousState,
+                updatedAt: subscription.updatedAt
+            }
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+// ==========================================
+// 🎨 4. GET ALL CUSTOM TIFFIN REQUESTS (Lightweight Card List)
 // Full Path: GET /provider/food/tiffin/custom-requests
 // ==========================================
 const getVendorCustomTiffinRequests = async (req, res) => {
@@ -198,7 +276,7 @@ const getVendorCustomTiffinRequests = async (req, res) => {
 };
 
 // ==========================================
-// 🔍 4. GET SINGLE CUSTOM TIFFIN REQUEST FULL DETAILS
+// 🔍 5. GET SINGLE CUSTOM TIFFIN REQUEST FULL DETAILS
 // Full Path: GET /provider/food/tiffin/custom-requests/:id
 // ==========================================
 const getVendorCustomTiffinRequestById = async (req, res) => {
@@ -253,19 +331,20 @@ const getVendorCustomTiffinRequestById = async (req, res) => {
 };
 
 // ==========================================
-// ⚡ 5. ACCEPT OR REJECT CUSTOM TIFFIN REQUEST (WITH REASON)
+// ⚡ HANDLE CUSTOM TIFFIN ACTION
 // Full Path: PATCH /provider/food/tiffin/custom-requests/:id/action
 // ==========================================
 const handleCustomTiffinRequestAction = async (req, res) => {
     try {
         const vendorId = req.user.id;
         const { id } = req.params;
-        const { action, rejectReason } = req.body; // action: 'Accept' ya 'Reject'
+        const { action } = req.body;
+        const reason = req.body.cancelReason || req.body.rejectReason || req.body.reason;
 
-        if (!action || !['Accept', 'Reject'].includes(action)) {
+        if (!action || !['Accept', 'Reject', 'Cancel'].includes(action)) {
             return res.status(400).json({ 
                 success: false, 
-                message: "Action must be either 'Accept' or 'Reject'." 
+                message: "Action must be 'Accept', 'Reject' (for New orders), or 'Cancel' (for Active orders)." 
             });
         }
 
@@ -278,60 +357,153 @@ const handleCustomTiffinRequestAction = async (req, res) => {
         if (!customOrder) {
             return res.status(404).json({ 
                 success: false, 
-                message: "Custom tiffin request not found." 
+                message: "Custom tiffin request not found or not assigned to your kitchen." 
             });
         }
 
-        if (customOrder.status !== 'New' && customOrder.status !== 'Pending') {
+        if (customOrder.status === 'Cancelled') {
             return res.status(400).json({
                 success: false,
-                message: `Cannot modify request. This order is already '${customOrder.status}'.`
+                message: "This custom tiffin package is already cancelled."
             });
         }
 
-        // --- ACTION 1: ACCEPT CUSTOM REQUEST ---
-        if (action === 'Accept') {
-            customOrder.status = 'Active';
-            await customOrder.save();
-
-            return res.json({
-                success: true,
-                message: `Custom Tiffin package (${customOrder.bookingId}) accepted successfully!`,
-                data: {
-                    bookingId: customOrder.bookingId,
-                    bookingType: "Custom Plate",
-                    planType: "Custom Plate",
-                    status: customOrder.status,
-                    updatedAt: customOrder.updatedAt
-                }
+        if (customOrder.status === 'Delivered' || customOrder.status === 'Expired') {
+            return res.status(400).json({
+                success: false,
+                message: `Cannot modify package in '${customOrder.status}' state.`
             });
         }
 
-        // --- ACTION 2: REJECT CUSTOM REQUEST WITH REASON ---
-        if (action === 'Reject') {
-            if (!rejectReason || rejectReason.trim().length === 0) {
-                return res.status(400).json({ 
-                    success: false, 
-                    message: "A valid rejectReason is mandatory when rejecting a custom tiffin request." 
+        // ==========================================
+        // 🟡 PHASE 1: INITIAL STATE ('New' / 'Pending')
+        // ==========================================
+        if (customOrder.status === 'New' || customOrder.status === 'Pending') {
+            if (action === 'Cancel') {
+                return res.status(400).json({
+                    success: false,
+                    message: "Order is not yet accepted. Use action 'Reject' with rejectReason to decline new requests."
                 });
             }
 
-            customOrder.status = 'Cancelled';
-            customOrder.cancelReason = rejectReason.trim();
-            await customOrder.save();
+            if (action === 'Accept') {
+                customOrder.status = 'Active';
+                await customOrder.save();
 
-            return res.json({
-                success: true,
-                message: `Custom Tiffin package (${customOrder.bookingId}) rejected. Reason logged.`,
-                data: {
-                    bookingId: customOrder.bookingId,
-                    bookingType: "Custom Plate",
-                    planType: "Custom Plate",
-                    status: customOrder.status,
-                    cancelReason: customOrder.cancelReason,
-                    updatedAt: customOrder.updatedAt
+                if (customOrder.userId) {
+                    sendPushNotification(
+                        customOrder.userId,
+                        'user',
+                        'Custom Tiffin Package Accepted! 🎉',
+                        `Your kitchen has accepted your Custom ${customOrder.customTiffinDetails?.packageDays || 10}-Day Tiffin package.`,
+                        { bookingId: customOrder.bookingId, type: 'CUSTOM_TIFFIN_ACCEPTED' }
+                    ).catch(() => {});
                 }
-            });
+
+                return res.json({
+                    success: true,
+                    message: `Custom Tiffin package (${customOrder.bookingId}) accepted successfully!`,
+                    data: {
+                        bookingId: customOrder.bookingId,
+                        bookingType: "Custom Plate",
+                        planType: "Custom Plate",
+                        status: customOrder.status,
+                        updatedAt: customOrder.updatedAt
+                    }
+                });
+            }
+
+            if (action === 'Reject') {
+                if (!reason || reason.trim().length === 0) {
+                    return res.status(400).json({ 
+                        success: false, 
+                        message: "A valid rejectReason is mandatory when rejecting a new request." 
+                    });
+                }
+
+                customOrder.status = 'Cancelled';
+                customOrder.cancelReason = reason.trim();
+                await customOrder.save();
+
+                if (customOrder.userId) {
+                    sendPushNotification(
+                        customOrder.userId,
+                        'user',
+                        'Custom Tiffin Package Rejected',
+                        `Your custom tiffin request was rejected. Reason: ${customOrder.cancelReason}`,
+                        { bookingId: customOrder.bookingId, type: 'CUSTOM_TIFFIN_REJECTED' }
+                    ).catch(() => {});
+                }
+
+                return res.json({
+                    success: true,
+                    message: `Custom Tiffin package (${customOrder.bookingId}) rejected. Reason logged.`,
+                    data: {
+                        bookingId: customOrder.bookingId,
+                        bookingType: "Custom Plate",
+                        planType: "Custom Plate",
+                        status: customOrder.status,
+                        rejectReason: customOrder.cancelReason, // 👈 Sirf reject ke waqt aayega
+                        updatedAt: customOrder.updatedAt
+                    }
+                });
+            }
+        }
+
+        // ==========================================
+        // 🟢 PHASE 2: ALREADY ACCEPTED ('Active' State)
+        // ==========================================
+        if (customOrder.status === 'Active') {
+            if (action === 'Accept') {
+                return res.status(400).json({
+                    success: false,
+                    message: "This custom tiffin package is already Active."
+                });
+            }
+
+            if (action === 'Reject') {
+                return res.status(400).json({
+                    success: false,
+                    message: "This package is already Active. Use action 'Cancel' with cancelReason to cancel an ongoing subscription."
+                });
+            }
+
+            if (action === 'Cancel') {
+                if (!reason || reason.trim().length === 0) {
+                    return res.status(400).json({ 
+                        success: false, 
+                        message: "A valid cancelReason is mandatory when cancelling an active subscription." 
+                    });
+                }
+
+                customOrder.status = 'Cancelled';
+                customOrder.cancelReason = reason.trim();
+                await customOrder.save();
+
+                if (customOrder.userId) {
+                    sendPushNotification(
+                        customOrder.userId,
+                        'user',
+                        'Custom Tiffin Package Cancelled',
+                        `Your active custom tiffin package was cancelled by the kitchen. Reason: ${customOrder.cancelReason}`,
+                        { bookingId: customOrder.bookingId, type: 'CUSTOM_TIFFIN_CANCELLED' }
+                    ).catch(() => {});
+                }
+
+                return res.json({
+                    success: true,
+                    message: `Active Custom Tiffin package (${customOrder.bookingId}) cancelled successfully. Reason logged.`,
+                    data: {
+                        bookingId: customOrder.bookingId,
+                        bookingType: "Custom Plate",
+                        planType: "Custom Plate",
+                        status: customOrder.status,
+                        cancelReason: customOrder.cancelReason, // 👈 Sirf cancelReason jayega
+                        previousState: "Active",
+                        updatedAt: customOrder.updatedAt
+                    }
+                });
+            }
         }
 
     } catch (error) {
@@ -344,5 +516,6 @@ module.exports = {
     getVendorTiffinSubscriptionById,
     getVendorCustomTiffinRequests,
     getVendorCustomTiffinRequestById,
-    handleCustomTiffinRequestAction
+    handleCustomTiffinRequestAction,
+    handleStandardTiffinSubscriptionAction
 };
