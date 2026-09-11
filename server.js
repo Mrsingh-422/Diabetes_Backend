@@ -231,7 +231,7 @@ app.use('/api/user/review', require('./routes/user/others/ReviewRoute')); // Rev
 // --- user doctor ---
 app.use('/user/doctor/pills', require('./routes/user/Doctor/PillsRoute')); // Doctor's Prescription Management
 app.use('/user/health-records', require('./routes/user/Doctor/HealthRoute')); // Health Records Management
-// app.use('/user/doctors', require('./routes/user/Doctor/BookAppointment')); // Doctor Appointment Booking
+app.use('/user/doctors', require('./routes/user/Doctor/BookAppointment')); // Doctor Appointment Booking
 app.use('/user/doctor/menstrual', require('./routes/user/Doctor/MenstrualTrackerRoute')); // Menstrual Cycle Tracking
 app.use('/user/review', require('./routes/user/Doctor/ReviewDoctorRoute')); // Doctor Review Route
 app.use('/user/doctor/video-call', require('./routes/user/Doctor/VideoCallRoute')); // Doctor Video Call Route

@@ -32,11 +32,15 @@ const getSpecializations = async (req, res) => {
 };
 
 // 2. SEARCH & FILTER DOCTORS (Website & App Listing)
+// ==========================================
+// 2. SEARCH & FILTER DOCTORS (Populate Bug Fixed)
+// Endpoint: POST /user/doctors/list
+// ==========================================
 const searchDoctors = async (req, res) => {
     try {
         const { speciality, city, search, consultationType, userLat, userLng } = req.body;
         
-        // Strictly filters: Only APPROVED and ACTIVE doctors (Offline ones are included but will be marked in response)
+        // Strictly filters: Only APPROVED and ACTIVE doctors
         let query = { role: 'doctor', profileStatus: 'Approved', isActive: true };
 
         if (speciality) query.speciality = speciality;
@@ -51,9 +55,10 @@ const searchDoctors = async (req, res) => {
             query['consultationStatus.home'] = true;
         }
 
+        // 🚨 FIXED: populate('clinicId') instead of 'hospitalId'
         let doctors = await Doctor.find(query)
-            .select('-password -token') // preserves isOnline automatically as it is not excluded
-            .populate('hospitalId', 'name')
+            .select('-password -token')
+            .populate('clinicId', 'name clinicName city address')
             .lean();
 
         const doctorsWithDistance = await Promise.all(doctors.map(async (doc) => {
@@ -76,27 +81,32 @@ const searchDoctors = async (req, res) => {
 
         doctorsWithDistance.sort((a, b) => a.distance - b.distance);
 
-        res.json({ 
+        res.status(200).json({ 
             success: true, 
             count: doctorsWithDistance.length, 
             data: doctorsWithDistance 
         });
 
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        console.error("Search Doctors Error:", error);
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 
 // 3. GET DOCTOR PROFILE DETAILS
+// ==========================================
+// 3. GET DOCTOR PROFILE DETAILS (Populate Bug Fixed)
+// Endpoint: GET /user/doctors/details/:id
+// ==========================================
 const getDoctorDetails = async (req, res) => {
     try {
         const doctorId = req.params.id;
 
+        // 🚨 FIXED: populate('clinicId') instead of 'hospitalId'
         const doctorDoc = await Doctor.findById(doctorId)
-            .populate('hospitalId', 'name address city')
+            .populate('clinicId', 'name clinicName address city')
             .select('-password -token');
 
-        // 🚨 CRITICAL CHECK: Block access if doctor is not found or is marked inactive by Admin
         if (!doctorDoc || doctorDoc.isActive === false) {
             return res.status(404).json({ success: false, message: "Doctor profile is inactive or not found." });
         }
@@ -148,7 +158,7 @@ const getDoctorDetails = async (req, res) => {
 
         const doctor = doctorDoc.toObject();
 
-        res.json({ 
+        res.status(200).json({ 
             success: true, 
             data: {
                 profile: {
@@ -159,17 +169,19 @@ const getDoctorDetails = async (req, res) => {
                     workingHours: workingHoursDisplay,
                     helpWith: doctor.treatedConditions || ["Fever", "Cough", "Headache"],
                     competencies: doctor.competencies || ["MD Degree", "Emergency Care"],
-                    isOnline: doctor.isOnline ?? true // Sends online status to UI
+                    isOnline: doctor.isOnline ?? true
                 },
                 activeServices: [
-                    { type: 'Clinic Visit', fee: doctor.fees.clinic, active: doctor.consultationStatus.clinic },
-                    { type: 'Video Consult', fee: doctor.fees.online, active: doctor.consultationStatus.online },
-                    { type: 'Home Visit', fee: doctor.fees.home, active: doctor.consultationStatus.home }
+                    { type: 'Clinic Visit', fee: doctor.fees?.clinic || 0, active: doctor.consultationStatus?.clinic ?? true },
+                    { type: 'Video Consult', fee: doctor.fees?.online || 0, active: doctor.consultationStatus?.online ?? true },
+                    { type: 'Home Visit', fee: doctor.fees?.home || 0, active: doctor.consultationStatus?.home ?? false }
                 ],
                 recentReviews 
             } 
         });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
 
 // GET VISIT CONFIG
