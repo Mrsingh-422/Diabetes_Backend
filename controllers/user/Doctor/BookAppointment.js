@@ -31,21 +31,26 @@ const getSpecializations = async (req, res) => {
     }
 };
 
-// 2. SEARCH & FILTER DOCTORS (Website & App Listing)
+
 // ==========================================
-// 2. SEARCH & FILTER DOCTORS (Populate Bug Fixed)
+// 🔍 SEARCH & FILTER INDEPENDENT DOCTORS
 // Endpoint: POST /user/doctors/list
 // ==========================================
 const searchDoctors = async (req, res) => {
     try {
         const { speciality, city, search, consultationType, userLat, userLng } = req.body;
         
-        // Strictly filters: Only APPROVED and ACTIVE doctors
-        let query = { role: 'doctor', profileStatus: 'Approved', isActive: true };
+        // 🎯 STRICT FILTER: Only Independent Doctors (No Clinic Doctors)
+        let query = { 
+            role: 'doctor', 
+            clinicId: null, 
+            profileStatus: 'Approved', 
+            isActive: true 
+        };
 
-        if (speciality) query.speciality = speciality;
-        if (city) query.city = { $regex: city, $options: 'i' };
-        if (search) query.name = { $regex: search, $options: 'i' };
+        if (speciality) query.speciality = new RegExp(speciality.trim(), 'i');
+        if (city) query.city = { $regex: city.trim(), $options: 'i' };
+        if (search) query.name = { $regex: search.trim(), $options: 'i' };
 
         if (consultationType === 'Video Consult') {
             query['consultationStatus.online'] = true;
@@ -55,16 +60,15 @@ const searchDoctors = async (req, res) => {
             query['consultationStatus.home'] = true;
         }
 
-        // 🚨 FIXED: populate('clinicId') instead of 'hospitalId'
+        // Fetch Doctors
         let doctors = await Doctor.find(query)
-            .select('-password -token')
-            .populate('clinicId', 'name clinicName city address')
+            .select('name email phone countryCode role speciality  experienceYears consultationStatus averageRating totalReviews profileImage address location')
             .lean();
 
         const doctorsWithDistance = await Promise.all(doctors.map(async (doc) => {
             let distance = 0;
             
-            if (userLat && userLng && doc.location && doc.location.lat && doc.location.lng) {
+            if (userLat && userLng && doc.location?.lat && doc.location?.lng) {
                 distance = await getDistance(
                     parseFloat(userLat), 
                     parseFloat(userLng), 
@@ -73,12 +77,37 @@ const searchDoctors = async (req, res) => {
                 );
             }
 
+            // 🎯 EXACT REQUESTED CLEAN RESPONSE (With 'profileImage')
             return {
-                ...doc,
-                distance: distance 
+                _id: doc._id,
+                name: doc.name,
+                email: doc.email || "",
+                phone: doc.phone || "",
+                countryCode: doc.countryCode || "+91",
+                role: doc.role,
+                specialization: doc.speciality || "",
+                qualification: doc.qualification || "",
+                experience: doc.experienceYears ? `${doc.experienceYears} Years` : "0 Years",
+                experienceYears: doc.experienceYears || 0,
+                about: doc.about || "",
+                languages: doc.languages || [],
+                licenseNumber: doc.licenseNumber || "",
+                councilNumber: doc.councilNumber || "",
+                councilName: doc.councilName || "",
+                dutyStatus: doc.dutyStatus || "Off Duty",
+                consultationStatus: doc.consultationStatus || { online: true, clinic: true, home: false },
+                review: {
+                    rating: doc.averageRating || 0,
+                    totalReviews: doc.totalReviews || 0
+                },
+                profileImage: doc.profileImage || null, // 👈 Exact 'profileImage' Key
+                address: doc.address || `${doc.city || ''}, ${doc.state || ''}`.trim(),
+                location: doc.location || { lat: 0, lng: 0 },
+                distance: Number(distance.toFixed(2))
             };
         }));
 
+        // Sort by nearest distance ascending
         doctorsWithDistance.sort((a, b) => a.distance - b.distance);
 
         res.status(200).json({ 

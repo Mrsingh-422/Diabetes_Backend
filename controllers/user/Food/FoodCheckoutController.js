@@ -269,7 +269,7 @@ const calculateFoodBillHelper = async ({
         deliveryCharge += appliedRapidFee;
     }
 
-    // 🛡️ 9. Coupon Verification
+    // 🛡️ 9. Coupon Verification (Global, Vendor & User-Specific Support)
     let couponDiscount = 0;
     let validCouponId = null;
 
@@ -277,19 +277,40 @@ const calculateFoodBillHelper = async ({
         const cleanCode = String(couponCode).toUpperCase().trim();
         const now = new Date();
 
+        const couponQueryConditions = [
+            { isUserSpecific: { $ne: true }, vendorId: resolvedFoodId, vendorType: 'Food' },
+            { isUserSpecific: { $ne: true }, isAdminCreated: true, vendorType: { $in: ['Food', 'All'] } }
+        ];
+
+        // Agar user logged in hai toh unka exclusive private coupon allow hoga
+        if (userId) {
+            couponQueryConditions.push({
+                isUserSpecific: true,
+                assignedUserId: userId,
+                vendorType: { $in: ['Food', 'All'] }
+            });
+        }
+
         const coupon = await Coupon.findOne({
             couponName: cleanCode,
             isActive: true,
             startDate: { $lte: now },
             expiryDate: { $gte: now },
-            $or: [
-                { vendorId: resolvedFoodId, vendorType: 'Food' },
-                { isAdminCreated: true, vendorType: { $in: ['Food', 'All'] } }
-            ]
+            $or: couponQueryConditions
         });
 
-        if (!coupon) throw new Error(`Coupon '${cleanCode}' is invalid or expired.`);
-        if (itemTotal < (coupon.minOrderAmount || 0)) throw new Error(`Minimum order of ₹${coupon.minOrderAmount} required for '${cleanCode}'.`);
+        if (!coupon) {
+            throw new Error(`Coupon '${cleanCode}' is invalid, expired, or not applicable to your account.`);
+        }
+
+        // Security Guard: Private coupon dusra user use na kar sake
+        if (coupon.isUserSpecific && (!userId || coupon.assignedUserId?.toString() !== userId.toString())) {
+            throw new Error(`Coupon '${cleanCode}' is an exclusive voucher and is not valid for your account.`);
+        }
+
+        if (itemTotal < (coupon.minOrderAmount || 0)) {
+            throw new Error(`Minimum order of ₹${coupon.minOrderAmount} required for '${cleanCode}'.`);
+        }
 
         if (userId && coupon.usedBy) {
             const userUsage = coupon.usedBy.find(u => u.userId?.toString() === userId.toString());

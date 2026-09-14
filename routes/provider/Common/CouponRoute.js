@@ -13,6 +13,7 @@ const {
     deleteAdminCoupon,
     updateAdminCoupon,
     updateCoupon,
+    createAdminUserSpecificCoupon
 } = require('../../../controllers/provider/Common/Coupon');
 
 // Base URL: /provider/coupons
@@ -33,5 +34,8 @@ router.get('/admin/list', protect('admin'), getAdminCoupons);
 router.patch('/admin/toggle/:id', protect('admin'), toggleAdminCoupon);
 router.put('/admin/update/:id', protect('admin'), updateAdminCoupon);
 router.delete('/admin/delete/:id', protect('admin'), deleteAdminCoupon); 
+
+// Admin creates special coupon for specific user
+router.post('/admin/special-user', protect('admin'), createAdminUserSpecificCoupon);
 
 module.exports = router;

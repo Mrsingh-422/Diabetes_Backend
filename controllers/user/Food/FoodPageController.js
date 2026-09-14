@@ -12,6 +12,7 @@ const Food = require('../../../models/Food');
 const VendorTiffinPlan = require('../../../models/VendorTiffinPlan');
 const TiffinPlan = require('../../../models/TiffinPlan');
 const VendorKMLimit = require('../../../models/VendorKMLimit');
+const jwt = require('jsonwebtoken'); //  Ensure JWT import on top of FoodPageController.js
 
 
 // ==========================================
@@ -1218,14 +1219,34 @@ const getUserFoodEffectCategories = async (req, res) => {
     }
 };
 
+// ==========================================
+// 🏷️ GET FOOD COUPONS (GLOBAL + VENDOR + PERSONAL USER COUPONS)
+// Full Path: GET /api/foodpage/coupons
+// ==========================================
 const getFoodCoupons = async (req, res) => {
     try {
         const { vendorId } = req.query;
         const now = new Date();
 
+        // 1. Safe Token Extractor (Bearer Token se User ID nikalna)
+        let userId = req.user ? req.user.id : null;
+        if (!userId && req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
+            try {
+                const token = req.headers.authorization.split(' ')[1];
+                const decoded = jwt.verify(token, process.env.JWT_SECRET);
+                if (decoded && decoded.id) {
+                    userId = decoded.id;
+                }
+            } catch (err) {
+                // Invalid/Expired token - Guest user ki tarah continue karega
+            }
+        }
+
+        // 2. Global Admin Coupons (Sabhi users ke liye)
         const queryConditions = [
             { 
                 isAdminCreated: true, 
+                isUserSpecific: { $ne: true }, // Saare general coupons
                 vendorType: { $in: ['Food', 'All'] }, 
                 isActive: true,
                 startDate: { $lte: now },
@@ -1233,10 +1254,24 @@ const getFoodCoupons = async (req, res) => {
             }
         ];
 
+        // 3. Specific Vendor ke Coupons
         if (vendorId) {
             queryConditions.push({
                 vendorId: vendorId,
+                isUserSpecific: { $ne: true },
                 vendorType: 'Food',
+                isActive: true,
+                startDate: { $lte: now },
+                expiryDate: { $gte: now }
+            });
+        }
+
+        // 4. 🌟 User ke Personal Exclusive Coupons (Sirf is User ID ke liye)
+        if (userId) {
+            queryConditions.push({
+                isUserSpecific: true,
+                assignedUserId: userId,
+                vendorType: { $in: ['Food', 'All'] },
                 isActive: true,
                 startDate: { $lte: now },
                 expiryDate: { $gte: now }

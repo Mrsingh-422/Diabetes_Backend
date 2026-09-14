@@ -1,3 +1,5 @@
+const { sendPushNotification } = require('../../../utils/notification');
+const User = require('../../../models/User');
 const Coupon = require('../../../models/Coupon');
 
 // Helper: Normalize Role to match Coupon Enum ['Lab', 'Pharmacy', 'Food', 'Ambulance', 'Doctor', 'Clinic', 'All']
@@ -269,7 +271,75 @@ const getCouponEnumTypes = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+// ==========================================
+// 🌟 ADMIN: CREATE SPECIAL USER-SPECIFIC COUPON (ON CANCELLED TIFFIN)
+// Full Path: POST /provider/coupons/admin/special-user
+// ==========================================
+const createAdminUserSpecificCoupon = async (req, res) => {
+    try {
+        const { 
+            userId, 
+            cancellationBookingId, 
+            couponName, 
+            discountPercentage, 
+            maxDiscount, 
+            expiryDate, 
+            minOrderAmount = 0, 
+            maxUsagePerUser = 1 
+        } = req.body;
 
+        if (!userId || !couponName || !discountPercentage || !maxDiscount || !expiryDate) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "userId, couponName, discountPercentage, maxDiscount, and expiryDate are required." 
+            });
+        }
+
+        const user = await User.findById(userId);
+        if (!user) {
+            return res.status(404).json({ success: false, message: "Target user not found." });
+        }
+
+        const coupon = await Coupon.create({
+            creatorId: req.user.id,
+            vendorType: 'Food',
+            vendorId: null,
+            isAdminCreated: true,
+            isUserSpecific: true,
+            assignedUserId: userId,
+            cancellationBookingId: cancellationBookingId || null,
+            couponName: couponName.trim().toUpperCase(),
+            discountPercentage: Number(discountPercentage),
+            maxDiscount: Number(maxDiscount),
+            minOrderAmount: Number(minOrderAmount),
+            maxUsagePerUser: Number(maxUsagePerUser),
+            startDate: new Date(),
+            expiryDate: new Date(expiryDate),
+            isActive: true
+        });
+
+        // 🔔 Send Apology / Compensation Push Notification to User
+        sendPushNotification(
+            userId,
+            'user',
+            'Exclusive Discount Coupon For You! 🎁',
+            `We apologize for the cancellation. Use code ${coupon.couponName} to get ${discountPercentage}% OFF on your next Food order!`,
+            { couponCode: coupon.couponName, type: 'SPECIAL_COUPON_GIFT' }
+        ).catch(() => {});
+
+        res.status(201).json({
+            success: true,
+            message: `Special exclusive coupon created for user ${user.name || user.phone}!`,
+            data: coupon
+        });
+
+    } catch (error) {
+        if (error.code === 11000) {
+            return res.status(400).json({ success: false, message: "Coupon code already exists. Please use a unique name." });
+        }
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
 module.exports = {
     createCoupon,
     getMyCoupons,
@@ -281,5 +351,6 @@ module.exports = {
     toggleAdminCoupon,
     updateAdminCoupon,
     deleteAdminCoupon,
-    getCouponEnumTypes
+    getCouponEnumTypes,
+    createAdminUserSpecificCoupon
 };

@@ -10,7 +10,10 @@ const couponSchema = new mongoose.Schema({
     isAdminCreated: { type: Boolean, default: false }, // Flag to identify admin coupons
 
     vendorId: { type: mongoose.Schema.Types.ObjectId, refPath: 'vendorType', default: null },
-
+     // 🌟 NEW: User-Specific Coupon Fields
+    isUserSpecific: { type: Boolean, default: false },
+    assignedUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+    cancellationBookingId: { type: String, default: null }, // Track karne ke liye kis cancelled order ke badle diya
 
     couponName: { type: String, required: true, unique: true, uppercase: true },
     discountPercentage: { type: Number, required: true },

@@ -293,12 +293,12 @@ const toggleDoctorOnlineStatus = async (req, res) => {
 
 
 // ==========================================
-// 5. UPDATE PROFILE (Bio, Fees, Availability, Direct Toggles, etc.)
+// 5. UPDATE PROFILE & 3-WAY CONSULTATION FEES
 // Endpoint: PUT /api/auth/doctor/update-profile
 // ==========================================
 const updateDoctorProfile = async (req, res) => {
     try {
-        const doctorId = req.user.id; // Logged-in doctor ID from protect('doctor')
+        const doctorId = req.user.id;
         const updates = { ...req.body };
 
         const existingDoc = await Doctor.findById(doctorId);
@@ -306,7 +306,7 @@ const updateDoctorProfile = async (req, res) => {
             return res.status(404).json({ success: false, message: 'Doctor not found' });
         }
  
-        // 🚨 SECURITY LOCKS: Protect sensitive fields from direct modifications
+        // 🚨 Security locks
         delete updates.email;
         delete updates.phone;
         delete updates.password;
@@ -315,7 +315,7 @@ const updateDoctorProfile = async (req, res) => {
         delete updates.rejectionReason;
         delete updates.documents;
  
-        // 1. Parse Multipart JSON Strings (Arrays & Objects)
+        // 1. Parse JSON strings
         const arrayFields = ['availability', 'languages', 'fees', 'consultationStatus', 'treatedConditions', 'competencies', 'qualifications'];
         arrayFields.forEach(field => {
             if (updates[field]) {
@@ -327,27 +327,54 @@ const updateDoctorProfile = async (req, res) => {
             }
         });
 
-        // 🚨 2. DIRECT CONSULTATION AVAILABILITY TOGGLES (Boolean Conversion)
+        // 🚀 2. FIX: Convert Flat Fees (onlineFee, clinicFee, homeFee) to nested 'fees' Object
+        const onlineVal = updates.onlineFee !== undefined ? updates.onlineFee : (updates.fees?.online !== undefined ? updates.fees.online : (updates.online !== undefined ? updates.online : existingDoc.fees?.online));
+        const clinicVal = updates.clinicFee !== undefined ? updates.clinicFee : (updates.fees?.clinic !== undefined ? updates.fees.clinic : (updates.clinic !== undefined ? updates.clinic : existingDoc.fees?.clinic));
+        const homeVal = updates.homeFee !== undefined ? updates.homeFee : (updates.fees?.home !== undefined ? updates.fees.home : (updates.home !== undefined ? updates.home : existingDoc.fees?.home));
+
+        updates.fees = {
+            online: Number(onlineVal || 0),
+            clinic: Number(clinicVal || 0),
+            home: Number(homeVal || 0)
+        };
+
+        // Flat keys clean up
+        delete updates.onlineFee;
+        delete updates.clinicFee;
+        delete updates.homeFee;
+        delete updates.online;
+        delete updates.clinic;
+        delete updates.home;
+
+        // 3. Number conversions
+        if (updates.experienceYears !== undefined) {
+            updates.experienceYears = Number(updates.experienceYears);
+        }
+
+        // 4. Consultation Availability Status
+        let consultStatus = existingDoc.consultationStatus ? { ...existingDoc.consultationStatus.toObject() } : { online: true, clinic: true, home: false };
+        if (updates.consultationStatus && typeof updates.consultationStatus === 'object') {
+            consultStatus = { ...consultStatus, ...updates.consultationStatus };
+        }
         if (updates.isClinicAvailable !== undefined) {
-            updates.isClinicAvailable = (updates.isClinicAvailable === 'true' || updates.isClinicAvailable === true);
+            const val = updates.isClinicAvailable === 'true' || updates.isClinicAvailable === true;
+            updates.isClinicAvailable = val;
+            consultStatus.clinic = val;
         }
         if (updates.isOnlineAvailable !== undefined) {
-            updates.isOnlineAvailable = (updates.isOnlineAvailable === 'true' || updates.isOnlineAvailable === true);
+            const val = updates.isOnlineAvailable === 'true' || updates.isOnlineAvailable === true;
+            updates.isOnlineAvailable = val;
+            consultStatus.online = val;
         }
         if (updates.isHomeAvailable !== undefined) {
-            updates.isHomeAvailable = (updates.isHomeAvailable === 'true' || updates.isHomeAvailable === true);
+            const val = updates.isHomeAvailable === 'true' || updates.isHomeAvailable === true;
+            updates.isHomeAvailable = val;
+            consultStatus.home = val;
         }
 
-        // Backward compatibility sync for consultationStatus
-        if (updates.isClinicAvailable !== undefined || updates.isOnlineAvailable !== undefined || updates.isHomeAvailable !== undefined) {
-            updates.consultationStatus = {
-                clinic: updates.isClinicAvailable !== undefined ? updates.isClinicAvailable : existingDoc.isClinicAvailable,
-                online: updates.isOnlineAvailable !== undefined ? updates.isOnlineAvailable : existingDoc.isOnlineAvailable,
-                home: updates.isHomeAvailable !== undefined ? updates.isHomeAvailable : existingDoc.isHomeAvailable
-            };
-        }
+        updates.consultationStatus = consultStatus;
 
-        // 3. Process Uploaded Files
+        // 5. File Uploads
         if (req.files?.profileImage?.[0]) {
             updates.profileImage = `/uploads/doctors/${req.files.profileImage[0].filename}`;
         }
@@ -355,7 +382,7 @@ const updateDoctorProfile = async (req, res) => {
             updates.signatureImage = `/uploads/doctors/${req.files.signatureImage[0].filename}`;
         }
 
-        // 🚨 4. DISK CLEANUP: Delete unapproved files from any existing PENDING request
+        // 6. Delete previous pending requests & their unapproved files
         const existingPending = await ProfileUpdateRequest.findOne({ 
             vendorId: doctorId, 
             vendorModel: 'Doctor', 
@@ -372,7 +399,7 @@ const updateDoctorProfile = async (req, res) => {
             await ProfileUpdateRequest.findByIdAndDelete(existingPending._id);
         }
 
-        // 5. Save Staged Update Request for Admin Review
+        // 7. Save Staged Update Request for Admin Review
         const request = await ProfileUpdateRequest.create({
             vendorId: doctorId,
             vendorModel: 'Doctor',
@@ -384,15 +411,15 @@ const updateDoctorProfile = async (req, res) => {
             status: 'Pending'
         });
 
-        // 6. 🔔 NOTIFY ADMINS ABOUT UPDATE REQUEST
+        // 8. Notify Admins
         try {
             const { notifyAdminsAndVendor } = require('../../utils/notification');
             if (notifyAdminsAndVendor) {
                 await notifyAdminsAndVendor(
                     doctorId,
                     'doctor',
-                    "Doctor Self-Profile Update Request",
-                    `Dr. ${existingDoc.name} has submitted updated profile changes. Please review and approve.`
+                    "Doctor Profile & Fees Update Request",
+                    `Dr. ${existingDoc.name} has updated consultation fees and profile details. Please review for approval.`
                 );
             }
         } catch (notifErr) {
@@ -401,7 +428,7 @@ const updateDoctorProfile = async (req, res) => {
  
         res.status(200).json({
             success: true,
-            message: 'Profile changes submitted to Admin for review. Your profile will update once approved.',
+            message: 'Profile changes and consultation fees submitted to Admin for review. Your profile will update once approved.',
             status: 'Pending',
             requestId: request._id,
             data: request
@@ -418,7 +445,7 @@ const updateDoctorProfile = async (req, res) => {
 const getDoctorProfile = async (req, res) => {
     try {
         // req.user.id protect middleware se aata hai
-        const doctor = await Doctor.findById(req.user.id).populate('hospitalId', 'name address');
+        const doctor = await Doctor.findById(req.user.id).populate('clinicId', 'name address');
 
         if (!doctor) {
             return res.status(404).json({ success: false, message: 'Doctor not found' });
