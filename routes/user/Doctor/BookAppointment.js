@@ -3,7 +3,7 @@ const express = require('express');
 const router = express.Router();
 const { protect } = require('../../../middleware/authMiddleware');
 const { requireConditionPlan } = require('../../../middleware/subscriptionCheckMiddleware');
-const { userReportUploads } = require('../../../middleware/multer');
+const { userReportUploads, doctorApptReportUpload } = require('../../../middleware/multer');
 
 const { 
     getSpecializations, 
@@ -14,7 +14,8 @@ const {
     getUserAppointments, 
     userCancelAppointment, rescheduleAppointment,
     trackAppointment, getMyPrescriptions, getAvailableSlots, getTrackingStatus, getShareableTrackingLink,
-    rateDoctorAppointment,getUserVideoConsults
+    rateDoctorAppointment,getUserVideoConsults,
+    getUserAppointmentById
 } = require('../../../controllers/user/Doctor/BookAppointment');
 
 // Base URL: /user/doctors
@@ -28,7 +29,7 @@ router.post('/validate-coupon', protect('user'), validateCoupon);
 router.post('/checkout-summary', protect('user'), getCheckoutSummary);
 
 // 1. Step 1: Create Order & Book
-router.post('/book', protect('user'), userReportUploads, bookAppointment);
+router.post('/book', protect('user'), doctorApptReportUpload, bookAppointment);
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////
 // 1a. Specialized Disease Care Booking (Dementia, Dialysis, Cancer) - Restricted to Subscribers
@@ -40,6 +41,7 @@ router.post('/verify-payment', protect('user'), verifyDoctorPayment); // 👈 Ad
 
 router.post('/verify-otp', protect('user'), verifyTrackingOTP);
 router.get('/my-appointments', protect('user'), getUserAppointments);
+router.get('/my-appointments/:id', protect('user'), getUserAppointmentById); 
 router.get('/track/:appointmentId', protect('user'), trackAppointment);
 router.patch('/cancel/:id', protect('user'), userCancelAppointment);
 router.post('/reschedule', protect('user'), rescheduleAppointment);

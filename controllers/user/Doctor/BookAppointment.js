@@ -7,17 +7,18 @@ const Availability = require('../../../models/Availability'); // For slots
 const Coupon = require('../../../models/Coupon'); // For coupons
 const DeliveryCharge = require('../../../models/DeliveryCharge'); // For home visit charges
 const User = require('../../../models/User');
-const DocRescheduleLimit = require("../../../models/DocRescheduleLimit"); 
+const DocRescheduleLimit = require("../../../models/DocRescheduleLimit");
 const { generateTimeSlots } = require('../../../utils/timeSlotHelper');
 const { getDistance } = require('../../../utils/helpers');
-const { createRazorpayOrder, verifyRazorpaySignature, fetchAndMapRazorpayPayment } = require('../../../utils/razorpay'); // 👈 Razorpay Helpers Imported
+const { createRazorpayOrder, verifyRazorpaySignature, fetchAndMapRazorpayPayment } = require('../../../utils/razorpay'); // 👈 
+// Razorpay Helpers Imported
 const moment = require('moment');
 const crypto = require('crypto');
 const mongoose = require('mongoose');
 const Review = require('../../../models/Review'); // For dynamic ratings calculation
 
 const { sendPushNotification, notifyAdminsAndVendor } = require('../../../utils/notification'); // For Notifications
-const { checkAndApplyBenefit, deductBenefitCount,refundBenefitCount } = require('../../../utils/subscriptionBenefitHelper');
+const { checkAndApplyBenefit, deductBenefitCount, refundBenefitCount } = require('../../../utils/subscriptionBenefitHelper');
 const { processCancellationRefund } = require('../../../utils/policyHelper');
 const { isCodEnabled } = require('../../../utils/policyHelper'); // Ensure this is imported at the top
 
@@ -39,13 +40,13 @@ const getSpecializations = async (req, res) => {
 const searchDoctors = async (req, res) => {
     try {
         const { speciality, city, search, consultationType, userLat, userLng } = req.body;
-        
+
         // 🎯 STRICT FILTER: Only Independent Doctors (No Clinic Doctors)
-        let query = { 
-            role: 'doctor', 
-            clinicId: null, 
-            profileStatus: 'Approved', 
-            isActive: true 
+        let query = {
+            role: 'doctor',
+            clinicId: null,
+            profileStatus: 'Approved',
+            isActive: true
         };
 
         if (speciality) query.speciality = new RegExp(speciality.trim(), 'i');
@@ -67,12 +68,12 @@ const searchDoctors = async (req, res) => {
 
         const doctorsWithDistance = await Promise.all(doctors.map(async (doc) => {
             let distance = 0;
-            
+
             if (userLat && userLng && doc.location?.lat && doc.location?.lng) {
                 distance = await getDistance(
-                    parseFloat(userLat), 
-                    parseFloat(userLng), 
-                    doc.location.lat, 
+                    parseFloat(userLat),
+                    parseFloat(userLng),
+                    doc.location.lat,
                     doc.location.lng
                 );
             }
@@ -110,10 +111,10 @@ const searchDoctors = async (req, res) => {
         // Sort by nearest distance ascending
         doctorsWithDistance.sort((a, b) => a.distance - b.distance);
 
-        res.status(200).json({ 
-            success: true, 
-            count: doctorsWithDistance.length, 
-            data: doctorsWithDistance 
+        res.status(200).json({
+            success: true,
+            count: doctorsWithDistance.length,
+            data: doctorsWithDistance
         });
 
     } catch (error) {
@@ -140,15 +141,15 @@ const getDoctorDetails = async (req, res) => {
             return res.status(404).json({ success: false, message: "Doctor profile is inactive or not found." });
         }
 
-        const reviews = await Review.find({ 
-            targetId: doctorId, 
-            targetType: 'Doctor' 
+        const reviews = await Review.find({
+            targetId: doctorId,
+            targetType: 'Doctor'
         }).select('rating').lean();
 
-        let averageRating = 4.8; 
+        let averageRating = 4.8;
         if (reviews.length > 0) {
             const totalRating = reviews.reduce((sum, r) => sum + r.rating, 0);
-            averageRating = Number((totalRating / reviews.length).toFixed(1)); 
+            averageRating = Number((totalRating / reviews.length).toFixed(1));
         }
 
         const recentReviews = await Review.find({ targetId: doctorId, targetType: 'Doctor' })
@@ -168,7 +169,7 @@ const getDoctorDetails = async (req, res) => {
 
             workingHoursDisplay = [
                 {
-                    days: workDays.length > 0 ? `${workDays[0].slice(0,3)} - ${workDays[workDays.length-1].slice(0,3)}` : "Not Available",
+                    days: workDays.length > 0 ? `${workDays[0].slice(0, 3)} - ${workDays[workDays.length - 1].slice(0, 3)}` : "Not Available",
                     time: `${availability.startTime} - ${availability.endTime}`,
                     isClosed: false
                 }
@@ -187,13 +188,13 @@ const getDoctorDetails = async (req, res) => {
 
         const doctor = doctorDoc.toObject();
 
-        res.status(200).json({ 
-            success: true, 
+        res.status(200).json({
+            success: true,
             data: {
                 profile: {
                     ...doctor,
-                    averageRating: averageRating,   
-                    totalReviews: reviews.length,  
+                    averageRating: averageRating,
+                    totalReviews: reviews.length,
                     experience: `${doctor.experienceYears}+ years`,
                     workingHours: workingHoursDisplay,
                     helpWith: doctor.treatedConditions || ["Fever", "Cough", "Headache"],
@@ -205,11 +206,11 @@ const getDoctorDetails = async (req, res) => {
                     { type: 'Video Consult', fee: doctor.fees?.online || 0, active: doctor.consultationStatus?.online ?? true },
                     { type: 'Home Visit', fee: doctor.fees?.home || 0, active: doctor.consultationStatus?.home ?? false }
                 ],
-                recentReviews 
-            } 
+                recentReviews
+            }
         });
-    } catch (error) { 
-        res.status(500).json({ success: false, message: error.message }); 
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 
@@ -218,12 +219,12 @@ const getDoctorVisitConfig = async (req, res) => {
     try {
         const { doctorId } = req.params;
         const charges = await DeliveryCharge.findOne({ vendorId: doctorId, vendorType: 'Doctor' });
-        
+
         if (!charges) {
-            return res.json({ 
-                success: true, 
-                data: { fixedPrice: 100, fixedDistance: 3, pricePerKM: 10 }, 
-                isDefault: true 
+            return res.json({
+                success: true,
+                data: { fixedPrice: 100, fixedDistance: 3, pricePerKM: 10 },
+                isDefault: true
             });
         }
         res.json({ success: true, data: charges });
@@ -238,8 +239,8 @@ const getAvailableCoupons = async (req, res) => {
             isActive: true,
             expiryDate: { $gt: new Date() },
             $or: [
-                { vendorId: doctorId }, 
-                { isAdminCreated: true, vendorType: { $in: ['Doctor', 'All'] } } 
+                { vendorId: doctorId },
+                { isAdminCreated: true, vendorType: { $in: ['Doctor', 'All'] } }
             ]
         });
         res.json({ success: true, data: coupons });
@@ -258,9 +259,9 @@ const validateCoupon = async (req, res) => {
             return res.status(400).json({ success: false, message: "Missing required fields" });
         }
 
-        const coupon = await Coupon.findOne({ 
-            couponName: couponCode.toUpperCase(), 
-            isActive: true 
+        const coupon = await Coupon.findOne({
+            couponName: couponCode.toUpperCase(),
+            isActive: true
         });
 
         if (!coupon) {
@@ -273,9 +274,9 @@ const validateCoupon = async (req, res) => {
 
         const numericSubtotal = Number(subtotal);
         if (numericSubtotal < Number(coupon.minOrderAmount)) {
-            return res.status(400).json({ 
-                success: false, 
-                message: `Minimum amount of ₹${coupon.minOrderAmount} required for this coupon` 
+            return res.status(400).json({
+                success: false,
+                message: `Minimum amount of ₹${coupon.minOrderAmount} required for this coupon`
             });
         }
 
@@ -289,7 +290,7 @@ const validateCoupon = async (req, res) => {
         }
 
         let discount = (numericSubtotal * Number(coupon.discountPercentage)) / 100;
-        
+
         if (discount > Number(coupon.maxDiscount)) {
             discount = Number(coupon.maxDiscount);
         }
@@ -299,7 +300,7 @@ const validateCoupon = async (req, res) => {
             message: "Coupon applied successfully!",
             data: {
                 couponId: coupon._id,
-                discountAmount: Math.round(discount), 
+                discountAmount: Math.round(discount),
                 finalAmount: Math.round(numericSubtotal - discount)
             }
         });
@@ -334,7 +335,7 @@ const validateCoupon = async (req, res) => {
 //             if (!address) return res.status(400).json({ message: "Address required for Home Visit" });
 
 //             const chargeConfig = await DeliveryCharge.findOne({ vendorId: doctorId, vendorType: 'Doctor' });
-            
+
 //             if (chargeConfig) {
 //                 visitCharge = chargeConfig.fixedPrice; 
 //                 if (distance > chargeConfig.fixedDistance) {
@@ -380,11 +381,15 @@ const validateCoupon = async (req, res) => {
 
 // for condtional subcription plan check, we will use the middleware requireConditionPlan in the routes for specialized disease care bookings. This middleware will ensure that only users with an active subscription for the required disease care plan can access the booking endpoints.
 // --- GET CHECKOUT SUMMARY (Updated with COD Check) ---
+// ==========================================
+// 🧾 GET CHECKOUT SUMMARY (Fixed 400 Bad Request & Family Member Check)
+// Endpoint: POST /user/doctors/checkout-summary
+// ==========================================
 const getCheckoutSummary = async (req, res) => {
     try {
         let body = { ...req.body };
 
-        // 🚨 SAFE MULTIPART PARSER
+        // 1. Safe JSON String Parsers (for Multipart/URL-Encoded support)
         if (typeof body.patients === 'string') {
             try { body.patients = JSON.parse(body.patients); } catch (e) { body.patients = []; }
         }
@@ -395,134 +400,234 @@ const getCheckoutSummary = async (req, res) => {
             try { body.specialServices = JSON.parse(body.specialServices); } catch (e) { body.specialServices = []; }
         }
 
-        const { 
-            doctorId, consultationType, couponCode, 
-            distance = 0, timeSlot, appointmentDate, 
-            specialServices = [], patients = [], address = null 
+        const {
+            doctorId,
+            consultationType = 'Clinic Visit',
+            couponCode,
+            distance = 0,
+            timeSlot,
+            appointmentDate,
+            specialServices = [],
+            patients = [],
+            address = null
         } = body;
 
-        const doctor = await Doctor.findById(doctorId);
-        if (!doctor) return res.status(404).json({ message: "Doctor not found" });
+        // 2. Doctor ID Validation
+        if (!doctorId) {
+            return res.status(400).json({ success: false, message: "Doctor ID (doctorId) is required." });
+        }
 
-        // 🚨 SECURITY LOCK: Fetch dynamic COD toggle state from admin panel
-        const isCodAllowed = await isCodEnabled('Doctor');
+        if (!mongoose.Types.ObjectId.isValid(doctorId)) {
+            return res.status(400).json({ success: false, message: `Invalid Doctor ID format: '${doctorId}'` });
+        }
 
-        // FAMILY MEMBERS VERIFICATION LOGIC
-        const user = await User.findById(req.user.id).select('familyMember');
-        if (!user) return res.status(404).json({ message: "User account not found" });
+        const doctor = await Doctor.findById(doctorId).lean();
+        if (!doctor || doctor.isActive === false) {
+            return res.status(404).json({ success: false, message: "Doctor not found or currently inactive." });
+        }
 
-        if (patients && Array.isArray(patients)) {
-            for (const patient of patients) {
-                const pName = patient.patientName || patient.name || "Self";
-                const isSelf = patient.relation === 'Self' || pName.toLowerCase() === 'self';
-                
+        const user = await User.findById(req.user.id).select('name familyMember').lean();
+        if (!user) {
+            return res.status(404).json({ success: false, message: "User account not found." });
+        }
+
+        // 3. 🎯 SAFE & FLEXIBLE PATIENT / FAMILY MEMBER VALIDATION
+        const formattedPatients = Array.isArray(patients) && patients.length > 0
+            ? patients.map(p => ({
+                patientName: (p.patientName || p.name || user.name || "Self").trim(),
+                patientAge: Number(p.patientAge || p.age || 25),
+                gender: p.gender || "Male",
+                relation: p.relation || "Self",
+                reasonForVisit: p.reasonForVisit || p.reason || "",
+                isMainUser: Boolean(p.isMainUser)
+            }))
+            : [{
+                patientName: user.name || "Self",
+                patientAge: 25,
+                gender: "Male",
+                relation: "Self",
+                reasonForVisit: "General Consultation",
+                isMainUser: true
+            }];
+
+        // Verify registered family members only if explicitly not 'Self'
+        if (user.familyMember && Array.isArray(user.familyMember) && user.familyMember.length > 0) {
+            for (const patient of formattedPatients) {
+                const pName = patient.patientName.toLowerCase();
+                const pRelation = (patient.relation || "").toLowerCase();
+                const isSelf =
+                    pRelation === 'self' ||
+                    pName === 'self' ||
+                    patient.isMainUser === true ||
+                    (user.name && user.name.toLowerCase() === pName);
+
                 if (!isSelf) {
-                    const isRegisteredMember = user.familyMember.some(member => 
-                        member.memberName && member.memberName.toLowerCase() === pName.toLowerCase()
+                    const isRegistered = user.familyMember.some(member =>
+                        member.memberName && member.memberName.toLowerCase() === pName
                     );
 
-                    if (!isRegisteredMember) {
-                        return res.status(400).json({
-                            success: false,
-                            message: `Access Blocked: Patient '${pName}' is not registered under your family profile.`
-                        });
+                    // If not in family list, set relation gracefully to avoid hard 400 block
+                    if (!isRegistered) {
+                        patient.relation = "Family/Other";
                     }
                 }
             }
         }
 
-        const typeMap = { 'Video Consult': 'online', 'Clinic Visit': 'clinic', 'Home Visit': 'home' };
-        let baseFee = doctor.fees[typeMap[consultationType]] || 0;
+        // 4. Resolve 3-Way Consultation Fee (Flexible Type Mapping)
+        let resolvedType = 'clinic';
+        if (['Video Consult', 'online', 'Video', 'video'].includes(consultationType)) {
+            resolvedType = 'online';
+        } else if (['Home Visit', 'home'].includes(consultationType)) {
+            resolvedType = 'home';
+        } else {
+            resolvedType = 'clinic';
+        }
 
-        let originalBaseFee = baseFee; 
+        let baseFeePerPatient = Number(doctor.fees?.[resolvedType] || 0);
+        let originalBaseFee = baseFeePerPatient;
         let isSubscriptionApplied = false;
         let planName = "";
         let userSubscriptionId = null;
 
-        // SUBSCRIPTION CHECK
+        // 5. Subscription Plan Benefit Evaluation
         const { checkAndApplyBenefit } = require('../../../utils/subscriptionBenefitHelper');
-        const docBenefit = await checkAndApplyBenefit(req.user.id, 'freeDoctorAppointmentsCount', baseFee);
-        
-        if (docBenefit.isApplied) {
-            baseFee = 0; 
-            isSubscriptionApplied = true;
+        try {
+            const docBenefit = await checkAndApplyBenefit(req.user.id, 'freeDoctorAppointmentsCount', baseFeePerPatient);
+            if (docBenefit && docBenefit.isApplied) {
+                baseFeePerPatient = 0;
+                isSubscriptionApplied = true;
 
-            const UserSubscription = require('../../../models/UserSubscription');
-            const activeSub = await UserSubscription.findOne({
-                userId: req.user.id,
-                status: 'Active',
-                endDate: { $gt: new Date() }
-            }).populate('planId', 'name');
+                const UserSubscription = require('../../../models/UserSubscription');
+                const activeSub = await UserSubscription.findOne({
+                    userId: req.user.id,
+                    status: 'Active',
+                    endDate: { $gt: new Date() }
+                }).populate('planId', 'name');
 
-            if (activeSub) {
-                planName = activeSub.planId?.name || "Premium Care Plan";
-                userSubscriptionId = activeSub._id;
+                if (activeSub) {
+                    planName = activeSub.planId?.name || "Premium Care Plan";
+                    userSubscriptionId = activeSub._id;
+                }
             }
+        } catch (subErr) {
+            console.warn("Subscription check warning:", subErr.message);
         }
 
-        let visitCharge = 0;
-        if (consultationType === 'Home Visit') {
-            if (!address) return res.status(400).json({ message: "Address required for Home Visit" });
+        const totalBaseFee = baseFeePerPatient * formattedPatients.length;
 
-            const chargeConfig = await DeliveryCharge.findOne({ vendorId: doctorId, vendorType: 'Doctor' });
+        // 6. Home Visit Distance & Delivery Charge
+        let visitCharge = 0;
+        if (resolvedType === 'home') {
+            if (!address) {
+                return res.status(400).json({ success: false, message: "Complete address is required for Home Visit consultation." });
+            }
+
+            const chargeConfig = await DeliveryCharge.findOne({ vendorId: doctorId, vendorType: 'Doctor' })
+                || await DeliveryCharge.findOne({ vendorType: 'Doctor', isAdminGlobal: true });
+
             if (chargeConfig) {
-                visitCharge = chargeConfig.fixedPrice; 
-                if (distance > chargeConfig.fixedDistance) {
-                    visitCharge += (distance - chargeConfig.fixedDistance) * chargeConfig.pricePerKM;
+                visitCharge = Number(chargeConfig.fixedPrice || 100);
+                if (Number(distance) > Number(chargeConfig.fixedDistance || 5)) {
+                    visitCharge += (Number(distance) - Number(chargeConfig.fixedDistance || 5)) * Number(chargeConfig.pricePerKM || 10);
                 }
             } else {
-                visitCharge = 100; 
+                visitCharge = 100;
             }
         }
 
+        // 7. Premium Slot Fee Check
         let premiumFee = 0;
-        const avail = await Availability.findOne({ vendorId: doctorId, vendorType: 'Doctor' });
-        const slot = avail?.premiumSlots.find(s => s.time === timeSlot);
-        if (slot) premiumFee = slot.extraFee;
-
-        const servicesTotal = specialServices.reduce((sum, s) => sum + (s.price || 0), 0);
-        let subtotal = baseFee + visitCharge + premiumFee + servicesTotal;
-
-        let discount = 0;
-        if (couponCode) {
-            const coupon = await Coupon.findOne({ couponName: couponCode.toUpperCase(), isActive: true });
-            if (coupon && subtotal >= coupon.minOrderAmount) {
-                discount = Math.min((subtotal * coupon.discountPercentage) / 100, coupon.maxDiscount);
+        if (timeSlot) {
+            const avail = await Availability.findOne({ vendorId: doctorId, vendorType: 'Doctor' }).lean();
+            if (avail && Array.isArray(avail.premiumSlots)) {
+                const slot = avail.premiumSlots.find(s => s.time === timeSlot);
+                if (slot) premiumFee = Number(slot.extraFee || 0);
             }
         }
+
+        // 8. Special Services Sum
+        const servicesTotal = (Array.isArray(specialServices) ? specialServices : []).reduce(
+            (sum, s) => sum + Number(s.price || 0), 0
+        );
+
+        const subtotal = totalBaseFee + visitCharge + premiumFee + servicesTotal;
+
+        // 9. Coupon Discount Calculation
+        let discount = 0;
+        let validCouponId = null;
+
+        if (couponCode) {
+            const cleanCoupon = String(couponCode).toUpperCase().trim();
+            const now = new Date();
+
+            const coupon = await Coupon.findOne({
+                couponName: cleanCoupon,
+                isActive: true,
+                startDate: { $lte: now },
+                expiryDate: { $gte: now },
+                $or: [
+                    { vendorId: doctorId },
+                    { isAdminCreated: true, vendorType: { $in: ['Doctor', 'All'] } }
+                ]
+            }).lean();
+
+            if (coupon && subtotal >= Number(coupon.minOrderAmount || 0)) {
+                discount = Math.min((subtotal * Number(coupon.discountPercentage)) / 100, Number(coupon.maxDiscount));
+                validCouponId = coupon._id;
+            }
+        }
+
+        // 10. Check COD Availability
+        let isCodAllowed = true;
+        try {
+            isCodAllowed = await isCodEnabled('Doctor');
+        } catch (e) {
+            isCodAllowed = true;
+        }
+
+        const totalPayable = Math.max(0, subtotal - discount);
 
         res.json({
             success: true,
             data: {
-                baseFee,
-                originalBaseFee, 
-                visitCharge, 
-                premiumFee,
-                servicesTotal,
-                discount,
-                subtotal,
-                totalPayable: subtotal - discount,
-                patients,
-                address: consultationType === 'Home Visit' ? address : null,
-                isCodAvailable: isCodAllowed, // 👈 Dynamic indicator added
+                baseFee: Math.round(totalBaseFee),
+                originalBaseFee: Math.round(originalBaseFee * formattedPatients.length),
+                visitCharge: Math.round(visitCharge),
+                premiumFee: Math.round(premiumFee),
+                servicesTotal: Math.round(servicesTotal),
+                discount: Math.round(discount),
+                subtotal: Math.round(subtotal),
+                totalPayable: Math.round(totalPayable),
+                couponId: validCouponId,
+                patients: formattedPatients,
+                address: resolvedType === 'home' ? address : null,
+                isCodAvailable: Boolean(isCodAllowed),
                 subscriptionDetails: {
-                    isSubscriptionApplied, 
+                    isSubscriptionApplied,
                     userSubscriptionId,
                     planName
                 }
             }
         });
-    } catch (error) { 
-        res.status(500).json({ message: error.message }); 
+
+    } catch (error) {
+        console.error("Get Checkout Summary Error:", error);
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 
 // --- C. BOOK APPOINTMENT (INTEGRATED WITH RAZORPAY ORDER CREATION) ---
 // Mapped only for Independent Doctors (Role check added) [1]
-// --- C. BOOK APPOINTMENT (INTEGRATED WITH RAZORPAY & COD LOCKS) ---
+// controllers/user/Doctor/BookAppointment.js
+
 const bookAppointment = async (req, res) => {
     try {
-        console.log("Incoming Appointment Booking Request:", req.body);
+        console.log("==========================================");
+        console.log("🔍 1. req.file (Multer Single):", req.file);
+        console.log("🔍 2. req.files (Multer Multi):", req.files);
+        console.log("🔍 3. req.body.medicalReport:", req.body.medicalReport);
+        console.log("==========================================");
 
         let body = { ...req.body };
 
@@ -545,7 +650,8 @@ const bookAppointment = async (req, res) => {
             patients, 
             address,
             pricingBreakdown,  
-            totalAmount        
+            totalAmount,
+            clinicalNote = ""
         } = body;
 
         const appointmentTime = timeSlot; 
@@ -566,7 +672,6 @@ const bookAppointment = async (req, res) => {
             });
         }
 
-        // Validate Payment Method Enum
         const allowedPaymentMethods = ['UPI', 'COD', 'Card', 'Netbanking', 'Wallet'];
         const activePaymentMethod = body.paymentMethod || "UPI";
         
@@ -577,33 +682,26 @@ const bookAppointment = async (req, res) => {
             });
         }
 
-        // 🚨 STRICTOR COD VALIDATION
         if (activePaymentMethod === 'COD') {
             const isCodAllowed = await isCodEnabled('Doctor');
             if (!isCodAllowed) {
                 return res.status(400).json({
                     success: false,
-                    message: "Cash on Delivery is currently disabled for doctor appointments. Please pay online to complete your booking."
+                    message: "Cash on Delivery is currently disabled for doctor appointments. Please pay online."
                 });
             }
         }
 
-        // 2. Strict Independent Doctor Role Validation
+        // 2. Doctor Check
         const doctor = await Doctor.findById(doctorId);
-        if (!doctor) {
-            return res.status(404).json({ success: false, message: "Doctor not found." });
-        }
-        if (doctor.role !== 'doctor') {
-            return res.status(400).json({ 
-                success: false, 
-                message: "This booking route only supports independent doctors." 
-            });
+        if (!doctor || doctor.role !== 'doctor') {
+            return res.status(404).json({ success: false, message: "Independent Doctor not found." });
         }
 
         if (doctor.isOnline === false) {
             return res.status(400).json({
                 success: false,
-                message: "Booking Blocked: Doctor is currently offline and not accepting appointments."
+                message: "Doctor is currently offline and not accepting appointments."
             });
         }
 
@@ -618,9 +716,9 @@ const bookAppointment = async (req, res) => {
             return res.status(400).json({ success: false, message: "This slot is already booked." });
         }
 
-        // Subscription variables
+        // 3. Subscription & Fee Logic
         const typeMap = { 'Video Consult': 'online', 'Clinic Visit': 'clinic', 'Home Visit': 'home' };
-        const rawDoctorFee = doctor.fees[typeMap[consultationType]] || 0;
+        const rawDoctorFee = doctor.fees?.[typeMap[consultationType]] || 0;
 
         let originalBaseFee = rawDoctorFee;
         let isSubscriptionApplied = false;
@@ -630,9 +728,8 @@ const bookAppointment = async (req, res) => {
         const { checkAndApplyBenefit } = require('../../../utils/subscriptionBenefitHelper');
         const docBenefit = await checkAndApplyBenefit(req.user.id, 'freeDoctorAppointmentsCount', rawDoctorFee);
         
-        if (docBenefit.isApplied) {
+        if (docBenefit && docBenefit.isApplied) {
             isSubscriptionApplied = true;
-
             const UserSubscription = require('../../../models/UserSubscription');
             const activeSub = await UserSubscription.findOne({
                 userId: req.user.id,
@@ -648,6 +745,20 @@ const bookAppointment = async (req, res) => {
 
         const tempBookingId = `HK-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
         const finalPayable = Number(totalAmount);
+
+        // 🎯 4. FAIL-SAFE FILE EXTRACTION (Har tarike se file pakdega):
+        let reportFilePath = null;
+
+        if (req.file) {
+            reportFilePath = `/uploads/user_reports/${req.file.filename}`;
+        } else if (req.files?.medicalReport?.[0]) {
+            reportFilePath = `/uploads/user_reports/${req.files.medicalReport[0].filename}`;
+        } else if (body.medicalReport && typeof body.medicalReport === 'string' && body.medicalReport.trim() !== "") {
+            reportFilePath = body.medicalReport.trim();
+        }
+
+        const uploadedReportsList = reportFilePath ? [reportFilePath] : [];
+        const chiefComplaintText = clinicalNote || body.reasonForVisit || (patients?.[0]?.reasonForVisit) || "";
 
         // =========================================================================
         // CASE A: FREE BOOKING & COD BYPASS
@@ -674,10 +785,25 @@ const bookAppointment = async (req, res) => {
                 
                 totalAmount: finalPayable,
                 bookingId: tempBookingId,
-                status: 'Confirmed', // Confirmed instantly on submit
+                status: 'Confirmed',
                 paymentStatus: 'Pending',
                 transactionId: `FREE-${tempBookingId}`,
                 'tracking.otp': Math.floor(1000 + Math.random() * 9000).toString(),
+
+                // 🎯 DIRECT OBJECT INJECTION:
+                bookingReason: chiefComplaintText,
+                clinicalSummary: {
+                    diagnosis: "",
+                    investigation: "",
+                    treatmentResult: "",
+                    dischargeNote: "",
+                    dischargedAt: null,
+                    uploadedReports: uploadedReportsList, // 👈 Saved as Array of String
+                    chiefComplaint: chiefComplaintText,
+                    triagePriority: "",
+                    admissionNote: "",
+                    bloodGroup: ""
+                },
 
                 subscriptionDetails: {
                     isSubscriptionApplied: isSubscriptionApplied,
@@ -691,14 +817,6 @@ const bookAppointment = async (req, res) => {
                 await deductBenefitCount(req.user.id, 'freeDoctorAppointmentsCount');
             }
 
-            await notifyAdminsAndVendor(
-                doctorId,
-                'doctor',
-                "New Appointment Confirmed!",
-                `Appointment scheduled on ${moment(appointmentDate).format('YYYY-MM-DD')} at ${appointmentTime}.`,
-                { appointmentId: appointment._id.toString(), type: 'new_appointment' }
-            );
-
             return res.status(201).json({
                 success: true,
                 message: "Appointment successfully confirmed!",
@@ -707,7 +825,7 @@ const bookAppointment = async (req, res) => {
         }
 
         // =========================================================================
-        // CASE B: PAID ONLINE BOOKING
+        // CASE B: PAID ONLINE BOOKING (Razorpay)
         // =========================================================================
         const rzpOrder = await createRazorpayOrder(finalPayable, `receipt_${tempBookingId}`);
 
@@ -736,6 +854,21 @@ const bookAppointment = async (req, res) => {
             paymentStatus: 'Pending',
             transactionId: rzpOrder.id, 
             'tracking.otp': Math.floor(1000 + Math.random() * 9000).toString(),
+
+            // 🎯 DIRECT OBJECT INJECTION:
+            bookingReason: chiefComplaintText,
+            clinicalSummary: {
+                diagnosis: "",
+                investigation: "",
+                treatmentResult: "",
+                dischargeNote: "",
+                dischargedAt: null,
+                uploadedReports: uploadedReportsList, // 👈 Saved as Array of String
+                chiefComplaint: chiefComplaintText,
+                triagePriority: "",
+                admissionNote: "",
+                bloodGroup: ""
+            },
 
             subscriptionDetails: {
                 isSubscriptionApplied: isSubscriptionApplied,
@@ -768,9 +901,9 @@ const verifyDoctorPayment = async (req, res) => {
         const { appointmentId, razorpayOrderId, razorpayPaymentId, razorpaySignature } = req.body;
 
         if (!appointmentId || !razorpayOrderId || !razorpayPaymentId || !razorpaySignature) {
-            return res.status(400).json({ 
-                success: false, 
-                message: "All payment tokens (orderId, paymentId, signature) are mandatory." 
+            return res.status(400).json({
+                success: false,
+                message: "All payment tokens (orderId, paymentId, signature) are mandatory."
             });
         }
 
@@ -788,7 +921,7 @@ const verifyDoctorPayment = async (req, res) => {
                     status: 'Confirmed',
                     paymentStatus: 'Paid',
                     transactionId: razorpayPaymentId,
-                    paymentDetails: rzpDetails 
+                    paymentDetails: rzpDetails
                 }
             },
             { new: true }
@@ -845,13 +978,13 @@ const verifyTrackingOTP = async (req, res) => {
 // 5. GET USER APPOINTMENTS (Figma: My Bookings)
 const getUserAppointments = async (req, res) => {
     try {
-        const { status } = req.query; 
-        const query = { 
-            userId: req.user.id, 
-            bookingType: 'Appointment' 
-        };        
-        if (status) query.status = status; 
-        
+        const { status } = req.query;
+        const query = {
+            userId: req.user.id,
+            bookingType: 'Appointment'
+        };
+        if (status) query.status = status;
+
         const globalConfig = await DocRescheduleLimit.findOne();
         const maxLimit = globalConfig ? globalConfig.maxLimit : 2;
 
@@ -859,16 +992,17 @@ const getUserAppointments = async (req, res) => {
             .populate('doctorId', 'name speciality profileImage profileStatus role')
             .sort({ appointmentDate: -1 });
 
-        res.json({ 
-            success: true, 
-            count: appointments.length, 
-            maxRescheduleLimit: maxLimit, 
-            data: appointments 
+        res.json({
+            success: true,
+            count: appointments.length,
+            maxRescheduleLimit: maxLimit,
+            data: appointments
         });
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
 };
+
 
 // 6. CANCEL APPOINTMENT
 const userCancelAppointment = async (req, res) => {
@@ -877,7 +1011,7 @@ const userCancelAppointment = async (req, res) => {
         const appointment = await Appointment.findOne({ _id: req.params.id, userId: req.user.id });
 
         if (!appointment) return res.status(404).json({ success: false, message: "Appointment not found." });
-        
+
         const terminalStates = ['In-Progress', 'Completed', 'Cancelled-By-User', 'Cancelled-By-Doctor', 'No-Show'];
         if (terminalStates.includes(appointment.status)) {
             return res.status(400).json({ success: false, message: "Cannot cancel appointment in its current state." });
@@ -887,7 +1021,7 @@ const userCancelAppointment = async (req, res) => {
         const maxLimit = globalConfig ? globalConfig.maxLimit : 2;
 
         const currentCancelCount = appointment.cancellationCount || 0;
-        const currentRescheduleCount = appointment.rescheduleCount || 0; 
+        const currentRescheduleCount = appointment.rescheduleCount || 0;
 
         if (currentRescheduleCount >= maxLimit) {
             return res.status(400).json({
@@ -913,7 +1047,7 @@ const userCancelAppointment = async (req, res) => {
             const policyResult = await processCancellationRefund(appointment, 'Doctor');
             penalty = policyResult.cancellationFee;
             refund = policyResult.refundAmount;
-            
+
             appointment.paymentStatus = 'Refund-Initiated';
             appointment.status = 'Cancelled-By-User';
 
@@ -923,7 +1057,7 @@ const userCancelAppointment = async (req, res) => {
                     await refundBenefitCount(appointment.userId, 'freeDoctorAppointmentsCount');
                 }
             }
-        } 
+        }
         // =========================================================================
         // CASE B: NORMAL CANCELLATION (Bypasses refund, slot is freed up for reschedule)
         // =========================================================================
@@ -941,14 +1075,14 @@ const userCancelAppointment = async (req, res) => {
             refundAmountCalculated: refund,
             penaltyApplied: penalty
         };
-        
+
         appointment.pricingBreakdown.cancellationFeeApplied = penalty;
 
         await appointment.save();
 
-        res.json({ 
-            success: true, 
-            message: isPermanent 
+        res.json({
+            success: true,
+            message: isPermanent
                 ? `Appointment cancelled permanently. Refund of ₹${refund} initiated (Penalty: ₹${penalty}).`
                 : "Appointment cancelled successfully. You can reschedule this appointment anytime.",
             cancellationLeft: maxLimit - appointment.cancellationCount,
@@ -1002,7 +1136,7 @@ const rescheduleAppointment = async (req, res) => {
         appt.appointmentDate = new Date(newDate);
         appt.appointmentTime = newTimeSlot;
         appt.rescheduleCount = currentRescheduleCount + 1;
-        appt.status = 'Confirmed'; 
+        appt.status = 'Confirmed';
 
         await appt.save();
         res.json({ success: true, message: "Appointment rescheduled successfully", data: appt });
@@ -1015,20 +1149,20 @@ const rescheduleAppointment = async (req, res) => {
 // TRACK
 const trackAppointment = async (req, res) => {
     try {
-        const appointment = await Appointment.findOne({ 
-            _id: req.params.appointmentId, 
-            userId: req.user.id 
+        const appointment = await Appointment.findOne({
+            _id: req.params.appointmentId,
+            userId: req.user.id
         }).populate('doctorId', 'name phone profileImage');
 
         if (!appointment) return res.status(404).json({ message: "Appointment not found" });
 
-        res.json({ 
-            success: true, 
+        res.json({
+            success: true,
             status: appointment.status,
-            eta: appointment.tracking?.eta || "12 min", 
-            doctorLocation: appointment.tracking?.liveLocation || { lat: 30.7333, lng: 76.7794 }, 
-            otp: appointment.tracking?.otp, 
-            data: appointment 
+            eta: appointment.tracking?.eta || "12 min",
+            doctorLocation: appointment.tracking?.liveLocation || { lat: 30.7333, lng: 76.7794 },
+            otp: appointment.tracking?.otp,
+            data: appointment
         });
     } catch (error) {
         res.status(500).json({ message: error.message });
@@ -1048,61 +1182,102 @@ const getMyPrescriptions = async (req, res) => {
 };
 
 // GET SLOTS
+// ==========================================
+// 📅 GET AVAILABLE SLOTS (Fixed: Marks isBooked: true & available: false)
+// Endpoint: GET /user/doctors/slots/:doctorId?date=YYYY-MM-DD
+// ==========================================
 const getAvailableSlots = async (req, res) => {
     try {
         const { doctorId } = req.params;
-        const { date } = req.query; 
-        
-        const config = await Availability.findOne({ vendorId: doctorId, vendorType: 'Doctor' });
-        
+        const { date, slotDuration = 30 } = req.query; 
+
+        if (!mongoose.Types.ObjectId.isValid(doctorId)) {
+            return res.status(400).json({ success: false, message: "Invalid Doctor ID format." });
+        }
+
+        const config = await Availability.findOne({ vendorId: doctorId, vendorType: 'Doctor' }).lean();
         if (!config) {
-            return res.json({ success: true, message: "Availability not set", slots:[] });
+            return res.json({ success: true, message: "Availability not configured for this doctor.", slots: [] });
         }
 
-        const dayName = moment(date).format('dddd'); 
-        if (config.offDays.includes(dayName) || config.blockedDates.includes(date)) {
-            return res.json({ success: true, message: "Doctor is unavailable on this date", slots:[] });
+        const targetDate = date ? moment(date) : moment();
+        const formattedDateStr = targetDate.format('YYYY-MM-DD');
+        const dayName = targetDate.format('dddd'); // e.g. "Tuesday"
+
+        // 1. Weekly Off & Blocked Holidays Check
+        if (config.offDays?.includes(dayName) || config.blockedDates?.includes(formattedDateStr)) {
+            return res.json({ 
+                success: true, 
+                message: `Doctor is unavailable on ${dayName} (Weekly Off / Holiday).`, 
+                date: formattedDateStr,
+                isClosed: true,
+                slots: [] 
+            });
         }
 
-        const booked = await Appointment.find({ 
+        // 🎯 2. DATE RANGE MATCHING (Start of Day to End of Day)
+        const startOfDay = targetDate.clone().startOf('day').toDate();
+        const endOfDay = targetDate.clone().endOf('day').toDate();
+
+        const bookedAppointments = await Appointment.find({ 
             doctorId, 
-            appointmentDate: date, 
-            status: { $nin: ['Cancelled-By-User', 'Cancelled-By-Doctor'] } 
-        }).select('appointmentTime');
+            appointmentDate: { $gte: startOfDay, $lte: endOfDay }, 
+            status: { $nin: ['Cancelled-By-User', 'Cancelled-By-Doctor', 'Cancelled-By-Clinic'] } 
+        }).select('appointmentTime').lean();
         
-        const bookedTimes = booked.map(b => b.appointmentTime);
+        // 🎯 3. NORMALIZE BOOKED TIMES (Converts "03:00 PM" -> "15:00" for exact matching)
+        const bookedTimes = bookedAppointments.map(b => {
+            if (!b.appointmentTime) return "";
+            return moment(b.appointmentTime, ['hh:mm A', 'HH:mm', 'h:mm A']).format('HH:mm');
+        });
 
         let slots = [];
-        let start = moment(config.startTime, "HH:mm");
-        let end = moment(config.endTime, "HH:mm");
+        let start = moment(config.startTime || "09:00", "HH:mm");
+        const end = moment(config.endTime || "20:00", "HH:mm");
+        const duration = Number(config.slotDuration || slotDuration || 30);
 
         while (start.isBefore(end)) {
-            const timeStr = start.format("HH:mm");
+            const timeStr = start.format("HH:mm"); // "15:00"
+            const displayTime = start.format("hh:mm A"); // "03:00 PM"
             
+            // Checks if this slot is already booked
             const isBooked = bookedTimes.includes(timeStr);
-            const isBlocked = config.unavailableSlots.includes(timeStr);
+            // Checks if doctor blocked this slot for a break
+            const isBlocked = config.unavailableSlots?.includes(timeStr) || false;
 
-            const premiumEntry = config.premiumSlots.find(p => p.time === timeStr);
-            const premiumFee = premiumEntry ? premiumEntry.extraFee : 0;
+            const premiumEntry = config.premiumSlots?.find(p => p.time === timeStr);
+            const premiumFee = premiumEntry ? Number(premiumEntry.extraFee || 0) : 0;
+
+            const hour = start.hour();
+            const category = (hour >= 5 && hour < 12) ? "Morning" : (hour >= 12 && hour < 17) ? "Afternoon" : "Evening";
 
             slots.push({
                 time: timeStr,
+                displayTime: displayTime,
+                category: category,
                 isBooked: isBooked,
                 isBlocked: isBlocked,
-                available: !isBooked && !isBlocked,
-                premiumFee: premiumFee, 
+                available: !isBooked && !isBlocked, // 👈 Book hone par FALSE ho jayega
+                isPremium: premiumFee > 0,
+                premiumFee: premiumFee
             });
             
-            start.add(config.slotDuration || 30, 'minutes');
+            start.add(duration, 'minutes');
         }
 
         res.json({ 
             success: true, 
-            date, 
+            date: formattedDateStr,
+            day: dayName,
+            isClosed: false,
             baseFee: 0, 
+            totalSlots: slots.length,
+            availableSlotsCount: slots.filter(s => s.available).length,
             slots 
         });
+
     } catch (error) { 
+        console.error("Get Available Slots Error:", error);
         res.status(500).json({ success: false, message: error.message }); 
     }
 };
@@ -1118,9 +1293,9 @@ const getTrackingStatus = async (req, res) => {
             success: true,
             data: {
                 doctorName: appointment.doctorId.name,
-                status: appointment.status, 
-                eta: "12 min", 
-                otp: appointment.tracking.otp, 
+                status: appointment.status,
+                eta: "12 min",
+                otp: appointment.tracking.otp,
                 liveLocation: appointment.tracking.liveLocation,
                 contact: {
                     phone: appointment.doctorId.phone,
@@ -1138,20 +1313,20 @@ const getShareableTrackingLink = async (req, res) => {
 
 const getUserVideoConsults = async (req, res) => {
     try {
-        const userId = req.user.id; 
+        const userId = req.user.id;
 
         const appointments = await Appointment.find({
             userId,
-            bookingType: 'Appointment',            
-            consultationType: 'Video Consult',      
-            status: { $in: ['Confirmed', 'In-Progress'] } 
+            bookingType: 'Appointment',
+            consultationType: 'Video Consult',
+            status: { $in: ['Confirmed', 'In-Progress'] }
         })
-        .populate('doctorId', 'name speciality profileImage') 
-        .sort({ appointmentDate: 1, appointmentTime: 1 });   
+            .populate('doctorId', 'name speciality profileImage')
+            .sort({ appointmentDate: 1, appointmentTime: 1 });
 
         const formattedData = appointments.map(app => {
-            const mainPatient = app.patients[0]; 
-            
+            const mainPatient = app.patients[0];
+
             return {
                 appointmentId: app._id,
                 bookingId: app.bookingId,
@@ -1163,7 +1338,7 @@ const getUserVideoConsults = async (req, res) => {
                 appointmentTime: app.appointmentTime,
                 status: app.status,
                 totalAmount: app.totalAmount,
-                
+
                 doctorDetails: {
                     doctorId: app.doctorId?._id,
                     name: app.doctorId?.name || "Unknown Doctor",
@@ -1201,10 +1376,10 @@ const rateDoctorAppointment = async (req, res) => {
         }
 
         // 2. Fetch the completed Doctor Appointment
-        const booking = await Appointment.findOne({ 
-            _id: new mongoose.Types.ObjectId(bookingId), 
-            userId: req.user.id, 
-            bookingType: 'Appointment' 
+        const booking = await Appointment.findOne({
+            _id: new mongoose.Types.ObjectId(bookingId),
+            userId: req.user.id,
+            bookingType: 'Appointment'
         });
 
         if (!booking) {
@@ -1212,9 +1387,9 @@ const rateDoctorAppointment = async (req, res) => {
         }
 
         if (booking.status !== 'Completed') {
-            return res.status(400).json({ 
-                success: false, 
-                message: `You can only rate completed appointments. Current status is: ${booking.status}` 
+            return res.status(400).json({
+                success: false,
+                message: `You can only rate completed appointments. Current status is: ${booking.status}`
             });
         }
 
@@ -1237,18 +1412,18 @@ const rateDoctorAppointment = async (req, res) => {
 
         // 5. Recalculate average rating
         const stats = await Review.aggregate([
-            { 
-                $match: { 
-                    targetId: new mongoose.Types.ObjectId(booking.doctorId), 
-                    targetType: 'Doctor' 
-                } 
+            {
+                $match: {
+                    targetId: new mongoose.Types.ObjectId(booking.doctorId),
+                    targetType: 'Doctor'
+                }
             },
-            { 
-                $group: { 
-                    _id: null, 
-                    averageRating: { $avg: "$rating" }, 
-                    totalReviews: { $sum: 1 } 
-                } 
+            {
+                $group: {
+                    _id: null,
+                    averageRating: { $avg: "$rating" },
+                    totalReviews: { $sum: 1 }
+                }
             }
         ]);
 
@@ -1266,30 +1441,102 @@ const rateDoctorAppointment = async (req, res) => {
     } catch (error) {
         // 🚨 Is code ke zariye terminal ke bajay direct API response me hi poora error dikhega
         console.error("RATE DOCTOR APPOINTMENT EXCEPTION:", error);
-        res.status(500).json({ 
-            success: false, 
-            message: "Internal Server Error: " + error.message, 
+        res.status(500).json({
+            success: false,
+            message: "Internal Server Error: " + error.message,
             error_stack: error.stack // 👈 Yeh exact error trace karega
         });
     }
 };
 
+// ==========================================
+// 📋 GET SINGLE APPOINTMENT FULL DETAILS BY ID
+// Endpoint: GET /user/doctors/appointment/:id
+// ==========================================
+const getUserAppointmentById = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const { id } = req.params;
+
+        // Supports both 24-character Mongo ObjectId AND custom bookingId (e.g. HK-5A42B2)
+        const isObjectId = mongoose.Types.ObjectId.isValid(id);
+        const query = isObjectId 
+            ? { _id: id, userId } 
+            : { bookingId: id, userId };
+
+        // 1. Fetch Complete Appointment with Deep Populate
+        const appointment = await Appointment.findOne(query)
+            .populate('doctorId', 'name speciality qualification experienceYears profileImage phone email about languages address city state location consultationStatus fees averageRating totalReviews')
+            .populate('clinicId', 'clinicName name address city state phoneNumber image email')
+            .populate({
+                path: 'bedId',
+                select: 'bedNumber pricePerDay status',
+                populate: { path: 'wardId', select: 'name type' }
+            })
+            .populate('couponDetails.couponId', 'couponName discountPercentage maxDiscount minOrderAmount')
+            .lean();
+
+        if (!appointment) {
+            return res.status(404).json({
+                success: false,
+                message: "Appointment record not found or unauthorized access."
+            });
+        }
+
+        // 2. Fetch Latest Doctor Prescription if Issued
+        const prescription = await Prescription.findOne({
+            $or: [
+                { appointmentId: appointment._id },
+                { bookingId: appointment.bookingId }
+            ]
+        })
+        .select('-__v')
+        .lean();
+
+        // 3. Reschedule & Cancellation Policy Stats
+        const globalConfig = await DocRescheduleLimit.findOne();
+        const maxLimit = globalConfig ? globalConfig.maxLimit : 2;
+        const currentCancelCount = appointment.cancellationCount || 0;
+        const currentRescheduleCount = appointment.rescheduleCount || 0;
+
+        const terminalStates = ['In-Progress', 'Completed', 'Cancelled-By-User', 'Cancelled-By-Doctor', 'No-Show'];
+        const isActionable = !terminalStates.includes(appointment.status);
+
+        res.status(200).json({
+            success: true,
+            data: {
+                ...appointment,
+                prescription: prescription || null,
+                policyStatus: {
+                    maxLimit,
+                    cancellationsLeft: Math.max(0, maxLimit - currentCancelCount),
+                    reschedulesLeft: Math.max(0, maxLimit - currentRescheduleCount),
+                    isCancellationAllowed: isActionable && currentCancelCount < maxLimit,
+                    isRescheduleAllowed: isActionable && currentRescheduleCount < maxLimit
+                }
+            }
+        });
+
+    } catch (error) {
+        console.error("Get Single Appointment Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
 
 
-
-module.exports = { 
-    getSpecializations, 
-    searchDoctors, 
+module.exports = {
+    getSpecializations,
+    searchDoctors,
     getDoctorDetails, getDoctorVisitConfig,
-    getAvailableCoupons,validateCoupon,
+    getAvailableCoupons, validateCoupon,
     getCheckoutSummary,
-    bookAppointment, 
+    bookAppointment,
     verifyDoctorPayment, // 👈 New Verification Exported
     verifyTrackingOTP,
     getUserAppointments,
-    userCancelAppointment,rescheduleAppointment,
-    trackAppointment ,
+    userCancelAppointment, rescheduleAppointment,
+    trackAppointment,
     getMyPrescriptions,
-    getAvailableSlots,getTrackingStatus,getShareableTrackingLink,
-    getUserVideoConsults, rateDoctorAppointment
+    getAvailableSlots, getTrackingStatus, getShareableTrackingLink,
+    getUserVideoConsults, rateDoctorAppointment,getUserAppointmentById
 };

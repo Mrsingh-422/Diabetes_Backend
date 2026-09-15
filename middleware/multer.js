@@ -32,16 +32,16 @@ const clinicUploads = multer({
         filename: (req, file, cb) => cb(null, `clinic-${Date.now()}${path.extname(file.originalname)}`)
     }),
     fileFilter: docFileFilter,
-    limits: { fileSize: 10 * 1024 * 1024 } 
+    limits: { fileSize: 10 * 1024 * 1024 }
 }).fields([
-    { name: 'image', maxCount: 1 },                 
-    { name: 'posterimage', maxCount: 1 },           
-    { name: 'certificateImage', maxCount: 1 },      
-    { name: 'licenceCertificate', maxCount: 1 },    
-    { name: 'clinicImages', maxCount: 10 },         
-    { name: 'achievementImages', maxCount: 10 },    
-    { name: 'licenseDocument', maxCount: 5 },       
-    { name: 'otherDocuments', maxCount: 10 },       
+    { name: 'image', maxCount: 1 },
+    { name: 'posterimage', maxCount: 1 },
+    { name: 'certificateImage', maxCount: 1 },
+    { name: 'licenceCertificate', maxCount: 1 },
+    { name: 'clinicImages', maxCount: 10 },
+    { name: 'achievementImages', maxCount: 10 },
+    { name: 'licenseDocument', maxCount: 5 },
+    { name: 'otherDocuments', maxCount: 10 },
 
     //these are for clinic checkout form
     { name: 'medicalDocument', maxCount: 1 },
@@ -57,7 +57,7 @@ const clinicUploads = multer({
 const clinicDoctorDir = 'public/uploads/doctors';
 ensureDir(clinicDoctorDir);
 
-const clinicDoctorUploads = multer({ 
+const clinicDoctorUploads = multer({
     storage: multer.diskStorage({
         destination: (req, file, cb) => cb(null, clinicDoctorDir),
         filename: (req, file, cb) => cb(null, `clinic-doc-${Date.now()}${path.extname(file.originalname)}`)
@@ -76,7 +76,7 @@ const clinicDoctorUploads = multer({
 // ==========================================
 const doctorDir = 'public/uploads/doctors';
 ensureDir(doctorDir);
-const doctorDocUploads = multer({ 
+const doctorDocUploads = multer({
     storage: multer.diskStorage({
         destination: (req, file, cb) => cb(null, doctorDir),
         filename: (req, file, cb) => cb(null, `doc-${Date.now()}${path.extname(file.originalname)}`)
@@ -130,12 +130,12 @@ const pharmacyDocUploads = multer({
     limits: { fileSize: 5 * 1024 * 1024 }
 }).fields([
     { name: 'profileImage', maxCount: 1 },
-    { name: 'pharmacyImages', maxCount: 10 },       
-    { name: 'pharmacyCertificates', maxCount: 10 }, 
-    { name: 'pharmacyLicenses', maxCount: 10 },     
-    { name: 'gstCertificates', maxCount: 5 },       
-    { name: 'drugLicenses', maxCount: 5 },          
-    { name: 'otherCertificates', maxCount: 10 }     
+    { name: 'pharmacyImages', maxCount: 10 },
+    { name: 'pharmacyCertificates', maxCount: 10 },
+    { name: 'pharmacyLicenses', maxCount: 10 },
+    { name: 'gstCertificates', maxCount: 5 },
+    { name: 'drugLicenses', maxCount: 5 },
+    { name: 'otherCertificates', maxCount: 10 }
 ]);
 
 
@@ -183,11 +183,28 @@ const ambulanceDocUploads = multer({
 ]);
 
 // ==========================================
+// DOCTOR APPOINTMENT MEDICAL REPORT CONFIGURATION
+// ==========================================
+const doctorApptReportDir = 'public/uploads/user_reports';
+ensureDir(doctorApptReportDir);
+
+const doctorApptReportUpload = multer({
+    storage: multer.diskStorage({
+        destination: (req, file, cb) => cb(null, doctorApptReportDir),
+        filename: (req, file, cb) => {
+            const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
+            cb(null, `report-${uniqueSuffix}${path.extname(file.originalname)}`);
+        }
+    }),
+    fileFilter: docFileFilter,
+    limits: { fileSize: 10 * 1024 * 1024 } // 10MB limit
+}).single('medicalReport');
+// ==========================================
 // 8. LAB SERVICES (Tests & Packages Photos)
 // ==========================================
 const labServiceDir = 'public/uploads/lab_services';
 ensureDir(labServiceDir);
-const labServiceUploads = multer({ 
+const labServiceUploads = multer({
     storage: multer.diskStorage({
         destination: (req, file, cb) => cb(null, labServiceDir),
         filename: (req, file, cb) => cb(null, `service-${Date.now()}${path.extname(file.originalname)}`)
@@ -209,7 +226,7 @@ ensureDir(excelDir); ensureDir(frontendDir); ensureDir(userReportDir);
 const excelCsvFilter = (req, file, cb) => {
     const allowedExtensions = ['.csv', '.tsv', '.xlsx', '.xls'];
     const ext = path.extname(file.originalname).toLowerCase();
-    
+
     if (allowedExtensions.includes(ext) || file.mimetype.includes('csv') || file.mimetype.includes('excel') || file.mimetype.includes('spreadsheetml')) {
         cb(null, true); // File accepted
     } else {
@@ -218,10 +235,10 @@ const excelCsvFilter = (req, file, cb) => {
 };
 
 // Updated uploadExcel with filter
-const uploadExcel = multer({ 
-    storage: multer.diskStorage({ 
-        destination: (req, file, cb) => cb(null, excelDir), 
-        filename: (req, file, cb) => cb(null, `${Date.now()}-${file.originalname}`) 
+const uploadExcel = multer({
+    storage: multer.diskStorage({
+        destination: (req, file, cb) => cb(null, excelDir),
+        filename: (req, file, cb) => cb(null, `${Date.now()}-${file.originalname}`)
     }),
     fileFilter: excelCsvFilter // 👈 Ye add karna best practice hai
 });
@@ -355,12 +372,12 @@ const insuranceUpload = multer({
     fileFilter: (req, file, cb) => {
         // Allowing Images, PDF, and DOC files as per Flutter UI requirements
         const allowedMimes = [
-            'image/jpeg', 'image/jpg', 'image/png', 
-            'application/pdf', 
-            'application/msword', 
+            'image/jpeg', 'image/jpg', 'image/png',
+            'application/pdf',
+            'application/msword',
             'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
         ];
-        
+
         if (allowedMimes.includes(file.mimetype)) {
             cb(null, true);
         } else {
@@ -468,7 +485,7 @@ const policeStationUploads = multer({
     { name: 'stationImages', maxCount: 5 },
     { name: 'areaDocument', maxCount: 1 }
 ]);
- 
+
 
 // ==========================================
 // 24. POLICE STAFF CONFIGURATION
@@ -541,10 +558,10 @@ const nurseServiceUploads = multer({
 const careCSVDir = 'public/uploads/care_csv';
 ensureDir(careCSVDir);
 
-const careCSVUpload = multer({ 
-    storage: multer.diskStorage({ 
-        destination: (req, file, cb) => cb(null, careCSVDir), 
-        filename: (req, file, cb) => cb(null, `care-${Date.now()}-${file.originalname}`) 
+const careCSVUpload = multer({
+    storage: multer.diskStorage({
+        destination: (req, file, cb) => cb(null, careCSVDir),
+        filename: (req, file, cb) => cb(null, `care-${Date.now()}-${file.originalname}`)
     }),
     fileFilter: (req, file, cb) => {
         const ext = path.extname(file.originalname).toLowerCase();
@@ -711,8 +728,8 @@ const policeEvidenceUploads = multer({
     fileFilter: (req, file, cb) => {
         // Figma instructions: JPG, PNG, MP4 or PDF allowed
         const allowedMimes = [
-            'image/jpeg', 'image/jpg', 'image/png', 
-            'application/pdf', 
+            'image/jpeg', 'image/jpg', 'image/png',
+            'application/pdf',
             'video/mp4'
         ];
         if (allowedMimes.includes(file.mimetype)) {
@@ -877,8 +894,8 @@ const hospitalPrescriptionUploads = multer({
     storage: multer.diskStorage({
         destination: (req, file, cb) => {
             // Dynamically route files to their respective target directories
-            const dir = file.fieldname === 'dietPlanPdf' 
-                ? 'public/uploads/diet_plans' 
+            const dir = file.fieldname === 'dietPlanPdf'
+                ? 'public/uploads/diet_plans'
                 : 'public/uploads/doctor_prescriptions';
             cb(null, dir);
         },
@@ -910,8 +927,8 @@ ensureDir(hospitalDischargeDir);
 const hospitalDischargeFieldsUpload = multer({
     storage: multer.diskStorage({
         destination: (req, file, cb) => {
-            const dir = file.fieldname === 'dischargePdf' 
-                ? 'public/uploads/hospital_discharges' 
+            const dir = file.fieldname === 'dischargePdf'
+                ? 'public/uploads/hospital_discharges'
                 : 'public/uploads/doctor_reports';
             cb(null, dir);
         },
@@ -940,8 +957,8 @@ const blogUploads = multer({
         filename: (req, file, cb) => cb(null, `blog-${Date.now()}${path.extname(file.originalname)}`)
     }),
     fileFilter: docFileFilter,
-    limits: { fileSize: 5 * 1024 * 1024 } 
-}).single('blogImage'); 
+    limits: { fileSize: 5 * 1024 * 1024 }
+}).single('blogImage');
 
 // ========================================
 // 47. SCIENCE PAGE IMAGES CONFIGURATION
@@ -1119,7 +1136,7 @@ const foodServiceImageUpload = multer({
     }),
     fileFilter: docFileFilter,
     limits: { fileSize: 5 * 1024 * 1024 } // 5MB limit
-}).single('imageUrl'); 
+}).single('imageUrl');
 
 // ==========================================
 // 52. BANNER IMAGE & VIDEO CONFIGURATION (For Food landing dynamic sliders)
@@ -1168,7 +1185,7 @@ const foodAddonImageUpload = multer({
 
 
 
-module.exports = { 
+module.exports = {
     clinicUploads,
     contentUploads,
     doctorDocUploads,
@@ -1192,7 +1209,7 @@ module.exports = {
     fireHQUploads,
     fireStationUploads,
     fireStaffUploads,
-     policeHQUploads,
+    policeHQUploads,
     policeStationUploads,
     policeStaffUploads,
     fireCaseUploads,
@@ -1215,8 +1232,8 @@ module.exports = {
     scienceUploads,
     nursingPrescriptionUploads,
     labReportUpload,
-    docPrescriptionUpload,hospitalPrescriptionUploads,hospitalDischargeFieldsUpload,blogUploads,
-    videoUploads,videoUpdateUploads ,footerUploads,aboutUsUploads,
-    foodDocUploads,foodServiceImageUpload,bannerUploadParser,foodAddonImageUpload,clinicDoctorUploads
+    docPrescriptionUpload, hospitalPrescriptionUploads, hospitalDischargeFieldsUpload, blogUploads,
+    videoUploads, videoUpdateUploads, footerUploads, aboutUsUploads,
+    foodDocUploads, foodServiceImageUpload, bannerUploadParser, foodAddonImageUpload, clinicDoctorUploads,doctorApptReportUpload
 
 };  
