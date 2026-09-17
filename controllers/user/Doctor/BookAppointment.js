@@ -975,14 +975,24 @@ const verifyTrackingOTP = async (req, res) => {
     }
 };
 
-// 5. GET USER APPOINTMENTS (Figma: My Bookings)
+// ==========================================
+// 5. GET USER APPOINTMENTS (Only Independent Doctor Appointments)
+// Endpoint: GET /user/doctors/my-appointments
+// ==========================================
 const getUserAppointments = async (req, res) => {
     try {
         const { status } = req.query;
+
+        // 🎯 STRICT FILTER: Only Independent Doctor Appointments (Excludes Clinic Appointments)
         const query = {
             userId: req.user.id,
-            bookingType: 'Appointment'
+            bookingType: 'Appointment',
+            $or: [
+                { clinicId: null },
+                { clinicId: { $exists: false } }
+            ]
         };
+
         if (status) query.status = status;
 
         const globalConfig = await DocRescheduleLimit.findOne();
@@ -999,15 +1009,112 @@ const getUserAppointments = async (req, res) => {
             data: appointments
         });
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 
 
 // 6. CANCEL APPOINTMENT
+// const userCancelAppointment = async (req, res) => {
+//     try {
+//         const { reason, isPermanent = false } = req.body; // isPermanent: true (Refund) | false (Reschedule-Ready)
+//         const appointment = await Appointment.findOne({ _id: req.params.id, userId: req.user.id });
+
+//         if (!appointment) return res.status(404).json({ success: false, message: "Appointment not found." });
+
+//         const terminalStates = ['In-Progress', 'Completed', 'Cancelled-By-User', 'Cancelled-By-Doctor', 'No-Show'];
+//         if (terminalStates.includes(appointment.status)) {
+//             return res.status(400).json({ success: false, message: "Cannot cancel appointment in its current state." });
+//         }
+
+//         const globalConfig = await DocRescheduleLimit.findOne();
+//         const maxLimit = globalConfig ? globalConfig.maxLimit : 2;
+
+//         const currentCancelCount = appointment.cancellationCount || 0;
+//         const currentRescheduleCount = appointment.rescheduleCount || 0;
+
+//         if (currentRescheduleCount >= maxLimit) {
+//             return res.status(400).json({
+//                 success: false,
+//                 message: `Cancellation Blocked: Reschedule limit (${maxLimit}) has expired.`
+//             });
+//         }
+
+//         if (currentCancelCount >= maxLimit) {
+//             return res.status(400).json({
+//                 success: false,
+//                 message: `Cancellation Blocked: Maximum cancellations (${maxLimit}) reached.`
+//             });
+//         }
+
+//         let penalty = 0;
+//         let refund = 0;
+
+//         // =========================================================================
+//         // CASE A: PERMANENT CANCELLATION (Calculates dynamic fee & locks refund)
+//         // =========================================================================
+//         if (isPermanent === true || isPermanent === "true") {
+//             const policyResult = await processCancellationRefund(appointment, 'Doctor');
+//             penalty = policyResult.cancellationFee;
+//             refund = policyResult.refundAmount;
+
+//             appointment.paymentStatus = 'Refund-Initiated';
+//             appointment.status = 'Cancelled-By-User';
+
+//             // Subscription benefit refund check (only if cancellation fee is 0)
+//             if (appointment.subscriptionDetails?.isSubscriptionApplied && appointment.pricingBreakdown?.baseFee === 0) {
+//                 if (penalty === 0) {
+//                     await refundBenefitCount(appointment.userId, 'freeDoctorAppointmentsCount');
+//                 }
+//             }
+//         }
+//         // =========================================================================
+//         // CASE B: NORMAL CANCELLATION (Bypasses refund, slot is freed up for reschedule)
+//         // =========================================================================
+//         else {
+//             appointment.paymentStatus = 'Paid'; // Keep payment valid
+//             appointment.status = 'Cancelled-By-User'; // Marked so the user can click Reschedule
+//         }
+
+//         appointment.cancellationCount = currentCancelCount + 1;
+//         appointment.cancellationDetails = {
+//             cancelledBy: req.user.id,
+//             reason: reason || "Cancelled by user",
+//             cancelledAt: new Date(),
+//             isPermanent: isPermanent === true || isPermanent === "true",
+//             refundAmountCalculated: refund,
+//             penaltyApplied: penalty
+//         };
+
+//         appointment.pricingBreakdown.cancellationFeeApplied = penalty;
+
+//         await appointment.save();
+
+//         res.json({
+//             success: true,
+//             message: isPermanent
+//                 ? `Appointment cancelled permanently. Refund of ₹${refund} initiated (Penalty: ₹${penalty}).`
+//                 : "Appointment cancelled successfully. You can reschedule this appointment anytime.",
+//             cancellationLeft: maxLimit - appointment.cancellationCount,
+//             data: {
+//                 cancellationFee: penalty,
+//                 refundAmount: refund,
+//                 appointment
+//             }
+//         });
+//     } catch (error) {
+//         res.status(500).json({ success: false, message: error.message });
+//     }
+// };
+
+// 6. CANCEL APPOINTMENT (Hard-coded isPermanent to false)
 const userCancelAppointment = async (req, res) => {
     try {
-        const { reason, isPermanent = false } = req.body; // isPermanent: true (Refund) | false (Reschedule-Ready)
+        const { reason } = req.body; 
+        
+        // 🔒 HARD-CODED: isPermanent ko hamesha false rakha gaya hai (Reschedule-Ready mode only)
+        const isPermanent = false; 
+
         const appointment = await Appointment.findOne({ _id: req.params.id, userId: req.user.id });
 
         if (!appointment) return res.status(404).json({ success: false, message: "Appointment not found." });
@@ -1041,37 +1148,17 @@ const userCancelAppointment = async (req, res) => {
         let refund = 0;
 
         // =========================================================================
-        // CASE A: PERMANENT CANCELLATION (Calculates dynamic fee & locks refund)
+        // CASE B: NORMAL CANCELLATION (Ab hamesha yahi chalega kyunki isPermanent = false hai)
         // =========================================================================
-        if (isPermanent === true || isPermanent === "true") {
-            const policyResult = await processCancellationRefund(appointment, 'Doctor');
-            penalty = policyResult.cancellationFee;
-            refund = policyResult.refundAmount;
-
-            appointment.paymentStatus = 'Refund-Initiated';
-            appointment.status = 'Cancelled-By-User';
-
-            // Subscription benefit refund check (only if cancellation fee is 0)
-            if (appointment.subscriptionDetails?.isSubscriptionApplied && appointment.pricingBreakdown?.baseFee === 0) {
-                if (penalty === 0) {
-                    await refundBenefitCount(appointment.userId, 'freeDoctorAppointmentsCount');
-                }
-            }
-        }
-        // =========================================================================
-        // CASE B: NORMAL CANCELLATION (Bypasses refund, slot is freed up for reschedule)
-        // =========================================================================
-        else {
-            appointment.paymentStatus = 'Paid'; // Keep payment valid
-            appointment.status = 'Cancelled-By-User'; // Marked so the user can click Reschedule
-        }
+        appointment.paymentStatus = 'Paid'; // Keep payment valid
+        appointment.status = 'Cancelled-By-User'; // Marked so the user can click Reschedule
 
         appointment.cancellationCount = currentCancelCount + 1;
         appointment.cancellationDetails = {
             cancelledBy: req.user.id,
             reason: reason || "Cancelled by user",
             cancelledAt: new Date(),
-            isPermanent: isPermanent === true || isPermanent === "true",
+            isPermanent: false,
             refundAmountCalculated: refund,
             penaltyApplied: penalty
         };
@@ -1082,9 +1169,7 @@ const userCancelAppointment = async (req, res) => {
 
         res.json({
             success: true,
-            message: isPermanent
-                ? `Appointment cancelled permanently. Refund of ₹${refund} initiated (Penalty: ₹${penalty}).`
-                : "Appointment cancelled successfully. You can reschedule this appointment anytime.",
+            message: "Appointment cancelled successfully. You can reschedule this appointment anytime.",
             cancellationLeft: maxLimit - appointment.cancellationCount,
             data: {
                 cancellationFee: penalty,
@@ -1096,7 +1181,6 @@ const userCancelAppointment = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
-
 // RESCHEDULE
 const rescheduleAppointment = async (req, res) => {
     try {

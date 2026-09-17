@@ -15,7 +15,7 @@ const { getVendorDashboard,
     updateConsultationFees, rescheduleAppointment,getAllPrescriptions,
     getPrescriptionDetails, updatePrescription, resendPrescription,getAppointmentClinicalDetails, createPrescription,
     getPatientHistory, getPatientHistoryDetails,
-    getDoctorVideoConsults,searchMasterMedicinesForDoctor, reportDoctorNoShow
+    getDoctorVideoConsults,searchMasterMedicinesForDoctor, reportDoctorNoShow,getAppointmentFullDetailsById
 } = require('../../controllers/doctor/Appointment');
 
 // Base URL: /doctor/appointments
@@ -27,6 +27,8 @@ router.get('/stats', protect('doctor'), getDoctorStats);
 
 // 2. Main Appointment List (Figma: Patient Bookings)
 router.get('/patient-bookings', protect('doctor'), getDoctorBookings);
+router.get('/full-details/:id', protect('doctor'), getAppointmentFullDetailsById);
+
 
 // 3. Today's List (Figma: Today's Schedule)
 router.get('/today-appointments', protect('doctor'), getTodayBookings);

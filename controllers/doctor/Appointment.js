@@ -6,6 +6,7 @@ const moment = require('moment');
 const crypto = require('crypto');
 const mongoose = require('mongoose');
 const NoShowConfig = require('../../models/NoShowConfig');
+const { getApp } = require('firebase-admin');
 
 
 // GET: Doctor Dashboard Stats
@@ -104,29 +105,70 @@ const getVendorDashboard = async (req, res) => {
 
 
 // 1. GET ALL INDEPENDENT DOCTOR BOOKINGS (Only Appointments)
+// // endpoint: GET /doctor/appointments/patient-bookings
+// const getDoctorBookings = async (req, res) => {
+//     try {
+//         const { status, consultationType } = req.query;
+        
+//         // Security Check: Only independent doctors
+//         if (req.user.role !== 'doctor') {
+//             return res.status(403).json({ message: "Access denied. Not an independent doctor." });
+//         }
+
+//         let query = { 
+//             doctorId: req.user.id, 
+//             bookingType: 'Appointment' // Only normal appointments
+//         };
+
+//         // 1. Status Filter
+//         if (status) query.status = status;
+
+//         // 2. Consultation Type Filter (Video Consult, Clinic Visit, Home Visit)
+//         if (consultationType) {
+//             const lowerType = consultationType.toLowerCase();
+            
+//             // Map query params (video, clinic, home) to exact schema enum values
+//             if (lowerType === 'video' || lowerType === 'video consult') {
+//                 query.consultationType = 'Video Consult';
+//             } else if (lowerType === 'clinic' || lowerType === 'clinic visit') {
+//                 query.consultationType = 'Clinic Visit';
+//             } else if (lowerType === 'home' || lowerType === 'home visit') {
+//                 query.consultationType = 'Home Visit';
+//             } else {
+//                 query.consultationType = consultationType; // Fallback in case exact string is passed
+//             }
+//         }
+
+//         // 3. Sorting (Changed from 1 to -1 to get the latest/newest bookings first)
+//         const appointments = await Appointment.find(query)
+//             .populate('userId', 'name phone email')
+//             .sort({ appointmentDate: -1, appointmentTime: -1 }); // 👈 Reverse sort (Latest first)
+
+//         res.json({ success: true, count: appointments.length, data: appointments });
+//     } catch (error) {
+//         res.status(500).json({ message: error.message });
+//     }
+// };
+
+// 1. GET ALL INDEPENDENT DOCTOR BOOKINGS (Minimal & Clean Response)
 // endpoint: GET /doctor/appointments/patient-bookings
 const getDoctorBookings = async (req, res) => {
     try {
         const { status, consultationType } = req.query;
         
-        // Security Check: Only independent doctors
         if (req.user.role !== 'doctor') {
             return res.status(403).json({ message: "Access denied. Not an independent doctor." });
         }
 
         let query = { 
             doctorId: req.user.id, 
-            bookingType: 'Appointment' // Only normal appointments
+            bookingType: 'Appointment' 
         };
 
-        // 1. Status Filter
         if (status) query.status = status;
 
-        // 2. Consultation Type Filter (Video Consult, Clinic Visit, Home Visit)
         if (consultationType) {
             const lowerType = consultationType.toLowerCase();
-            
-            // Map query params (video, clinic, home) to exact schema enum values
             if (lowerType === 'video' || lowerType === 'video consult') {
                 query.consultationType = 'Video Consult';
             } else if (lowerType === 'clinic' || lowerType === 'clinic visit') {
@@ -134,20 +176,173 @@ const getDoctorBookings = async (req, res) => {
             } else if (lowerType === 'home' || lowerType === 'home visit') {
                 query.consultationType = 'Home Visit';
             } else {
-                query.consultationType = consultationType; // Fallback in case exact string is passed
+                query.consultationType = consultationType;
             }
         }
 
-        // 3. Sorting (Changed from 1 to -1 to get the latest/newest bookings first)
         const appointments = await Appointment.find(query)
             .populate('userId', 'name phone email')
-            .sort({ appointmentDate: -1, appointmentTime: -1 }); // 👈 Reverse sort (Latest first)
+            .populate('doctorId', 'name qualification speciality phone')
+            .sort({ appointmentDate: -1, appointmentTime: -1 });
 
-        res.json({ success: true, count: appointments.length, data: appointments });
+        const formattedData = appointments.map(appointment => {
+            const primaryPatient = appointment.patients?.[0] || {};
+            const user = appointment.userId || {};
+            const addr = appointment.address || {};
+
+            const formattedAddress = [
+                addr.houseNo,
+                addr.sector ? `Sector ${addr.sector}` : '',
+                addr.landmark,
+                addr.city,
+                addr.state,
+                addr.pincode ? `- ${addr.pincode}` : ''
+            ].filter(Boolean).join(', ');
+
+            return {
+                // 1. Total Pay / Total Amount
+                totalPay: appointment.totalAmount || 0,
+
+                // 2. Appointment Info
+                appointmentInfo: {
+                    id: appointment._id,
+                    bookingId: appointment.bookingId || appointment._id,
+                    serviceType: appointment.serviceType || "General Consultation",
+                    consultationType: appointment.consultationType,
+                    date: appointment.appointmentDate ? moment(appointment.appointmentDate).format('YYYY-MM-DD') : null,
+                    formattedDate: appointment.appointmentDate ? moment(appointment.appointmentDate).format('DD/MM/YYYY') : "N/A",
+                    timeSlot: appointment.appointmentTime || "N/A",
+                    status: appointment.status,
+                    paymentStatus: appointment.paymentStatus,
+                    isPaid: appointment.paymentStatus === 'Paid',
+                    price: appointment.totalAmount || 0,
+                    problemDescription: appointment.problemDescription || primaryPatient.reasonForVisit || "N/A"
+                },
+
+                // 3. Patient Details
+                patientDetails: {
+                    name: primaryPatient.patientName || user.name || "N/A",
+                    age: primaryPatient.patientAge || "N/A",
+                    gender: primaryPatient.gender || "N/A",
+                    phone: user.phone || addr.phone || "N/A",
+                    email: user.email || "N/A",
+                    address: formattedAddress || "N/A"
+                }
+            };
+        });
+
+        res.json({ success: true, count: formattedData.length, data: formattedData });
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
 };
+
+
+// 2. GET APPOINTMENT FULL DETAILS BY ID (Row Click Modal / Page View)
+// endpoint: GET /doctor/appointments/full-details/:id
+const getAppointmentFullDetailsById = async (req, res) => {
+    try {
+        const appointmentId = req.params.id;
+
+        if (!mongoose.Types.ObjectId.isValid(appointmentId)) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Invalid Appointment ID format." 
+            });
+        }
+
+        const appointment = await Appointment.findOne({
+            _id: appointmentId,
+            doctorId: req.user.id
+        })
+        .populate('userId', 'name email phone profileImage')
+        .populate('doctorId', 'name email phone qualification speciality');
+
+        if (!appointment) {
+            return res.status(404).json({ 
+                success: false, 
+                message: "Appointment not found or unauthorized access." 
+            });
+        }
+
+        // Fetch associated prescription if available
+        const prescription = await Prescription.findOne({ appointmentId: appointment._id })
+            .populate('medicines.MedicineId', 'name manufacturers mrp');
+
+        const primaryPatient = appointment.patients?.[0] || {};
+        const user = appointment.userId || {};
+        const doc = appointment.doctorId || {};
+        const addr = appointment.address || {};
+
+        const formattedAddress = [
+            addr.houseNo,
+            addr.sector ? `Sector ${addr.sector}` : '',
+            addr.landmark,
+            addr.city,
+            addr.state,
+            addr.pincode ? `- ${addr.pincode}` : ''
+        ].filter(Boolean).join(', ');
+
+        const fullDetailsResponse = {
+            appointmentInfo: {
+                id: appointment._id,
+                bookingId: appointment.bookingId || appointment._id,
+                serviceType: appointment.serviceType || "General Consultation",
+                consultationType: appointment.consultationType,
+                date: appointment.appointmentDate ? moment(appointment.appointmentDate).format('YYYY-MM-DD') : null,
+                formattedDate: appointment.appointmentDate ? moment(appointment.appointmentDate).format('DD/MM/YYYY') : "N/A",
+                timeSlot: appointment.appointmentTime || "N/A",
+                status: appointment.status,
+                paymentStatus: appointment.paymentStatus,
+                isPaid: appointment.paymentStatus === 'Paid',
+                price: appointment.totalAmount || 0,
+                problemDescription: appointment.problemDescription || primaryPatient.reasonForVisit || "N/A"
+            },
+            patientDetails: {
+                name: primaryPatient.patientName || user.name || "N/A",
+                age: primaryPatient.patientAge || "N/A",
+                gender: primaryPatient.gender || "N/A",
+                phone: user.phone || addr.phone || "N/A",
+                email: user.email || "N/A",
+                address: formattedAddress || "N/A"
+            },
+            doctorDetails: {
+                name: doc.name || "N/A",
+                speciality: doc.speciality || "N/A",
+                qualification: doc.qualification || "N/A",
+                phone: doc.phone || "N/A"
+            },
+            // Added all requested raw sub-documents from schema
+            address: appointment.address || {},
+            pricingBreakdown: appointment.pricingBreakdown || {},
+            insuranceDetails: appointment.insuranceDetails || {},
+            clinicalSummary: appointment.clinicalSummary || {},
+            paymentDetails: appointment.paymentDetails || {},
+            cancellationDetails: appointment.cancellationDetails || {},
+            patients: appointment.patients || [],
+            prescriptionDetails: prescription ? {
+                diagnosis: prescription.diagnosis || [],
+                medicines: prescription.medicines || [],
+                advice: prescription.adviceGiven || prescription.additionalNotes || "",
+                advisedInvestigations: prescription.advisedInvestigations || "",
+                nextAppointment: prescription.nextAppointment || "",
+                pdfUrl: prescription.pdfUrl || null,
+                createdAt: prescription.createdAt
+            } : null
+        };
+
+        res.json({
+            success: true,
+            data: fullDetailsResponse
+        });
+
+    } catch (error) {
+        console.error("Error in getAppointmentFullDetailsById:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
 
 // 2. GET TODAY'S SCHEDULE (Independent Flow)
 // endpoint: GET /doctor/appointments/today-appointments
@@ -950,6 +1145,6 @@ module.exports = { getVendorDashboard,
     getPatientHistory, getPatientHistoryDetails,
     getDoctorVideoConsults,
     searchMasterMedicinesForDoctor,
-    reportDoctorNoShow
+    reportDoctorNoShow,getAppointmentFullDetailsById
 
 };
