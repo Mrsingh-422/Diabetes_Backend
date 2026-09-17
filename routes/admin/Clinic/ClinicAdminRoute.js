@@ -9,7 +9,7 @@ const {
     getClinicDoctorsAdmin,
     getClinicDoctorDetailsAdmin,
     approveClinicDoctorStatus
-} = require('../../../controllers/clinic/ClinicAdmin.js'); 
+} = require('../../../controllers/admin/Clinic/ClinicAdmin.js'); 
 
 // Base route : /api/admin/clinic
 

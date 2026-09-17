@@ -1,7 +1,7 @@
 // controllers/clinic/ClinicAdmin.js
-const Clinic = require('../../models/Clinic'); 
-const Doctor = require('../../models/Doctor');
-const ProfileUpdateRequest = require('../../models/ProfileUpdateRequest');
+const Clinic = require('../../../models/Clinic'); 
+const Doctor = require('../../../models/Doctor');
+const ProfileUpdateRequest = require('../../../models/ProfileUpdateRequest');
 
 // ==========================================
 // 1. ADMIN: GET CLINICS WITH FILTERS & PAGINATION

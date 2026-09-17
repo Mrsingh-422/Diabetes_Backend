@@ -205,6 +205,7 @@ app.use('/admin/food/special', require('./routes/admin/Food/FoodSpecialRoute'));
 app.use('/admin/food/manage/combo', require('./routes/admin/Food/foodComboControllerRoute')); 
 app.use('/admin/food/tiffin/plans', require('./routes/admin/Food/TiffinPlanAdminRoute')); 
 app.use('/admin/food/peak-charges', require('./routes/admin/Food/PeakOrderChargeAdminRoute')); 
+app.use('/admin/food/healthy-plans', require('./routes/admin/Food/FoodHealthyPlansAdminRoute')); 
 
 // =========================== Admin Food Routes End =============================================
 

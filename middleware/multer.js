@@ -1183,7 +1183,26 @@ const foodAddonImageUpload = multer({
     limits: { fileSize: 5 * 1024 * 1024 } // 5MB limit
 }).single('imageUrl'); // Key for Postman upload: 'imageUrl'
 
+// ==========================================
+// 53. HEALTHY FOOD PLANS UPLOADS (1 Banner + Multiple Images Array)
+// ==========================================
+const healthyPlanDir = 'public/uploads/foods/healthy_plans';
+ensureDir(healthyPlanDir);
 
+const foodHealthyPlanUploads = multer({
+    storage: multer.diskStorage({
+        destination: (req, file, cb) => cb(null, healthyPlanDir),
+        filename: (req, file, cb) => {
+            const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
+            cb(null, `healthy-plan-${uniqueSuffix}${path.extname(file.originalname)}`);
+        }
+    }),
+    fileFilter: docFileFilter,
+    limits: { fileSize: 10 * 1024 * 1024 } // 10MB limit per image
+}).fields([
+    { name: 'bannerImage', maxCount: 1 }, // 👈 1 Single Banner Image
+    { name: 'images', maxCount: 10 }       // 👈 Multiple Images Array
+]);
 
 module.exports = {
     clinicUploads,
@@ -1234,6 +1253,7 @@ module.exports = {
     labReportUpload,
     docPrescriptionUpload, hospitalPrescriptionUploads, hospitalDischargeFieldsUpload, blogUploads,
     videoUploads, videoUpdateUploads, footerUploads, aboutUsUploads,
-    foodDocUploads, foodServiceImageUpload, bannerUploadParser, foodAddonImageUpload, clinicDoctorUploads,doctorApptReportUpload
+    foodDocUploads, foodServiceImageUpload, bannerUploadParser, foodAddonImageUpload, clinicDoctorUploads,doctorApptReportUpload,
+    foodHealthyPlanUploads
 
 };  
