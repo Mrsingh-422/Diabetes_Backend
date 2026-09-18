@@ -14,14 +14,6 @@ const vendorHealthyPlanSchema = new mongoose.Schema({
         required: true,
         index: true
     },
-    customPrice: { 
-        type: Number, 
-        default: null // Optional override for totalPrice
-    },
-    customDiscountPrice: {
-        type: Number,
-        default: null // Optional override for discountTotalPrice
-    },
     isAvailable: { 
         type: Boolean, 
         default: false 

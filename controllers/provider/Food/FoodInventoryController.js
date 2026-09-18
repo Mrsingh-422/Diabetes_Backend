@@ -584,10 +584,10 @@ const getVendorTiffinPlanById = async (req, res) => {
 };
 
 // ==========================================
-// 🥗 HEALTHY PLANS VENDOR INVENTORY SECTION
+// 🥗 HEALTHY PLANS VENDOR INVENTORY (NO CUSTOM PRICING)
 // ==========================================
 
-// --- 1. GET MASTER HEALTHY PLANS CHECKLIST FOR VENDOR SELECTION ---
+// --- 1. GET MASTER HEALTHY PLANS CHECKLIST ---
 // Full Path: GET /provider/food/inventory/master-healthy-plans
 const getMasterHealthyPlansForSelection = async (req, res) => {
     try {
@@ -598,16 +598,14 @@ const getMasterHealthyPlansForSelection = async (req, res) => {
         if (mainCategory) filter.mainCategory = new RegExp(`^${mainCategory.trim()}$`, 'i');
         if (subCategory) filter.subCategory = new RegExp(`^${subCategory.trim()}$`, 'i');
 
-        // Fetch master plans with day-wise meals
         const masterPlans = await FoodHealthyPlans.find(filter)
             .populate({
                 path: 'dayWiseSchedule.breakfast dayWiseSchedule.lunch dayWiseSchedule.dinner',
-                select: 'name imageUrl price discountPrice calories dietType foodEffectCategory',
+                select: 'name imageUrl price discountPrice calories dietType foodEffectCategory ingredients',
                 strictPopulate: false
             })
             .lean();
 
-        // Fetch this vendor's mappings
         const vendorMappings = await VendorHealthyPlan.find({ vendorId }).lean();
 
         const checklist = masterPlans.map(plan => {
@@ -617,9 +615,7 @@ const getMasterHealthyPlansForSelection = async (req, res) => {
 
             return {
                 ...plan,
-                isAvailable: mapping ? mapping.isAvailable : false,
-                customPrice: mapping ? mapping.customPrice : null,
-                customDiscountPrice: mapping ? mapping.customDiscountPrice : null
+                isAvailable: mapping ? mapping.isAvailable : false
             };
         });
 
@@ -634,15 +630,18 @@ const getMasterHealthyPlansForSelection = async (req, res) => {
     }
 };
 
-// --- 2. MULTI-SYNC HEALTHY PLANS (Bulk Select/Deselect & Custom Pricing) ---
+// --- 2. MULTI-SYNC HEALTHY PLANS (ONLY AVAILABILITY SYNC) ---
 // Full Path: POST /provider/food/inventory/sync-healthy-plans
 const syncHealthyPlans = async (req, res) => {
     try {
         const vendorId = req.user.id;
-        const { selectedPlanIds = [], customPricing = {} } = req.body;
+        const { selectedPlanIds = [] } = req.body;
 
         if (!Array.isArray(selectedPlanIds)) {
-            return res.status(400).json({ success: false, message: "selectedPlanIds must be an array of Healthy Plan IDs." });
+            return res.status(400).json({ 
+                success: false, 
+                message: "selectedPlanIds must be an array of Healthy Plan IDs." 
+            });
         }
 
         const allMasterPlans = await FoodHealthyPlans.find({ isActive: true }).select('_id').lean();
@@ -650,16 +649,11 @@ const syncHealthyPlans = async (req, res) => {
         const operations = allMasterPlans.map(plan => {
             const planIdStr = plan._id.toString();
             const isSelected = selectedPlanIds.map(id => id.toString()).includes(planIdStr);
-            const pricingObj = customPricing[planIdStr] || {};
-
-            const updatePayload = { isAvailable: isSelected };
-            if (pricingObj.customPrice !== undefined) updatePayload.customPrice = Number(pricingObj.customPrice);
-            if (pricingObj.customDiscountPrice !== undefined) updatePayload.customDiscountPrice = Number(pricingObj.customDiscountPrice);
 
             return {
                 updateOne: {
                     filter: { vendorId, healthyPlanId: plan._id },
-                    update: { $set: updatePayload },
+                    update: { $set: { isAvailable: isSelected } },
                     upsert: true
                 }
             };
@@ -687,11 +681,20 @@ const toggleHealthyPlanAvailability = async (req, res) => {
         const vendorId = req.user.id;
         const { healthyPlanId } = req.params;
 
-        const existing = await VendorHealthyPlan.findOne({ vendorId, healthyPlanId });
+        let targetPlanId = healthyPlanId;
+        if (!mongoose.Types.ObjectId.isValid(healthyPlanId)) {
+            const master = await FoodHealthyPlans.findOne({ planId: healthyPlanId });
+            if (!master) {
+                return res.status(404).json({ success: false, message: "Healthy plan not found." });
+            }
+            targetPlanId = master._id;
+        }
+
+        const existing = await VendorHealthyPlan.findOne({ vendorId, healthyPlanId: targetPlanId });
         const newStatus = existing ? !existing.isAvailable : true;
 
         const mapping = await VendorHealthyPlan.findOneAndUpdate(
-            { vendorId, healthyPlanId },
+            { vendorId, healthyPlanId: targetPlanId },
             { $set: { isAvailable: newStatus } },
             { upsert: true, new: true }
         );
@@ -722,7 +725,7 @@ const getVendorHealthyPlans = async (req, res) => {
         const masterPlans = await FoodHealthyPlans.find(query)
             .populate({
                 path: 'dayWiseSchedule.breakfast dayWiseSchedule.lunch dayWiseSchedule.dinner',
-                select: 'name imageUrl price discountPrice calories dietType foodEffectCategory',
+                select: 'name imageUrl price discountPrice calories dietType foodEffectCategory ingredients',
                 strictPopulate: false
             })
             .lean();
@@ -736,9 +739,7 @@ const getVendorHealthyPlans = async (req, res) => {
 
             return {
                 ...plan,
-                isAvailable: mapping ? mapping.isAvailable : false,
-                customPrice: mapping ? mapping.customPrice : null,
-                customDiscountPrice: mapping ? mapping.customDiscountPrice : null
+                isAvailable: mapping ? mapping.isAvailable : false
             };
         });
 
@@ -747,7 +748,6 @@ const getVendorHealthyPlans = async (req, res) => {
             result = result.filter(p => p.isAvailable === statusBool);
         }
 
-        // Available first
         result.sort((a, b) => {
             if (a.isAvailable !== b.isAvailable) return a.isAvailable ? -1 : 1;
             return new Date(b.createdAt) - new Date(a.createdAt);
@@ -764,7 +764,7 @@ const getVendorHealthyPlans = async (req, res) => {
     }
 };
 
-// --- 5. GET SINGLE VENDOR HEALTHY PLAN FULL DETAILS BY ID ---
+// --- 5. GET SINGLE VENDOR HEALTHY PLAN FULL DETAILS ---
 // Full Path: GET /provider/food/inventory/healthy-plans/:id
 const getVendorHealthyPlanById = async (req, res) => {
     try {
@@ -796,9 +796,7 @@ const getVendorHealthyPlanById = async (req, res) => {
             success: true,
             data: {
                 ...plan,
-                isAvailable: mapping ? mapping.isAvailable : false,
-                customPrice: mapping ? mapping.customPrice : null,
-                customDiscountPrice: mapping ? mapping.customDiscountPrice : null
+                isAvailable: mapping ? mapping.isAvailable : false
             }
         });
 

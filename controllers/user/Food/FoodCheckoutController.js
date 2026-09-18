@@ -690,19 +690,25 @@ const verifyFoodPayment = async (req, res) => {
 };
 
 // ==========================================
-// 4. GET MY ORDERS (GET /my-orders)
+// 4. GET MY ORDERS (GET /my-orders - DIRECT ORDERS ONLY)
+// Full Path: GET /api/food/checkout/my-orders
 // ==========================================
 const getMyFoodOrders = async (req, res) => {
     try {
         const userId = req.user.id;
         const { status } = req.query;
 
-        const query = { userId };
+        // 🚨 Strictly filter for 'Direct' food orders (Excludes Subscription & Custom Plate)
+        const query = { 
+            userId,
+            bookingType: 'Direct'
+        };
+
         if (status) query.status = status;
 
-        // 🚨 Sirf UI Card ke liye zaroori fields select kiye gaye hain
+        // UI Card ke liye zaroori fields
         const orders = await FoodBooking.find(query)
-            .select('_id bookingId createdAt status deliveryOTP paymentStatus paymentMethod billSummary.totalAmount foodId')
+            .select('_id bookingId createdAt status deliveryOTP paymentStatus paymentMethod billSummary.totalAmount foodId bookingType')
             .populate('foodId', 'name profileImage address city')
             .sort({ createdAt: -1 })
             .lean();
