@@ -4,6 +4,148 @@ const FoodService = require('../../../models/FoodService');
 const Banner = require('../../../models/Banner');
 const { deleteFile } = require('../../../utils/fileHandler');
 
+
+
+
+
+// Helper to safely parse ingredients (Supports JSON Array of objects or legacy strings)
+const parseIngredients = (field) => {
+    if (!field) return [];
+    let parsed = field;
+
+    if (typeof field === 'string') {
+        try {
+            parsed = JSON.parse(field);
+        } catch (e) {
+            // Legacy comma-separated fallback (e.g., "Broccoli, Spinach")
+            return field.split(',').map(item => ({
+                name: item.trim(),
+                quantity: "",
+                calories: 0
+            })).filter(i => Boolean(i.name));
+        }
+    }
+
+    if (Array.isArray(parsed)) {
+        return parsed.map(item => {
+            if (typeof item === 'string') {
+                return { name: item.trim(), quantity: "", calories: 0 };
+            }
+            return {
+                name: item.name ? String(item.name).trim() : "",
+                quantity: item.quantity ? String(item.quantity).trim() : "",
+                calories: Number(item.calories) || 0
+            };
+        }).filter(i => Boolean(i.name));
+    }
+
+    return [];
+};
+
+// --- 1. CREATE FOOD ITEM (WITH AUTO-SUM TOTAL CALORIES) ---
+const createFoodItem = async (req, res) => {
+    try {
+        const { price, discountPrice, ingredients, tags, dietType, calories } = req.body;
+
+        // Validation Rule: discountPrice <= price
+        if (discountPrice !== undefined && price !== undefined && Number(discountPrice) > Number(price)) {
+            return res.status(400).json({ success: false, message: "Discount price cannot be greater than the original price." });
+        }
+
+        const imagePath = req.file ? `/uploads/foods/services/${req.file.filename}` : null;
+
+        // 1. Parse Ingredients Array with name, quantity, calories
+        const parsedIngredients = parseIngredients(ingredients);
+        const parsedTags = parseStringToArray(tags);
+
+        // 2. 🧮 Auto-Calculate Total Calories from Ingredients Sum
+        const sumIngredientCalories = parsedIngredients.reduce((total, item) => total + (Number(item.calories) || 0), 0);
+        const finalTotalCalories = sumIngredientCalories > 0 ? sumIngredientCalories : (Number(calories) || 0);
+
+        // Normalize dietType
+        let normalizedDietType = dietType;
+        if (dietType === 'Non-Veg') normalizedDietType = 'Non Veg';
+
+        const newFood = await FoodService.create({
+            ...req.body,
+            dietType: normalizedDietType,
+            ingredients: parsedIngredients, // 👈 Saved array of { name, quantity, calories }
+            calories: finalTotalCalories,   // 👈 Auto-calculated total calories
+            tags: parsedTags,
+            imageUrl: imagePath 
+        });
+
+        res.status(201).json({
+            success: true,
+            message: `Food item '${newFood.name}' added successfully! (Total Calories: ${finalTotalCalories} kcal)`,
+            data: newFood
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// --- 4. UPDATE FOOD ITEM (WITH RE-CALCULATED TOTAL CALORIES) ---
+const updateFoodItem = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { price, discountPrice, ingredients, tags, dietType, calories } = req.body;
+
+        const item = await FoodService.findById(id);
+        if (!item) {
+            return res.status(404).json({ success: false, message: "Food item not found." });
+        }
+
+        if (price !== undefined && discountPrice !== undefined) {
+            if (Number(discountPrice) > Number(price)) {
+                return res.status(400).json({ success: false, message: "Discount price cannot exceed the original price." });
+            }
+        }
+
+        const updateData = { ...req.body };
+
+        // 1. Ingredients & Calories Re-calculation
+        if (ingredients !== undefined) {
+            const parsedIngredients = parseIngredients(ingredients);
+            updateData.ingredients = parsedIngredients;
+
+            const sumIngredientCalories = parsedIngredients.reduce((total, ing) => total + (Number(ing.calories) || 0), 0);
+            if (sumIngredientCalories > 0) {
+                updateData.calories = sumIngredientCalories;
+            } else if (calories !== undefined) {
+                updateData.calories = Number(calories);
+            }
+        } else if (calories !== undefined) {
+            updateData.calories = Number(calories);
+        }
+
+        if (tags !== undefined) updateData.tags = parseStringToArray(tags);
+        
+        if (dietType !== undefined) {
+            updateData.dietType = dietType === 'Non-Veg' ? 'Non Veg' : dietType;
+        }
+
+        if (req.file) {
+            if (item.imageUrl) {
+                deleteFile(item.imageUrl);
+            }
+            updateData.imageUrl = `/uploads/foods/services/${req.file.filename}`;
+        }
+
+        const updatedItem = await FoodService.findByIdAndUpdate(id, { $set: updateData }, { new: true });
+
+        res.json({
+            success: true,
+            message: "Food item updated successfully!",
+            data: updatedItem
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 // Helper to safely parse strings into arrays of strings [cite: custom_context]
 const parseStringToArray = (field) => {
     if (Array.isArray(field)) return field;
@@ -14,42 +156,42 @@ const parseStringToArray = (field) => {
 };
 
 // --- 1. CREATE FOOD ITEM ---
-const createFoodItem = async (req, res) => {
-    try {
-        const { price, discountPrice, ingredients, tags, dietType } = req.body;
+// const createFoodItem = async (req, res) => {
+//     try {
+//         const { price, discountPrice, ingredients, tags, dietType } = req.body;
 
-        // Validation Rule: discountPrice <= price
-        if (Number(discountPrice) > Number(price)) {
-            return res.status(400).json({ success: false, message: "Discount price cannot be greater than the original price." });
-        }
+//         // Validation Rule: discountPrice <= price
+//         if (Number(discountPrice) > Number(price)) {
+//             return res.status(400).json({ success: false, message: "Discount price cannot be greater than the original price." });
+//         }
 
-        const imagePath = req.file ? `/uploads/foods/services/${req.file.filename}` : null;
+//         const imagePath = req.file ? `/uploads/foods/services/${req.file.filename}` : null;
 
-        const parsedIngredients = parseStringToArray(ingredients);
-        const parsedTags = parseStringToArray(tags);
+//         const parsedIngredients = parseStringToArray(ingredients);
+//         const parsedTags = parseStringToArray(tags);
 
-        // Normalize dietType (E.g. if 'Non-Veg' comes, map it to 'Non Veg' with space)
-        let normalizedDietType = dietType;
-        if (dietType === 'Non-Veg') normalizedDietType = 'Non Veg';
+//         // Normalize dietType (E.g. if 'Non-Veg' comes, map it to 'Non Veg' with space)
+//         let normalizedDietType = dietType;
+//         if (dietType === 'Non-Veg') normalizedDietType = 'Non Veg';
 
-        const newFood = await FoodService.create({
-            ...req.body,
-            dietType: normalizedDietType,
-            ingredients: parsedIngredients,
-            tags: parsedTags,
-            imageUrl: imagePath 
-        });
+//         const newFood = await FoodService.create({
+//             ...req.body,
+//             dietType: normalizedDietType,
+//             ingredients: parsedIngredients,
+//             tags: parsedTags,
+//             imageUrl: imagePath 
+//         });
 
-        res.status(201).json({
-            success: true,
-            message: "Food item added successfully!",
-            data: newFood
-        });
+//         res.status(201).json({
+//             success: true,
+//             message: "Food item added successfully!",
+//             data: newFood
+//         });
 
-    } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
-    }
-};
+//     } catch (error) {
+//         res.status(500).json({ success: false, message: error.message });
+//     }
+// };
 
 // --- 2. GET ALL FOOD ITEMS (Filtered) ---
 const getFoodItems = async (req, res) => {
@@ -101,50 +243,50 @@ const getFoodItemById = async (req, res) => {
 };
 
 // --- 4. UPDATE FOOD ITEM ---
-const updateFoodItem = async (req, res) => {
-    try {
-        const { id } = req.params;
-        const { price, discountPrice, ingredients, tags, dietType } = req.body;
+// const updateFoodItem = async (req, res) => {
+//     try {
+//         const { id } = req.params;
+//         const { price, discountPrice, ingredients, tags, dietType } = req.body;
 
-        const item = await FoodService.findById(id);
-        if (!item) {
-            return res.status(404).json({ success: false, message: "Food item not found." });
-        }
+//         const item = await FoodService.findById(id);
+//         if (!item) {
+//             return res.status(404).json({ success: false, message: "Food item not found." });
+//         }
 
-        if (price !== undefined && discountPrice !== undefined) {
-            if (Number(discountPrice) > Number(price)) {
-                return res.status(400).json({ success: false, message: "Discount price cannot exceed the original price." });
-            }
-        }
+//         if (price !== undefined && discountPrice !== undefined) {
+//             if (Number(discountPrice) > Number(price)) {
+//                 return res.status(400).json({ success: false, message: "Discount price cannot exceed the original price." });
+//             }
+//         }
 
-        const updateData = { ...req.body };
+//         const updateData = { ...req.body };
 
-        if (ingredients !== undefined) updateData.ingredients = parseStringToArray(ingredients);
-        if (tags !== undefined) updateData.tags = parseStringToArray(tags);
+//         if (ingredients !== undefined) updateData.ingredients = parseStringToArray(ingredients);
+//         if (tags !== undefined) updateData.tags = parseStringToArray(tags);
         
-        if (dietType !== undefined) {
-            updateData.dietType = dietType === 'Non-Veg' ? 'Non Veg' : dietType;
-        }
+//         if (dietType !== undefined) {
+//             updateData.dietType = dietType === 'Non-Veg' ? 'Non Veg' : dietType;
+//         }
 
-        if (req.file) {
-            if (item.imageUrl) {
-                deleteFile(item.imageUrl);
-            }
-            updateData.imageUrl = `/uploads/foods/services/${req.file.filename}`;
-        }
+//         if (req.file) {
+//             if (item.imageUrl) {
+//                 deleteFile(item.imageUrl);
+//             }
+//             updateData.imageUrl = `/uploads/foods/services/${req.file.filename}`;
+//         }
 
-        const updatedItem = await FoodService.findByIdAndUpdate(id, { $set: updateData }, { new: true });
+//         const updatedItem = await FoodService.findByIdAndUpdate(id, { $set: updateData }, { new: true });
 
-        res.json({
-            success: true,
-            message: "Food item updated successfully!",
-            data: updatedItem
-        });
+//         res.json({
+//             success: true,
+//             message: "Food item updated successfully!",
+//             data: updatedItem
+//         });
 
-    } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
-    }
-};
+//     } catch (error) {
+//         res.status(500).json({ success: false, message: error.message });
+//     }
+// };
 
 // --- 5. DELETE FOOD ITEM ---
 const deleteFoodItem = async (req, res) => {

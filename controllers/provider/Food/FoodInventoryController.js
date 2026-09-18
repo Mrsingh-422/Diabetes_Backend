@@ -7,6 +7,8 @@ const FoodComboOffer = require('../../../models/FoodComboOffer');
 const Food = require('../../../models/Food');
 const TiffinPlan = require('../../../models/TiffinPlan');
 const VendorTiffinPlan = require('../../../models/VendorTiffinPlan');
+const FoodHealthyPlans = require('../../../models/FoodHealthyPlans');
+const VendorHealthyPlan = require('../../../models/VendorHealthyPlan');
 const mongoose = require('mongoose');
 
 // Helper to safely parse strings into arrays of strings
@@ -581,7 +583,229 @@ const getVendorTiffinPlanById = async (req, res) => {
     }
 };
 
+// ==========================================
+// 🥗 HEALTHY PLANS VENDOR INVENTORY SECTION
+// ==========================================
 
+// --- 1. GET MASTER HEALTHY PLANS CHECKLIST FOR VENDOR SELECTION ---
+// Full Path: GET /provider/food/inventory/master-healthy-plans
+const getMasterHealthyPlansForSelection = async (req, res) => {
+    try {
+        const vendorId = req.user.id;
+        const { mainCategory, subCategory } = req.query;
+
+        const filter = { isActive: true };
+        if (mainCategory) filter.mainCategory = new RegExp(`^${mainCategory.trim()}$`, 'i');
+        if (subCategory) filter.subCategory = new RegExp(`^${subCategory.trim()}$`, 'i');
+
+        // Fetch master plans with day-wise meals
+        const masterPlans = await FoodHealthyPlans.find(filter)
+            .populate({
+                path: 'dayWiseSchedule.breakfast dayWiseSchedule.lunch dayWiseSchedule.dinner',
+                select: 'name imageUrl price discountPrice calories dietType foodEffectCategory',
+                strictPopulate: false
+            })
+            .lean();
+
+        // Fetch this vendor's mappings
+        const vendorMappings = await VendorHealthyPlan.find({ vendorId }).lean();
+
+        const checklist = masterPlans.map(plan => {
+            const mapping = vendorMappings.find(
+                m => m.healthyPlanId.toString() === plan._id.toString()
+            );
+
+            return {
+                ...plan,
+                isAvailable: mapping ? mapping.isAvailable : false,
+                customPrice: mapping ? mapping.customPrice : null,
+                customDiscountPrice: mapping ? mapping.customDiscountPrice : null
+            };
+        });
+
+        res.json({
+            success: true,
+            count: checklist.length,
+            data: checklist
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// --- 2. MULTI-SYNC HEALTHY PLANS (Bulk Select/Deselect & Custom Pricing) ---
+// Full Path: POST /provider/food/inventory/sync-healthy-plans
+const syncHealthyPlans = async (req, res) => {
+    try {
+        const vendorId = req.user.id;
+        const { selectedPlanIds = [], customPricing = {} } = req.body;
+
+        if (!Array.isArray(selectedPlanIds)) {
+            return res.status(400).json({ success: false, message: "selectedPlanIds must be an array of Healthy Plan IDs." });
+        }
+
+        const allMasterPlans = await FoodHealthyPlans.find({ isActive: true }).select('_id').lean();
+
+        const operations = allMasterPlans.map(plan => {
+            const planIdStr = plan._id.toString();
+            const isSelected = selectedPlanIds.map(id => id.toString()).includes(planIdStr);
+            const pricingObj = customPricing[planIdStr] || {};
+
+            const updatePayload = { isAvailable: isSelected };
+            if (pricingObj.customPrice !== undefined) updatePayload.customPrice = Number(pricingObj.customPrice);
+            if (pricingObj.customDiscountPrice !== undefined) updatePayload.customDiscountPrice = Number(pricingObj.customDiscountPrice);
+
+            return {
+                updateOne: {
+                    filter: { vendorId, healthyPlanId: plan._id },
+                    update: { $set: updatePayload },
+                    upsert: true
+                }
+            };
+        });
+
+        if (operations.length > 0) {
+            await VendorHealthyPlan.bulkWrite(operations);
+        }
+
+        res.json({
+            success: true,
+            message: `Healthy plans synchronized successfully! (${selectedPlanIds.length} Active Plans)`,
+            activePlansCount: selectedPlanIds.length
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// --- 3. SINGLE INSTANT TOGGLE SWITCH ---
+// Full Path: PATCH /provider/food/inventory/toggle-healthy-plan/:healthyPlanId
+const toggleHealthyPlanAvailability = async (req, res) => {
+    try {
+        const vendorId = req.user.id;
+        const { healthyPlanId } = req.params;
+
+        const existing = await VendorHealthyPlan.findOne({ vendorId, healthyPlanId });
+        const newStatus = existing ? !existing.isAvailable : true;
+
+        const mapping = await VendorHealthyPlan.findOneAndUpdate(
+            { vendorId, healthyPlanId },
+            { $set: { isAvailable: newStatus } },
+            { upsert: true, new: true }
+        );
+
+        res.json({
+            success: true,
+            message: `Healthy plan availability set to ${newStatus ? 'Active' : 'Inactive'} successfully.`,
+            isAvailable: newStatus,
+            data: mapping
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// --- 4. GET ALL VENDOR HEALTHY PLANS INVENTORY LIST ---
+// Full Path: GET /provider/food/inventory/healthy-plans
+const getVendorHealthyPlans = async (req, res) => {
+    try {
+        const vendorId = req.user.id;
+        const { isAvailable, mainCategory, subCategory } = req.query;
+
+        const query = { isActive: true };
+        if (mainCategory) query.mainCategory = new RegExp(`^${mainCategory.trim()}$`, 'i');
+        if (subCategory) query.subCategory = new RegExp(`^${subCategory.trim()}$`, 'i');
+
+        const masterPlans = await FoodHealthyPlans.find(query)
+            .populate({
+                path: 'dayWiseSchedule.breakfast dayWiseSchedule.lunch dayWiseSchedule.dinner',
+                select: 'name imageUrl price discountPrice calories dietType foodEffectCategory',
+                strictPopulate: false
+            })
+            .lean();
+
+        const vendorMappings = await VendorHealthyPlan.find({ vendorId }).lean();
+
+        let result = masterPlans.map(plan => {
+            const mapping = vendorMappings.find(
+                m => m.healthyPlanId.toString() === plan._id.toString()
+            );
+
+            return {
+                ...plan,
+                isAvailable: mapping ? mapping.isAvailable : false,
+                customPrice: mapping ? mapping.customPrice : null,
+                customDiscountPrice: mapping ? mapping.customDiscountPrice : null
+            };
+        });
+
+        if (isAvailable !== undefined) {
+            const statusBool = isAvailable === 'true';
+            result = result.filter(p => p.isAvailable === statusBool);
+        }
+
+        // Available first
+        result.sort((a, b) => {
+            if (a.isAvailable !== b.isAvailable) return a.isAvailable ? -1 : 1;
+            return new Date(b.createdAt) - new Date(a.createdAt);
+        });
+
+        res.json({
+            success: true,
+            count: result.length,
+            data: result
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// --- 5. GET SINGLE VENDOR HEALTHY PLAN FULL DETAILS BY ID ---
+// Full Path: GET /provider/food/inventory/healthy-plans/:id
+const getVendorHealthyPlanById = async (req, res) => {
+    try {
+        const vendorId = req.user.id;
+        const { id } = req.params;
+
+        const query = mongoose.Types.ObjectId.isValid(id)
+            ? { $or: [{ _id: id }, { planId: id }] }
+            : { planId: id };
+
+        const plan = await FoodHealthyPlans.findOne(query)
+            .populate({
+                path: 'dayWiseSchedule.breakfast dayWiseSchedule.lunch dayWiseSchedule.dinner',
+                select: 'name description imageUrl price discountPrice calories dietType ingredients tags glycemicIndex netCarbs sodium foodEffectCategory',
+                strictPopulate: false
+            })
+            .lean();
+
+        if (!plan) {
+            return res.status(404).json({ success: false, message: "Healthy diet plan not found." });
+        }
+
+        const mapping = await VendorHealthyPlan.findOne({
+            vendorId,
+            healthyPlanId: plan._id
+        }).lean();
+
+        res.json({
+            success: true,
+            data: {
+                ...plan,
+                isAvailable: mapping ? mapping.isAvailable : false,
+                customPrice: mapping ? mapping.customPrice : null,
+                customDiscountPrice: mapping ? mapping.customDiscountPrice : null
+            }
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
 module.exports = {
     selectFoodItems,
     deselectFoodItem,
@@ -602,7 +826,13 @@ module.exports = {
     syncTiffinPlans,               //  Unified Single Sync API
     toggleTiffinPlanAvailability,  //  Instant Single Switch API
     getVendorTiffinPlans,          //  Vendor Inventory List
-    getVendorTiffinPlanById        //  Single Plan Full Details
+    getVendorTiffinPlanById ,       //  Single Plan Full Details
+    
+    getMasterHealthyPlansForSelection,
+    syncHealthyPlans,
+    toggleHealthyPlanAvailability,
+    getVendorHealthyPlans,
+    getVendorHealthyPlanById
 
     
 };

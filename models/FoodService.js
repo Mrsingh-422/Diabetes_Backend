@@ -64,40 +64,34 @@ const foodServiceSchema = new mongoose.Schema({
         required: true 
     },
     
-    // 5. INGREDIENTS & SEARCH TAGS
-    ingredients: [{ 
-        type: String, 
-        trim: true 
-    }], 
+    // 5. INGREDIENTS WITH DETAILED NUTRITIONAL BREAKDOWN
+    ingredients: [{
+        name: { 
+            type: String, 
+            required: true, 
+            trim: true 
+        }, // e.g. "Broccoli", "Olive Oil", "Chickpeas"
+        quantity: { 
+            type: String, 
+            default: "" 
+        }, // e.g. "100g", "1 tbsp", "50ml", "1 cup"
+        calories: { 
+            type: Number, 
+            default: 0, 
+            min: 0 
+        } // Is individual ingredient ki calories (e.g. 55, 80)
+    }],
+
     tags: [{ 
         type: String, 
         trim: true 
     }], 
 
-    // 6. CLINICAL & NUTRITIONAL PROFILE (Most Critical for Admin Checks)
+    // 6. TOTAL CALORIES (Auto-summed from ingredients)
     calories: { 
         type: Number, 
-        required: true 
-    }, 
-    glycemicIndex: { 
-        type: Number, 
-        default: 0 
-    }, 
-    netCarbs: { 
-        type: Number, 
-        default: 0 
-    }, 
-    sodium: { 
-        type: Number, 
-        default: 0 
-    }, 
-    potassium: { 
-        type: Number, 
-        default: 0 
-    }, 
-    phosphorus: { 
-        type: Number, 
-        default: 0 
+        required: true,
+        default: 0
     },
 
     // 🚨 Changed from medicalFocus to foodEffectCategory (UI dropdown mapping)

@@ -19,7 +19,10 @@ const {
     getPlanDetailsById,          // Single plan full details
     getVendorPlansForUser,
     getAllNearestFoodItems,
-    getFoodSearchSuggestions
+    getFoodSearchSuggestions,
+    getNearestHealthyPlans,                       // Proximity Listing + Filter
+    getHealthyPlanDetailsForUser,              // Single Plan Details
+    getVendorHealthyPlansForUser                // Kitchen Specific Plans
 
 } = require('../../../controllers/user/Food/FoodPageController');
 
@@ -58,4 +61,8 @@ router.get('/coupons', getFoodCoupons);
 // 🍲 1. ALL NEAREST FOOD ITEMS (With Search & Pagination)
 router.post('/all-foods', getAllNearestFoodItems);
 
+// 🥗 HEALTHY PLANS USER STOREFRONT ROUTES
+router.post('/healthy-plans', getNearestHealthyPlans);                       // Proximity Listing + Filter
+router.get('/healthy-plans/:id', getHealthyPlanDetailsForUser);              // Single Plan Details
+router.get('/vendor-healthy-plans/:vendorId', getVendorHealthyPlansForUser); // Kitchen Specific Plans
 module.exports = router;

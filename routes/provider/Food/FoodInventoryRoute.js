@@ -22,7 +22,12 @@ const {
     syncTiffinPlans,
     toggleTiffinPlanAvailability,
     getVendorTiffinPlans,
-    getVendorTiffinPlanById
+    getVendorTiffinPlanById,
+    getMasterHealthyPlansForSelection,
+    syncHealthyPlans,
+    toggleHealthyPlanAvailability,
+    getVendorHealthyPlans,
+    getVendorHealthyPlanById
 
 } = require('../../../controllers/provider/Food/FoodInventoryController');
 
@@ -53,6 +58,12 @@ router.patch('/toggle-plan/:planId', protect('provider'), toggleTiffinPlanAvaila
 router.get('/plans', protect('provider'), getVendorTiffinPlans);
 router.get('/plans/:id', protect('provider'), getVendorTiffinPlanById);
 
+// 🥗 HEALTHY PLANS VENDOR INVENTORY ROUTES
+router.get('/master-healthy-plans', protect('provider'), getMasterHealthyPlansForSelection);
+router.post('/sync-healthy-plans', protect('provider'), syncHealthyPlans);
+router.patch('/toggle-healthy-plan/:healthyPlanId', protect('provider'), toggleHealthyPlanAvailability);
+router.get('/healthy-plans', protect('provider'), getVendorHealthyPlans);
+router.get('/healthy-plans/:id', protect('provider'), getVendorHealthyPlanById);
 
 
 // ==========================================
@@ -60,5 +71,7 @@ router.get('/plans/:id', protect('provider'), getVendorTiffinPlanById);
 // ==========================================
 router.get('/:foodServiceId', protect('provider'), getVendorMenuItemById);
 router.get('/combo/:foodComboId', protect('provider'), getVendorComboById);
+
+
 
 module.exports = router;

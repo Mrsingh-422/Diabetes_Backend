@@ -13,6 +13,9 @@ const VendorTiffinPlan = require('../../../models/VendorTiffinPlan');
 const TiffinPlan = require('../../../models/TiffinPlan');
 const VendorKMLimit = require('../../../models/VendorKMLimit');
 const jwt = require('jsonwebtoken'); //  Ensure JWT import on top of FoodPageController.js
+const FoodHealthyPlans = require('../../../models/FoodHealthyPlans');
+const VendorHealthyPlan = require('../../../models/VendorHealthyPlan');
+const FoodHealthyCategory = require('../../../models/FoodHealthyCategory');
 
 
 // ==========================================
@@ -1605,6 +1608,409 @@ const getFoodSearchSuggestions = async (req, res) => {
     }
 };
 
+
+// ==========================================
+// 🥗 1. GET NEAREST GEOLOCATED HEALTHY PLANS (User Storefront)
+// Full Path: POST /api/foodpage/healthy-plans
+// ==========================================
+const getNearestHealthyPlans = async (req, res) => {
+    try {
+        const { lat, lng } = req.body;
+        const { 
+            mainCategory, 
+            subCategory, 
+            programType, 
+            daysCount, 
+            search, 
+            page = 1, 
+            limit = 20 
+        } = req.query;
+
+        const pageNum = parseInt(page, 10) || 1;
+        const limitNum = parseInt(limit, 10) || 20;
+
+        if (!lat || !lng) {
+            return res.status(400).json({ success: false, message: "User latitude (lat) and longitude (lng) are required." });
+        }
+
+        // 1. Fetch Dynamic KM Limit
+        const limitConfig = await VendorKMLimit.findOne({ vendorType: 'Food', isActive: true });
+        const maxDistanceLimit = limitConfig ? limitConfig.kmLimit : 10;
+
+        // 2. Fetch Active Online Kitchen Vendors
+        const vendors = await Food.find({ profileStatus: 'Approved', isActive: true, isOnline: true })
+            .select('name location rating address profileImage')
+            .lean();
+
+        const nearestVendors = [];
+        const nearestVendorsMap = new Map();
+
+        for (let vendor of vendors) {
+            if (!vendor.location?.lat || !vendor.location?.lng) continue;
+
+            const dist = calculateHaversineDistance(
+                Number(lat),
+                Number(lng),
+                Number(vendor.location.lat),
+                Number(vendor.location.lng)
+            );
+
+            if (dist <= maxDistanceLimit) {
+                const vData = {
+                    ...vendor,
+                    distance: Number(dist.toFixed(2)),
+                    distanceText: `${dist.toFixed(1)} km`
+                };
+                nearestVendors.push(vData);
+                nearestVendorsMap.set(vendor._id.toString(), vData);
+            }
+        }
+
+        nearestVendors.sort((a, b) => a.distance - b.distance);
+        const serviceableVendorIds = nearestVendors.map(v => v._id);
+
+        if (nearestVendors.length === 0) {
+            return res.json({ 
+                success: true, 
+                message: `No active cloud kitchens found within ${maxDistanceLimit} km radius.`,
+                totalDocs: 0,
+                totalPages: 0,
+                currentPage: pageNum,
+                limit: limitNum,
+                data: [] 
+            });
+        }
+
+        // 3. Build Filters Query
+        const planQuery = { isActive: true };
+        if (mainCategory) planQuery.mainCategory = new RegExp(`^${mainCategory.trim()}$`, 'i');
+        if (subCategory) planQuery.subCategory = new RegExp(`^${subCategory.trim()}$`, 'i');
+        if (programType) planQuery.programType = programType;
+        if (daysCount) planQuery.daysCount = Number(daysCount);
+
+        if (search) {
+            const regex = new RegExp(search.trim(), 'i');
+            planQuery.$or = [
+                { title: regex },
+                { description: regex },
+                { tagline: regex },
+                { mainCategory: regex },
+                { subCategory: regex }
+            ];
+        }
+
+        // 4. Fetch Master Healthy Plans
+        const masterPlans = await FoodHealthyPlans.find(planQuery)
+            .populate({
+                path: 'dayWiseSchedule.breakfast dayWiseSchedule.lunch dayWiseSchedule.dinner',
+                select: 'name imageUrl price discountPrice calories dietType foodEffectCategory',
+                strictPopulate: false
+            })
+            .lean();
+
+        // 5. Fetch Vendor Inventory Mappings
+        const vendorPlanMappings = await VendorHealthyPlan.find({
+            vendorId: { $in: serviceableVendorIds }
+        }).lean();
+
+        const mappedPlansList = [];
+
+        for (let plan of masterPlans) {
+            const planMappings = vendorPlanMappings.filter(
+                m => m.healthyPlanId.toString() === plan._id.toString()
+            );
+
+            const activeMapping = planMappings.find(m => m.isAvailable === true);
+
+            let isAvailable = false;
+            let finalTotalPrice = plan.pricing?.totalPrice || 0;
+            let finalDiscountTotalPrice = plan.pricing?.discountTotalPrice || 0;
+            let targetVendor = nearestVendors[0];
+
+            if (activeMapping) {
+                isAvailable = true;
+                targetVendor = nearestVendorsMap.get(activeMapping.vendorId.toString()) || nearestVendors[0];
+                if (activeMapping.customPrice !== null) finalTotalPrice = activeMapping.customPrice;
+                if (activeMapping.customDiscountPrice !== null) finalDiscountTotalPrice = activeMapping.customDiscountPrice;
+            } else {
+                const anyMapping = planMappings[0];
+                if (anyMapping) {
+                    targetVendor = nearestVendorsMap.get(anyMapping.vendorId.toString()) || nearestVendors[0];
+                }
+            }
+
+            mappedPlansList.push({
+                _id: plan._id,
+                planId: plan.planId,
+                title: plan.title,
+                description: plan.description,
+                tagline: plan.tagline,
+                mainCategory: plan.mainCategory,
+                subCategory: plan.subCategory,
+                programType: plan.programType,
+                daysCount: plan.daysCount,
+                dayWiseSchedule: plan.dayWiseSchedule || [],
+                isRepeatAfter7Days: plan.isRepeatAfter7Days,
+                bannerImage: plan.bannerImage,
+                images: plan.images || [],
+                pricing: {
+                    pricePerMeal: plan.pricing?.pricePerMeal || 0,
+                    discountPricePerMeal: plan.pricing?.discountPricePerMeal || 0,
+                    totalPrice: finalTotalPrice,
+                    discountTotalPrice: finalDiscountTotalPrice,
+                    savingsAmount: Math.max(0, finalTotalPrice - finalDiscountTotalPrice)
+                },
+                nutritionalHighlights: plan.nutritionalHighlights || {},
+                isPopular: plan.isPopular,
+                isRecommended: plan.isRecommended,
+                isAvailable,
+                UnavailablePlan: !isAvailable,
+                vendorId: {
+                    _id: targetVendor._id,
+                    name: targetVendor.name,
+                    address: targetVendor.address,
+                    rating: targetVendor.rating,
+                    profileImage: targetVendor.profileImage
+                },
+                distance: targetVendor.distance,
+                distanceText: targetVendor.distanceText,
+                createdAt: plan.createdAt
+            });
+        }
+
+        // 6. Sort: isAvailable: true first -> Nearest Kitchen -> Latest Created
+        mappedPlansList.sort((a, b) => {
+            if (a.isAvailable !== b.isAvailable) return a.isAvailable ? -1 : 1;
+            if (a.distance !== b.distance) return a.distance - b.distance;
+            return new Date(b.createdAt) - new Date(a.createdAt);
+        });
+
+        // 7. Pagination
+        const totalDocs = mappedPlansList.length;
+        const skip = (pageNum - 1) * limitNum;
+        const paginatedPlans = mappedPlansList.slice(skip, skip + limitNum);
+
+        res.json({
+            success: true,
+            maxDistanceLimitApplied: `${maxDistanceLimit} km`,
+            totalDocs,
+            totalPages: Math.ceil(totalDocs / limitNum),
+            currentPage: pageNum,
+            limit: limitNum,
+            count: paginatedPlans.length,
+            data: paginatedPlans
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// ==========================================
+// 🔍 2. GET SINGLE HEALTHY PLAN DETAILS BY ID (User View)
+// Full Path: GET /api/foodpage/healthy-plans/:id
+// ==========================================
+const getHealthyPlanDetailsForUser = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { lat, lng } = req.query;
+
+        const query = mongoose.Types.ObjectId.isValid(id)
+            ? { $or: [{ _id: id }, { planId: id }], isActive: true }
+            : { planId: id, isActive: true };
+
+        const plan = await FoodHealthyPlans.findOne(query)
+            .populate({
+                path: 'dayWiseSchedule.breakfast dayWiseSchedule.lunch dayWiseSchedule.dinner',
+                select: 'name description imageUrl price discountPrice calories dietType ingredients tags glycemicIndex netCarbs sodium foodEffectCategory',
+                strictPopulate: false
+            })
+            .lean();
+
+        if (!plan) {
+            return res.status(404).json({ success: false, message: "Healthy diet plan is currently unavailable." });
+        }
+
+        let targetVendor = null;
+        let distance = null;
+        let distanceText = null;
+        let isAvailable = false;
+        let finalTotalPrice = plan.pricing?.totalPrice || 0;
+        let finalDiscountTotalPrice = plan.pricing?.discountTotalPrice || 0;
+
+        const vendors = await Food.find({ profileStatus: 'Approved', isActive: true, isOnline: true })
+            .select('name location address rating profileImage')
+            .lean();
+
+        // Location Resolution
+        if (lat && lng && vendors.length > 0) {
+            const nearestVendors = [];
+            const nearestVendorsMap = new Map();
+
+            for (let vendor of vendors) {
+                if (!vendor.location?.lat || !vendor.location?.lng) continue;
+
+                const computedDistance = calculateHaversineDistance(
+                    Number(lat),
+                    Number(lng),
+                    Number(vendor.location.lat),
+                    Number(vendor.location.lng)
+                );
+
+                const vData = {
+                    ...vendor,
+                    distance: Number(computedDistance.toFixed(2)),
+                    distanceText: `${computedDistance.toFixed(1)} km`
+                };
+                nearestVendors.push(vData);
+                nearestVendorsMap.set(vendor._id.toString(), vData);
+            }
+
+            nearestVendors.sort((a, b) => a.distance - b.distance);
+
+            if (nearestVendors.length > 0) {
+                const serviceableVendorIds = nearestVendors.map(v => v._id);
+
+                const mappings = await VendorHealthyPlan.find({
+                    healthyPlanId: plan._id,
+                    vendorId: { $in: serviceableVendorIds }
+                }).lean();
+
+                const activeMapping = mappings.find(m => m.isAvailable === true);
+
+                if (activeMapping) {
+                    isAvailable = true;
+                    const vInfo = nearestVendorsMap.get(activeMapping.vendorId.toString());
+                    targetVendor = {
+                        _id: vInfo._id,
+                        name: vInfo.name,
+                        address: vInfo.address,
+                        rating: vInfo.rating,
+                        profileImage: vInfo.profileImage
+                    };
+                    distance = vInfo.distance;
+                    distanceText = vInfo.distanceText;
+                    if (activeMapping.customPrice !== null) finalTotalPrice = activeMapping.customPrice;
+                    if (activeMapping.customDiscountPrice !== null) finalDiscountTotalPrice = activeMapping.customDiscountPrice;
+                } else {
+                    const fallbackVendor = nearestVendors[0];
+                    targetVendor = {
+                        _id: fallbackVendor._id,
+                        name: fallbackVendor.name,
+                        address: fallbackVendor.address,
+                        rating: fallbackVendor.rating,
+                        profileImage: fallbackVendor.profileImage
+                    };
+                    distance = fallbackVendor.distance;
+                    distanceText = fallbackVendor.distanceText;
+                }
+            }
+        } else {
+            // Coordinate fallback
+            const anyMapping = await VendorHealthyPlan.findOne({ healthyPlanId: plan._id, isAvailable: true })
+                .populate('vendorId', 'name address rating profileImage')
+                .lean();
+
+            if (anyMapping && anyMapping.vendorId) {
+                targetVendor = anyMapping.vendorId;
+                isAvailable = true;
+            } else if (vendors.length > 0) {
+                targetVendor = {
+                    _id: vendors[0]._id,
+                    name: vendors[0].name,
+                    address: vendors[0].address,
+                    rating: vendors[0].rating,
+                    profileImage: vendors[0].profileImage
+                };
+            }
+        }
+
+        res.json({
+            success: true,
+            data: {
+                ...plan,
+                pricing: {
+                    ...plan.pricing,
+                    totalPrice: finalTotalPrice,
+                    discountTotalPrice: finalDiscountTotalPrice,
+                    savingsAmount: Math.max(0, finalTotalPrice - finalDiscountTotalPrice)
+                },
+                isAvailable,
+                UnavailablePlan: !isAvailable,
+                vendorId: targetVendor,
+                distance,
+                distanceText
+            }
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// ==========================================
+// 🏪 3. GET SPECIFIC VENDOR'S HEALTHY PLANS
+// Full Path: GET /api/foodpage/vendor-healthy-plans/:vendorId
+// ==========================================
+const getVendorHealthyPlansForUser = async (req, res) => {
+    try {
+        const { vendorId } = req.params;
+
+        const masterPlans = await FoodHealthyPlans.find({ isActive: true })
+            .populate({
+                path: 'dayWiseSchedule.breakfast dayWiseSchedule.lunch dayWiseSchedule.dinner',
+                select: 'name imageUrl price discountPrice calories dietType foodEffectCategory',
+                strictPopulate: false
+            })
+            .lean();
+
+        const vendorMappings = await VendorHealthyPlan.find({ vendorId }).lean();
+
+        const finalMappedPlans = masterPlans.map(plan => {
+            const mapping = vendorMappings.find(
+                m => m.healthyPlanId.toString() === plan._id.toString()
+            );
+
+            let UnavailablePlan = true;
+            let finalTotalPrice = plan.pricing?.totalPrice || 0;
+            let finalDiscountTotalPrice = plan.pricing?.discountTotalPrice || 0;
+
+            if (mapping && mapping.isAvailable === true) {
+                UnavailablePlan = false;
+                if (mapping.customPrice !== null) finalTotalPrice = mapping.customPrice;
+                if (mapping.customDiscountPrice !== null) finalDiscountTotalPrice = mapping.customDiscountPrice;
+            }
+
+            return {
+                ...plan,
+                pricing: {
+                    ...plan.pricing,
+                    totalPrice: finalTotalPrice,
+                    discountTotalPrice: finalDiscountTotalPrice,
+                    savingsAmount: Math.max(0, finalTotalPrice - finalDiscountTotalPrice)
+                },
+                isAvailable: mapping ? mapping.isAvailable : false,
+                UnavailablePlan
+            };
+        });
+
+        // Available plans first
+        finalMappedPlans.sort((a, b) => {
+            if (a.isAvailable !== b.isAvailable) return a.isAvailable ? -1 : 1;
+            return new Date(b.createdAt) - new Date(a.createdAt);
+        });
+
+        res.json({
+            success: true,
+            vendorId,
+            count: finalMappedPlans.length,
+            data: finalMappedPlans
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
 module.exports = {
     getNearestVendorMeals,
     getMealDetailsById,
@@ -1621,5 +2027,9 @@ module.exports = {
     getUserFoodEffectCategories,
     getFoodCoupons,
     getAllNearestFoodItems,
-    getFoodSearchSuggestions
+    getFoodSearchSuggestions,
+
+    getNearestHealthyPlans,
+    getHealthyPlanDetailsForUser,
+    getVendorHealthyPlansForUser
 };
