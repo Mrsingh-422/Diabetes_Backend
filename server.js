@@ -152,7 +152,8 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true })); // Form Data (Optional)
 
 // Static folder for uploads
-app.use('/uploads', express.static('public/uploads'));
+// app.use('/uploads', express.static('public/uploads'));
+app.use('/uploads', express.static(path.join(__dirname, 'public/uploads')));
 
 ////////////////// Admin Routes /////////////////////////
 app.use('/api/auth/admin', require('./routes/admin/authAdmin'));
