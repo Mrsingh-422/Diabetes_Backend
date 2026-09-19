@@ -16,6 +16,7 @@ const jwt = require('jsonwebtoken'); //  Ensure JWT import on top of FoodPageCon
 const FoodHealthyPlans = require('../../../models/FoodHealthyPlans');
 const VendorHealthyPlan = require('../../../models/VendorHealthyPlan');
 const FoodHealthyCategory = require('../../../models/FoodHealthyCategory');
+const mongoose = require('mongoose');
 
 
 // ==========================================
@@ -1948,69 +1949,7 @@ const getHealthyPlanDetailsForUser = async (req, res) => {
     }
 };
 
-// ==========================================
-// 🏪 3. GET SPECIFIC VENDOR'S HEALTHY PLANS
-// Full Path: GET /api/foodpage/vendor-healthy-plans/:vendorId
-// ==========================================
-const getVendorHealthyPlansForUser = async (req, res) => {
-    try {
-        const { vendorId } = req.params;
 
-        const masterPlans = await FoodHealthyPlans.find({ isActive: true })
-            .populate({
-                path: 'dayWiseSchedule.breakfast dayWiseSchedule.lunch dayWiseSchedule.dinner',
-                select: 'name imageUrl price discountPrice calories dietType foodEffectCategory',
-                strictPopulate: false
-            })
-            .lean();
-
-        const vendorMappings = await VendorHealthyPlan.find({ vendorId }).lean();
-
-        const finalMappedPlans = masterPlans.map(plan => {
-            const mapping = vendorMappings.find(
-                m => m.healthyPlanId.toString() === plan._id.toString()
-            );
-
-            let UnavailablePlan = true;
-            let finalTotalPrice = plan.pricing?.totalPrice || 0;
-            let finalDiscountTotalPrice = plan.pricing?.discountTotalPrice || 0;
-
-            if (mapping && mapping.isAvailable === true) {
-                UnavailablePlan = false;
-                if (mapping.customPrice !== null) finalTotalPrice = mapping.customPrice;
-                if (mapping.customDiscountPrice !== null) finalDiscountTotalPrice = mapping.customDiscountPrice;
-            }
-
-            return {
-                ...plan,
-                pricing: {
-                    ...plan.pricing,
-                    totalPrice: finalTotalPrice,
-                    discountTotalPrice: finalDiscountTotalPrice,
-                    savingsAmount: Math.max(0, finalTotalPrice - finalDiscountTotalPrice)
-                },
-                isAvailable: mapping ? mapping.isAvailable : false,
-                UnavailablePlan
-            };
-        });
-
-        // Available plans first
-        finalMappedPlans.sort((a, b) => {
-            if (a.isAvailable !== b.isAvailable) return a.isAvailable ? -1 : 1;
-            return new Date(b.createdAt) - new Date(a.createdAt);
-        });
-
-        res.json({
-            success: true,
-            vendorId,
-            count: finalMappedPlans.length,
-            data: finalMappedPlans
-        });
-
-    } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
-    }
-};
 module.exports = {
     getNearestVendorMeals,
     getMealDetailsById,
@@ -2031,5 +1970,4 @@ module.exports = {
 
     getNearestHealthyPlans,
     getHealthyPlanDetailsForUser,
-    getVendorHealthyPlansForUser
 };
