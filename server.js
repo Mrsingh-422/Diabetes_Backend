@@ -258,6 +258,7 @@ app.use('/api/food/checkout', require('./routes/user/Food/FoodCheckoutRoute'));
 app.use('/admin/food/tiffin/plans', require('./routes/user/Food/FoodCheckoutRoute')); 
 app.use('/api/food/tiffin', require('./routes/user/Food/UserTiffinSubscriptionRoute')); 
 app.use('/api/food/custom-tiffin', require('./routes/user/Food/CustomTiffinRoute')); 
+app.use('/api/food/healthy-plans', require('./routes/user/Food/UserHealthyPlanOrderRoute'));
 
 
 //////////////// Doctor Routes ///////////////////////
@@ -305,6 +306,7 @@ app.use('/provider/food/inventory', require('./routes/provider/Food/FoodInventor
 app.use('/provider/food/orders', require('./routes/provider/Food/FoodOrderRoute')); 
 app.use('/provider/food/profile', require('./routes/provider/Food/ProfileRoute')); 
 app.use('/provider/food/tiffin', require('./routes/provider/Food/VendorTiffinOrderRoute')); 
+app.use('/provider/food/healthy-plans', require('./routes/provider/Food/VendorHealthyPlanOrderRoute'));
 // =================== Food Provider Routes END=========================
 
 // --- Provider Lab Routes ---

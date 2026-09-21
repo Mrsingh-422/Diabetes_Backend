@@ -1611,7 +1611,7 @@ const getFoodSearchSuggestions = async (req, res) => {
 
 
 // ==========================================
-// 🥗 1. GET NEAREST GEOLOCATED HEALTHY PLANS (User Storefront)
+// 🥗 1. GET NEAREST GEOLOCATED HEALTHY PLANS (FIXED FULL PRICING BREAKDOWN)
 // Full Path: POST /api/foodpage/healthy-plans
 // ==========================================
 const getNearestHealthyPlans = async (req, res) => {
@@ -1717,28 +1717,32 @@ const getNearestHealthyPlans = async (req, res) => {
         const mappedPlansList = [];
 
         for (let plan of masterPlans) {
-            const planMappings = vendorPlanMappings.filter(
-                m => m.healthyPlanId.toString() === plan._id.toString()
+            const activeMapping = vendorPlanMappings.find(
+                m => m.healthyPlanId.toString() === plan._id.toString() && m.isAvailable === true
             );
 
-            const activeMapping = planMappings.find(m => m.isAvailable === true);
+            let isAvailable = Boolean(activeMapping);
+            let targetVendor = activeMapping ? nearestVendorsMap.get(activeMapping.vendorId.toString()) : nearestVendors[0];
 
-            let isAvailable = false;
-            let finalTotalPrice = plan.pricing?.totalPrice || 0;
-            let finalDiscountTotalPrice = plan.pricing?.discountTotalPrice || 0;
-            let targetVendor = nearestVendors[0];
+            // 🧮 Pricing Calculations with Auto-Fallback
+            const pPerMeal = Number(plan.pricing?.pricePerMeal || 0);
+            const dPricePerMeal = Number(plan.pricing?.discountPricePerMeal || 0);
 
-            if (activeMapping) {
-                isAvailable = true;
-                targetVendor = nearestVendorsMap.get(activeMapping.vendorId.toString()) || nearestVendors[0];
-                if (activeMapping.customPrice !== null) finalTotalPrice = activeMapping.customPrice;
-                if (activeMapping.customDiscountPrice !== null) finalDiscountTotalPrice = activeMapping.customDiscountPrice;
-            } else {
-                const anyMapping = planMappings[0];
-                if (anyMapping) {
-                    targetVendor = nearestVendorsMap.get(anyMapping.vendorId.toString()) || nearestVendors[0];
-                }
+            let mealsPerDay = 3;
+            if (plan.programType === 'Lunches & Dinners' || plan.programType === 'Breakfast & Lunch') {
+                mealsPerDay = 2;
             }
+            const totalMeals = mealsPerDay * (Number(plan.daysCount) || 1);
+
+            const finalTotalPrice = plan.pricing?.totalPrice && Number(plan.pricing.totalPrice) > 0 
+                ? Number(plan.pricing.totalPrice) 
+                : (pPerMeal * totalMeals);
+
+            const finalDiscountTotalPrice = plan.pricing?.discountTotalPrice && Number(plan.pricing.discountTotalPrice) > 0 
+                ? Number(plan.pricing.discountTotalPrice) 
+                : ((dPricePerMeal > 0 ? dPricePerMeal : pPerMeal) * totalMeals);
+
+            const finalSavingsAmount = Math.max(0, finalTotalPrice - finalDiscountTotalPrice);
 
             mappedPlansList.push({
                 _id: plan._id,
@@ -1755,11 +1759,11 @@ const getNearestHealthyPlans = async (req, res) => {
                 bannerImage: plan.bannerImage,
                 images: plan.images || [],
                 pricing: {
-                    pricePerMeal: plan.pricing?.pricePerMeal || 0,
-                    discountPricePerMeal: plan.pricing?.discountPricePerMeal || 0,
+                    pricePerMeal: pPerMeal,
+                    discountPricePerMeal: dPricePerMeal,
                     totalPrice: finalTotalPrice,
                     discountTotalPrice: finalDiscountTotalPrice,
-                    savingsAmount: Math.max(0, finalTotalPrice - finalDiscountTotalPrice)
+                    savingsAmount: finalSavingsAmount
                 },
                 nutritionalHighlights: plan.nutritionalHighlights || {},
                 isPopular: plan.isPopular,
@@ -1806,9 +1810,8 @@ const getNearestHealthyPlans = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
-
 // ==========================================
-// 🔍 2. GET SINGLE HEALTHY PLAN DETAILS BY ID (User View)
+// 🔍 2. GET SINGLE HEALTHY PLAN DETAILS BY ID (FIXED PRICING FALLBACK FOR FRONTEND)
 // Full Path: GET /api/foodpage/healthy-plans/:id
 // ==========================================
 const getHealthyPlanDetailsForUser = async (req, res) => {
@@ -1832,18 +1835,36 @@ const getHealthyPlanDetailsForUser = async (req, res) => {
             return res.status(404).json({ success: false, message: "Healthy diet plan is currently unavailable." });
         }
 
+        // 🧮 1. Pricing Calculations with Auto-Fallback (Guaranteed to return all keys)
+        const pPerMeal = Number(plan.pricing?.pricePerMeal || 0);
+        const dPricePerMeal = Number(plan.pricing?.discountPricePerMeal || 0);
+
+        let mealsPerDay = 3;
+        if (plan.programType === 'Lunches & Dinners' || plan.programType === 'Breakfast & Lunch') {
+            mealsPerDay = 2;
+        }
+        const totalMeals = mealsPerDay * (Number(plan.daysCount) || 1);
+
+        const finalTotalPrice = plan.pricing?.totalPrice && Number(plan.pricing.totalPrice) > 0 
+            ? Number(plan.pricing.totalPrice) 
+            : (pPerMeal * totalMeals);
+
+        const finalDiscountTotalPrice = plan.pricing?.discountTotalPrice && Number(plan.pricing.discountTotalPrice) > 0 
+            ? Number(plan.pricing.discountTotalPrice) 
+            : ((dPricePerMeal > 0 ? dPricePerMeal : pPerMeal) * totalMeals);
+
+        const finalSavingsAmount = Math.max(0, finalTotalPrice - finalDiscountTotalPrice);
+
         let targetVendor = null;
         let distance = null;
         let distanceText = null;
         let isAvailable = false;
-        let finalTotalPrice = plan.pricing?.totalPrice || 0;
-        let finalDiscountTotalPrice = plan.pricing?.discountTotalPrice || 0;
 
         const vendors = await Food.find({ profileStatus: 'Approved', isActive: true, isOnline: true })
             .select('name location address rating profileImage')
             .lean();
 
-        // Location Resolution
+        // 2. Location & Nearest Kitchen Resolution
         if (lat && lng && vendors.length > 0) {
             const nearestVendors = [];
             const nearestVendorsMap = new Map();
@@ -1891,8 +1912,6 @@ const getHealthyPlanDetailsForUser = async (req, res) => {
                     };
                     distance = vInfo.distance;
                     distanceText = vInfo.distanceText;
-                    if (activeMapping.customPrice !== null) finalTotalPrice = activeMapping.customPrice;
-                    if (activeMapping.customDiscountPrice !== null) finalDiscountTotalPrice = activeMapping.customDiscountPrice;
                 } else {
                     const fallbackVendor = nearestVendors[0];
                     targetVendor = {
@@ -1926,15 +1945,17 @@ const getHealthyPlanDetailsForUser = async (req, res) => {
             }
         }
 
+        // 3. Response with Guaranteed Full Pricing Object
         res.json({
             success: true,
             data: {
                 ...plan,
                 pricing: {
-                    ...plan.pricing,
+                    pricePerMeal: pPerMeal,
+                    discountPricePerMeal: dPricePerMeal,
                     totalPrice: finalTotalPrice,
                     discountTotalPrice: finalDiscountTotalPrice,
-                    savingsAmount: Math.max(0, finalTotalPrice - finalDiscountTotalPrice)
+                    savingsAmount: finalSavingsAmount
                 },
                 isAvailable,
                 UnavailablePlan: !isAvailable,
@@ -1948,7 +1969,6 @@ const getHealthyPlanDetailsForUser = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
-
 
 module.exports = {
     getNearestVendorMeals,

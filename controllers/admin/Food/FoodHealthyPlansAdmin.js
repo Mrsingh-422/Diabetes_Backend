@@ -119,7 +119,7 @@ const deleteHealthyMainCategory = async (req, res) => {
     }
 };
 
-// --- 2.1 CREATE NEW HEALTHY PLAN (WITH DAY-WISE SCHEDULE & 7-DAY REPEAT) ---
+// --- 2.1 CREATE NEW HEALTHY PLAN (COMPLETE UPDATED WITH SAFE PRICING & UNIQUE ID) ---
 const createHealthyPlan = async (req, res) => {
     try {
         const {
@@ -130,8 +130,8 @@ const createHealthyPlan = async (req, res) => {
             subCategory,
             programType = 'Full Program',
             daysCount,
-            dayWiseSchedule,      // 👈 JSON Array string containing Day 1, Day 2, Day 3... meals
-            isRepeatAfter7Days,   // 👈 'true' | 'false'
+            dayWiseSchedule,
+            isRepeatAfter7Days,
             pricePerMeal,
             discountPricePerMeal,
             totalPrice,
@@ -143,10 +143,10 @@ const createHealthyPlan = async (req, res) => {
             isRecommended
         } = req.body;
 
-        if (!title || !description || !mainCategory || !subCategory || !daysCount || !pricePerMeal || !totalPrice) {
+        if (!title || !description || !mainCategory || !subCategory || !daysCount || !pricePerMeal) {
             return res.status(400).json({
                 success: false,
-                message: "Please provide all required fields: title, description, mainCategory, subCategory, daysCount, pricePerMeal, totalPrice."
+                message: "Please provide all required fields: title, description, mainCategory, subCategory, daysCount, pricePerMeal."
             });
         }
 
@@ -164,7 +164,6 @@ const createHealthyPlan = async (req, res) => {
             }
         }
 
-        // Format each day's meals
         parsedSchedule = parsedSchedule.map((day, idx) => ({
             dayNumber: Number(day.dayNumber) || (idx + 1),
             dayName: day.dayName || `Day ${idx + 1}`,
@@ -174,9 +173,9 @@ const createHealthyPlan = async (req, res) => {
         }));
 
         const shouldRepeat = isRepeatAfter7Days === 'true' || isRepeatAfter7Days === true;
-        const totalDays = Number(daysCount);
+        const totalDays = Number(daysCount) || 1;
 
-        // 2. 🔁 7-Day Auto Repeat Logic (Agar enabled ho aur plan 7 se zyada dino ka ho)
+        // 7-Day Auto Repeat Logic
         if (shouldRepeat && parsedSchedule.length >= 7 && totalDays > parsedSchedule.length) {
             const base7Days = [...parsedSchedule.slice(0, 7)];
             const fullSchedule = [];
@@ -194,7 +193,7 @@ const createHealthyPlan = async (req, res) => {
             parsedSchedule = fullSchedule;
         }
 
-        // 3. Media Uploads
+        // 2. Media Files Upload Handling
         let bannerImagePath = null;
         let imagesArray = [];
 
@@ -202,35 +201,68 @@ const createHealthyPlan = async (req, res) => {
             if (req.files.bannerImage && req.files.bannerImage[0]) {
                 bannerImagePath = `/uploads/foods/healthy_plans/${req.files.bannerImage[0].filename}`;
             }
-            if (req.files.images && req.files.images.length > 0) {
-                imagesArray = req.files.images.map(file => `/uploads/foods/healthy_plans/${file.filename}`);
+            if (req.files.images) {
+                const filesList = Array.isArray(req.files.images) 
+                    ? req.files.images 
+                    : [req.files.images];
+
+                imagesArray = filesList.map(file => `/uploads/foods/healthy_plans/${file.filename}`);
             }
         }
 
-        // 4. Unique ID & Pricing
-        const totalCount = await FoodHealthyPlans.countDocuments();
-        const planId = `HLP-${101 + totalCount}`;
+        // 3. 🛡️ Safe Unique Plan ID Generator (Never Collides)
+        const latestPlan = await FoodHealthyPlans.findOne({}, { planId: 1 }).sort({ createdAt: -1 });
+        let nextNumber = 101;
+        if (latestPlan && latestPlan.planId) {
+            const match = latestPlan.planId.match(/\d+/);
+            if (match) {
+                nextNumber = parseInt(match[0], 10) + 1;
+            }
+        }
 
-        const originalTotal = Number(totalPrice);
-        const discountedTotal = discountTotalPrice ? Number(discountTotalPrice) : originalTotal;
+        let planId = `HLP-${nextNumber}`;
+        while (await FoodHealthyPlans.exists({ planId })) {
+            nextNumber++;
+            planId = `HLP-${nextNumber}`;
+        }
+
+        // 4. 🧮 Auto-Calculated Pricing (Fallback Safe)
+        const pPerMeal = Number(pricePerMeal) || 0;
+        const dPricePerMeal = discountPricePerMeal ? Number(discountPricePerMeal) : 0;
+
+        let mealsPerDay = 3;
+        if (programType === 'Lunches & Dinners' || programType === 'Breakfast & Lunch') {
+            mealsPerDay = 2;
+        }
+        const totalMeals = mealsPerDay * totalDays;
+
+        const originalTotal = (totalPrice !== undefined && totalPrice !== "" && Number(totalPrice) > 0)
+            ? Number(totalPrice)
+            : (pPerMeal * totalMeals);
+
+        const discountedTotal = (discountTotalPrice !== undefined && discountTotalPrice !== "" && Number(discountTotalPrice) > 0)
+            ? Number(discountTotalPrice)
+            : ((dPricePerMeal > 0 ? dPricePerMeal : pPerMeal) * totalMeals);
+
         const savingsAmount = Math.max(0, originalTotal - discountedTotal);
 
+        // 5. Create in Database
         const newPlan = await FoodHealthyPlans.create({
             planId,
-            title,
+            title: title.trim(),
             description,
             tagline: tagline || "",
             mainCategory: mainCategory.trim(),
             subCategory: subCategory.trim(),
             programType,
             daysCount: totalDays,
-            dayWiseSchedule: parsedSchedule, // 👈 Saved Day 1, Day 2, Day 3...
+            dayWiseSchedule: parsedSchedule,
             isRepeatAfter7Days: shouldRepeat,
             bannerImage: bannerImagePath,
             images: imagesArray,
             pricing: {
-                pricePerMeal: Number(pricePerMeal),
-                discountPricePerMeal: discountPricePerMeal ? Number(discountPricePerMeal) : 0,
+                pricePerMeal: pPerMeal,
+                discountPricePerMeal: dPricePerMeal,
                 totalPrice: originalTotal,
                 discountTotalPrice: discountedTotal,
                 savingsAmount
@@ -246,7 +278,7 @@ const createHealthyPlan = async (req, res) => {
 
         res.status(201).json({
             success: true,
-            message: `Healthy Diet Plan '${title}' published successfully with ${parsedSchedule.length}-Day schedule!`,
+            message: `Healthy Diet Plan '${title}' published successfully! (Plan ID: ${planId})`,
             data: newPlan
         });
 
@@ -254,7 +286,6 @@ const createHealthyPlan = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
-
 // --- 2.2 GET ALL HEALTHY PLANS (FIXED POPULATE ERROR) ---
 // Full Path: GET /admin/food/healthy-plans/get
 const getAllHealthyPlans = async (req, res) => {

@@ -8,10 +8,41 @@ const foodBookingSchema = new mongoose.Schema({
 
     bookingType: { 
         type: String, 
-        enum: ['Direct', 'Subscription', 'Custom Plate'], 
+        enum: ['Direct', 'Subscription', 'Custom Plate', 'Healthy Plan'], // 👈 Added 'Healthy Plan'
         default: 'Direct' 
     },
 
+    // 🥗 HEALTHY PLANS SUBSCRIPTION DETAILS
+    healthyPlanDetails: {
+        healthyPlanId: { type: mongoose.Schema.Types.ObjectId, ref: 'FoodHealthyPlans' },
+        planId: { type: String, default: "" },
+        title: { type: String, default: "" },
+        mainCategory: { type: String, default: "" },
+        subCategory: { type: String, default: "" },
+        programType: { type: String, default: "Full Program" },
+        daysCount: { type: Number, default: 5 },
+        
+        // 🌟 NEW: User Defined Custom Start Date
+        startAtThisDate: { type: Date }, // 👈 User chosen custom date when kitchen activates/starts plan
+        startDate: { type: Date },       // Plan active start date
+        endDate: { type: Date },         // Auto-calculated plan completion date
+        
+        isRepeatAfter7Days: { type: Boolean, default: false },
+        userNote: { type: String, default: "" },
+        purposeOfBuying: { type: String, default: "" },
+        deliveryTimes: {
+            breakfastTime: { type: String, default: "08:00 AM - 09:00 AM" },
+            lunchTime: { type: String, default: "01:00 PM - 02:00 PM" },
+            dinnerTime: { type: String, default: "08:00 PM - 09:00 PM" }
+        },
+        dayWiseSchedule: [{
+            dayNumber: Number,
+            dayName: String,
+            breakfast: [{ type: mongoose.Schema.Types.ObjectId, ref: 'FoodService' }],
+            lunch: [{ type: mongoose.Schema.Types.ObjectId, ref: 'FoodService' }],
+            dinner: [{ type: mongoose.Schema.Types.ObjectId, ref: 'FoodService' }]
+        }]
+    },
     // A. DIRECT MEALS & COMBOS
     items: [{
         productType: { type: String, enum: ['MealItem', 'Combo'], required: true, default: 'MealItem' },
@@ -162,7 +193,8 @@ const foodBookingSchema = new mongoose.Schema({
 
     status: {
         type: String,
-        enum: ['New', 'Preparing', 'Ready', 'Picked Up', 'Delivered', 'Cancelled', 'No-Show', 'Active', 'Expired'],
+        
+        enum: ['Pending', 'New', 'Preparing', 'Ready', 'Picked Up', 'Delivered', 'Cancelled', 'No-Show', 'Active', 'Expired'],
         default: 'New'
     },
 
