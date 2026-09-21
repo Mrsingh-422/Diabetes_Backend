@@ -102,6 +102,17 @@ const foodHealthyPlansSchema = new mongoose.Schema({
 
     isPopular: { type: Boolean, default: false },
     isRecommended: { type: Boolean, default: false },
+    
+    //  SOFT DELETE & LIFECYCLE FIELDS
+    isDeleted: { 
+        type: Boolean, 
+        default: false,
+        index: true 
+    },
+    deletedAt: { 
+        type: Date, 
+        default: null 
+    },
     isActive: { type: Boolean, default: true }
 }, { timestamps: true });
 

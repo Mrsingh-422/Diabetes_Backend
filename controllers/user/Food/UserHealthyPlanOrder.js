@@ -663,7 +663,7 @@ const verifyHealthyPlanPayment = async (req, res) => {
 };
 
 // ==========================================
-// 📋 4. GET ALL MY HEALTHY PLAN ORDERS (User History)
+// 📋 5.1 GET ALL MY HEALTHY PLAN ORDERS (User Order History List)
 // Full Path: GET /api/food/healthy-plans/my-plans
 // ==========================================
 const getMyHealthyPlanOrders = async (req, res) => {
@@ -671,6 +671,7 @@ const getMyHealthyPlanOrders = async (req, res) => {
         const userId = req.user.id;
         const { status } = req.query;
 
+        // Strictly queries user's Healthy Plan bookings from FoodBooking collection
         const query = {
             userId,
             bookingType: 'Healthy Plan'
@@ -678,37 +679,42 @@ const getMyHealthyPlanOrders = async (req, res) => {
 
         if (status) query.status = status;
 
-        const plans = await FoodBooking.find(query)
+        // Lightweight card fields projection
+        const orders = await FoodBooking.find(query)
             .select('_id bookingId status bookingType healthyPlanDetails billSummary.totalAmount foodId paymentStatus createdAt')
-            .populate('foodId', 'name profileImage city address')
+            .populate('foodId', 'name profileImage city address phone')
             .sort({ createdAt: -1 })
             .lean();
 
-        const cleanList = plans.map(p => {
-            const h = p.healthyPlanDetails || {};
-            const start = h.startDate;
+        // 🛡️ Format Clean Snapshot List (Never breaks even if master plan is soft-deleted)
+        const cleanList = orders.map(order => {
+            const h = order.healthyPlanDetails || {};
+            const startAt = h.startAtThisDate || h.startDate;
             const end = h.endDate;
 
             return {
-                _id: p._id,
-                bookingId: p.bookingId,
+                _id: order._id,
+                bookingId: order.bookingId,
+                bookingType: "Healthy Plan",
                 title: h.title || "Healthy Diet Plan",
                 planId: h.planId || "HLP-101",
-                mainCategory: h.mainCategory,
-                subCategory: h.subCategory,
-                programType: h.programType,
-                daysCount: h.daysCount,
-                status: p.status,
-                paymentStatus: p.paymentStatus,
-                totalAmount: p.billSummary?.totalAmount || 0,
-                startDate: start ? new Date(start).toISOString().split('T')[0] : null,
+                mainCategory: h.mainCategory || "General",
+                subCategory: h.subCategory || "Diet Program",
+                programType: h.programType || "Full Program",
+                daysCount: h.daysCount || 1,
+                status: order.status,
+                paymentStatus: order.paymentStatus,
+                totalAmount: order.billSummary?.totalAmount || 0,
+                startAtThisDate: startAt ? new Date(startAt).toISOString().split('T')[0] : null,
+                startDate: startAt ? new Date(startAt).toISOString().split('T')[0] : null,
                 endDate: end ? new Date(end).toISOString().split('T')[0] : null,
                 kitchen: {
-                    _id: p.foodId?._id,
-                    name: p.foodId?.name || "Healthy Cloud Kitchen",
-                    city: p.foodId?.city || "Mohali"
+                    _id: order.foodId?._id,
+                    name: order.foodId?.name || "Healthy Cloud Kitchen",
+                    city: order.foodId?.city || "Mohali",
+                    profileImage: order.foodId?.profileImage || null
                 },
-                createdAt: p.createdAt
+                createdAt: order.createdAt
             };
         });
 
@@ -724,7 +730,7 @@ const getMyHealthyPlanOrders = async (req, res) => {
 };
 
 // ==========================================
-// 🔍 5. GET SINGLE HEALTHY PLAN ORDER FULL DETAILS (CLEANED)
+// 🔍 5.2 GET SINGLE HEALTHY PLAN ORDER FULL DETAILS BY ID
 // Full Path: GET /api/food/healthy-plans/my-plan/:id
 // ==========================================
 const getMyHealthyPlanOrderById = async (req, res) => {
@@ -732,25 +738,29 @@ const getMyHealthyPlanOrderById = async (req, res) => {
         const userId = req.user.id;
         const { id } = req.params;
 
+        // Queries the specific order record by MongoDB _id or custom bookingId
         const order = await FoodBooking.findOne({
             $or: [{ _id: id }, { bookingId: id }],
             userId,
             bookingType: 'Healthy Plan'
         })
-        .populate('foodId', 'name profileImage address city phone rating')
+        .populate('foodId', 'name profileImage address city phone rating location')
         .populate({
             path: 'healthyPlanDetails.dayWiseSchedule.breakfast healthyPlanDetails.dayWiseSchedule.lunch healthyPlanDetails.dayWiseSchedule.dinner',
-            select: 'name imageUrl price discountPrice calories dietType foodEffectCategory ingredients',
+            select: 'name description imageUrl price discountPrice calories dietType foodEffectCategory ingredients tags glycemicIndex netCarbs sodium',
             strictPopulate: false
         })
         .populate('billSummary.couponId', 'couponName discountPercentage maxDiscount')
         .lean();
 
         if (!order) {
-            return res.status(404).json({ success: false, message: "Healthy Plan order details not found." });
+            return res.status(404).json({ 
+                success: false, 
+                message: "Healthy Diet Plan order details not found." 
+            });
         }
 
-        // 🧹 Faltu empty blocks remove karein (Sirf Healthy Plan data rahega)
+        // 🧹 Clean Data Sanitization (Removes irrelevant empty sub-schemas)
         delete order.subscriptionDetails;
         delete order.customTiffinDetails;
         delete order.items;

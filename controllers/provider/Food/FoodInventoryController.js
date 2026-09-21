@@ -583,21 +583,22 @@ const getVendorTiffinPlanById = async (req, res) => {
     }
 };
 
-// ==========================================
-// 🥗 HEALTHY PLANS VENDOR INVENTORY (NO CUSTOM PRICING)
-// ==========================================
 
-// --- 1. GET MASTER HEALTHY PLANS CHECKLIST ---
+
+// ==========================================
+// 🥗 1. GET MASTER HEALTHY PLANS CHECKLIST (WITH IS_DELETED_BY_ADMIN BLUR FLAG)
 // Full Path: GET /provider/food/inventory/master-healthy-plans
+// ==========================================
 const getMasterHealthyPlansForSelection = async (req, res) => {
     try {
         const vendorId = req.user.id;
         const { mainCategory, subCategory } = req.query;
 
-        const filter = { isActive: true };
+        const filter = {}; // Fetches all plans to show active + discontinued
         if (mainCategory) filter.mainCategory = new RegExp(`^${mainCategory.trim()}$`, 'i');
         if (subCategory) filter.subCategory = new RegExp(`^${subCategory.trim()}$`, 'i');
 
+        // Fetch master plans with day-wise meals & ingredients
         const masterPlans = await FoodHealthyPlans.find(filter)
             .populate({
                 path: 'dayWiseSchedule.breakfast dayWiseSchedule.lunch dayWiseSchedule.dinner',
@@ -606,6 +607,7 @@ const getMasterHealthyPlansForSelection = async (req, res) => {
             })
             .lean();
 
+        // Fetch this vendor's mappings
         const vendorMappings = await VendorHealthyPlan.find({ vendorId }).lean();
 
         const checklist = masterPlans.map(plan => {
@@ -613,10 +615,21 @@ const getMasterHealthyPlansForSelection = async (req, res) => {
                 m => m.healthyPlanId.toString() === plan._id.toString()
             );
 
+            const isDeletedByAdmin = Boolean(plan.isDeleted);
+
             return {
                 ...plan,
-                isAvailable: mapping ? mapping.isAvailable : false
+                // Agar Admin ne plan delete kar diya ho toh force isAvailable false rahega
+                isAvailable: isDeletedByAdmin ? false : (mapping ? mapping.isAvailable : false),
+                isDeletedByAdmin: isDeletedByAdmin, // 👈 🌟 Frontend will use this to BLUR the card
+                adminStatusText: isDeletedByAdmin ? "Discontinued by Admin" : "Active"
             };
+        });
+
+        // Active plans first, discontinued last
+        checklist.sort((a, b) => {
+            if (a.isDeletedByAdmin !== b.isDeletedByAdmin) return a.isDeletedByAdmin ? 1 : -1;
+            return new Date(b.createdAt) - new Date(a.createdAt);
         });
 
         res.json({
@@ -629,7 +642,6 @@ const getMasterHealthyPlansForSelection = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
-
 // --- 2. MULTI-SYNC HEALTHY PLANS (ONLY AVAILABILITY SYNC) ---
 // Full Path: POST /provider/food/inventory/sync-healthy-plans
 const syncHealthyPlans = async (req, res) => {
@@ -673,14 +685,16 @@ const syncHealthyPlans = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
-
-// --- 3. SINGLE INSTANT TOGGLE SWITCH ---
+//================================================
+// ⚡ 2. TOGGLE SINGLE HEALTHY PLAN AVAILABILITY (BLOCKS DELETED PLANS)
 // Full Path: PATCH /provider/food/inventory/toggle-healthy-plan/:healthyPlanId
+// ==========================================
 const toggleHealthyPlanAvailability = async (req, res) => {
     try {
         const vendorId = req.user.id;
         const { healthyPlanId } = req.params;
 
+        // Resolve MongoDB _id if custom planId (e.g. HLP-102) was passed
         let targetPlanId = healthyPlanId;
         if (!mongoose.Types.ObjectId.isValid(healthyPlanId)) {
             const master = await FoodHealthyPlans.findOne({ planId: healthyPlanId });
@@ -688,6 +702,19 @@ const toggleHealthyPlanAvailability = async (req, res) => {
                 return res.status(404).json({ success: false, message: "Healthy plan not found." });
             }
             targetPlanId = master._id;
+        }
+
+        // 🚨 CRITICAL GUARD: Check if Admin has discontinued this plan
+        const masterPlan = await FoodHealthyPlans.findById(targetPlanId);
+        if (!masterPlan) {
+            return res.status(404).json({ success: false, message: "Healthy plan not found." });
+        }
+
+        if (masterPlan.isDeleted || masterPlan.isActive === false) {
+            return res.status(400).json({
+                success: false,
+                message: `This Healthy Diet Plan ('${masterPlan.title}') has been discontinued by Admin and cannot be activated.`
+            });
         }
 
         const existing = await VendorHealthyPlan.findOne({ vendorId, healthyPlanId: targetPlanId });
@@ -711,14 +738,16 @@ const toggleHealthyPlanAvailability = async (req, res) => {
     }
 };
 
-// --- 4. GET ALL VENDOR HEALTHY PLANS INVENTORY LIST ---
+// ==========================================
+// 📦 3. GET VENDOR HEALTHY PLANS INVENTORY LIST
 // Full Path: GET /provider/food/inventory/healthy-plans
+// ==========================================
 const getVendorHealthyPlans = async (req, res) => {
     try {
         const vendorId = req.user.id;
         const { isAvailable, mainCategory, subCategory } = req.query;
 
-        const query = { isActive: true };
+        const query = {};
         if (mainCategory) query.mainCategory = new RegExp(`^${mainCategory.trim()}$`, 'i');
         if (subCategory) query.subCategory = new RegExp(`^${subCategory.trim()}$`, 'i');
 
@@ -737,9 +766,13 @@ const getVendorHealthyPlans = async (req, res) => {
                 m => m.healthyPlanId.toString() === plan._id.toString()
             );
 
+            const isDeletedByAdmin = Boolean(plan.isDeleted);
+
             return {
                 ...plan,
-                isAvailable: mapping ? mapping.isAvailable : false
+                isAvailable: isDeletedByAdmin ? false : (mapping ? mapping.isAvailable : false),
+                isDeletedByAdmin: isDeletedByAdmin, // 👈 For Blur rendering
+                adminStatusText: isDeletedByAdmin ? "Discontinued by Admin" : "Active"
             };
         });
 
@@ -748,8 +781,10 @@ const getVendorHealthyPlans = async (req, res) => {
             result = result.filter(p => p.isAvailable === statusBool);
         }
 
+        // Sort: Active first, then non-deleted, then latest created
         result.sort((a, b) => {
             if (a.isAvailable !== b.isAvailable) return a.isAvailable ? -1 : 1;
+            if (a.isDeletedByAdmin !== b.isDeletedByAdmin) return a.isDeletedByAdmin ? 1 : -1;
             return new Date(b.createdAt) - new Date(a.createdAt);
         });
 
@@ -764,8 +799,11 @@ const getVendorHealthyPlans = async (req, res) => {
     }
 };
 
-// --- 5. GET SINGLE VENDOR HEALTHY PLAN FULL DETAILS ---
+
+// ==========================================
+// 🔍 4. GET SINGLE VENDOR HEALTHY PLAN FULL DETAILS BY ID
 // Full Path: GET /provider/food/inventory/healthy-plans/:id
+// ==========================================
 const getVendorHealthyPlanById = async (req, res) => {
     try {
         const vendorId = req.user.id;
@@ -792,11 +830,15 @@ const getVendorHealthyPlanById = async (req, res) => {
             healthyPlanId: plan._id
         }).lean();
 
+        const isDeletedByAdmin = Boolean(plan.isDeleted);
+
         res.json({
             success: true,
             data: {
                 ...plan,
-                isAvailable: mapping ? mapping.isAvailable : false
+                isAvailable: isDeletedByAdmin ? false : (mapping ? mapping.isAvailable : false),
+                isDeletedByAdmin: isDeletedByAdmin, // 👈 Blur indicator
+                adminStatusText: isDeletedByAdmin ? "Discontinued by Admin" : "Active"
             }
         });
 

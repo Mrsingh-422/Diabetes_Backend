@@ -291,7 +291,9 @@ const createHealthyPlan = async (req, res) => {
 const getAllHealthyPlans = async (req, res) => {
     try {
         const { mainCategory, subCategory, programType, daysCount, search, page = 1, limit = 20 } = req.query;
-        const query = { isActive: true };
+        
+        // 🚨 Filter out soft-deleted plans for fresh listing
+        const query = { isDeleted: false };
 
         if (mainCategory) query.mainCategory = new RegExp(`^${mainCategory.trim()}$`, 'i');
         if (subCategory) query.subCategory = new RegExp(`^${subCategory.trim()}$`, 'i');
@@ -311,20 +313,9 @@ const getAllHealthyPlans = async (req, res) => {
         const skip = (parseInt(page, 10) - 1) * parseInt(limit, 10);
         const totalDocs = await FoodHealthyPlans.countDocuments(query);
 
-        // 👈 Updated path to dayWiseSchedule with strictPopulate: false
         const plans = await FoodHealthyPlans.find(query)
             .populate({
-                path: 'dayWiseSchedule.breakfast',
-                select: 'name imageUrl price discountPrice calories dietType foodEffectCategory',
-                strictPopulate: false
-            })
-            .populate({
-                path: 'dayWiseSchedule.lunch',
-                select: 'name imageUrl price discountPrice calories dietType foodEffectCategory',
-                strictPopulate: false
-            })
-            .populate({
-                path: 'dayWiseSchedule.dinner',
+                path: 'dayWiseSchedule.breakfast dayWiseSchedule.lunch dayWiseSchedule.dinner',
                 select: 'name imageUrl price discountPrice calories dietType foodEffectCategory',
                 strictPopulate: false
             })
@@ -525,23 +516,51 @@ const updateHealthyPlan = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
-// --- 2.5 DELETE HEALTHY PLAN ---
+// --- 2.5 SOFT DELETE HEALTHY PLAN (ADMIN ACTION) ---
+// Full Path: DELETE /admin/food/healthy-plans/delete/:id
 const deleteHealthyPlan = async (req, res) => {
     try {
         const { id } = req.params;
-        const plan = await FoodHealthyPlans.findOneAndDelete({ $or: [{ _id: id }, { planId: id }] });
+
+        const query = mongoose.Types.ObjectId.isValid(id)
+            ? { $or: [{ _id: id }, { planId: id }] }
+            : { planId: id };
+
+        // 1. Soft Delete the Plan (Never hard delete so existing orders & images stay safe)
+        const plan = await FoodHealthyPlans.findOneAndUpdate(
+            query,
+            { 
+                $set: { 
+                    isDeleted: true, 
+                    isActive: false, 
+                    deletedAt: new Date() 
+                } 
+            },
+            { new: true }
+        );
 
         if (!plan) {
             return res.status(404).json({ success: false, message: "Healthy diet plan not found." });
         }
 
-        // File Cleanups
-        if (plan.bannerImage) deleteFile(plan.bannerImage);
-        if (plan.images && plan.images.length > 0) {
-            plan.images.forEach(img => deleteFile(img));
-        }
+        // 2. Disable this plan in all vendors' active inventory mappings
+        const VendorHealthyPlan = require('../../../models/VendorHealthyPlan');
+        await VendorHealthyPlan.updateMany(
+            { healthyPlanId: plan._id },
+            { $set: { isAvailable: false } }
+        );
 
-        res.json({ success: true, message: "Healthy diet plan removed successfully." });
+        res.json({
+            success: true,
+            message: `Healthy Diet Plan '${plan.title}' (${plan.planId}) has been disabled and archived successfully. Active subscribers will continue their plan uninterrupted.`,
+            data: {
+                planId: plan.planId,
+                isDeleted: plan.isDeleted,
+                isActive: plan.isActive,
+                deletedAt: plan.deletedAt
+            }
+        });
+
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
