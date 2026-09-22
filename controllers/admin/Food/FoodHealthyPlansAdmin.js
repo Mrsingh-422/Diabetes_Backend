@@ -2,6 +2,8 @@
 
 const FoodHealthyPlans = require('../../../models/FoodHealthyPlans');
 const FoodHealthyCategory = require('../../../models/FoodHealthyCategory');
+const FoodBooking = require('../../../models/FoodBooking');
+const VendorHealthyPlan = require('../../../models/VendorHealthyPlan');
 const FoodService = require('../../../models/FoodService');
 const { deleteFile } = require('../../../utils/fileHandler');
 const mongoose = require('mongoose');
@@ -286,14 +288,14 @@ const createHealthyPlan = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
-// --- 2.2 GET ALL HEALTHY PLANS (FIXED POPULATE ERROR) ---
+// --- 2.2 GET ALL HEALTHY PLANS (ADMIN - SHOWS ALL 100% PLANS) ---
 // Full Path: GET /admin/food/healthy-plans/get
 const getAllHealthyPlans = async (req, res) => {
     try {
         const { mainCategory, subCategory, programType, daysCount, search, page = 1, limit = 20 } = req.query;
         
-        // 🚨 Filter out soft-deleted plans for fresh listing
-        const query = { isDeleted: false };
+        // 🚨 Empty query: Admin ko sabhi plans dikhenge (chahe active/inactive ya isDeleted true ho)
+        const query = {};
 
         if (mainCategory) query.mainCategory = new RegExp(`^${mainCategory.trim()}$`, 'i');
         if (subCategory) query.subCategory = new RegExp(`^${subCategory.trim()}$`, 'i');
@@ -306,16 +308,27 @@ const getAllHealthyPlans = async (req, res) => {
                 { title: regex },
                 { description: regex },
                 { mainCategory: regex },
-                { subCategory: regex }
+                { subCategory: regex },
+                { planId: regex }
             ];
         }
 
         const skip = (parseInt(page, 10) - 1) * parseInt(limit, 10);
         const totalDocs = await FoodHealthyPlans.countDocuments(query);
 
-        const plans = await FoodHealthyPlans.find(query)
+        const rawPlans = await FoodHealthyPlans.find(query)
             .populate({
-                path: 'dayWiseSchedule.breakfast dayWiseSchedule.lunch dayWiseSchedule.dinner',
+                path: 'dayWiseSchedule.breakfast',
+                select: 'name imageUrl price discountPrice calories dietType foodEffectCategory',
+                strictPopulate: false
+            })
+            .populate({
+                path: 'dayWiseSchedule.lunch',
+                select: 'name imageUrl price discountPrice calories dietType foodEffectCategory',
+                strictPopulate: false
+            })
+            .populate({
+                path: 'dayWiseSchedule.dinner',
                 select: 'name imageUrl price discountPrice calories dietType foodEffectCategory',
                 strictPopulate: false
             })
@@ -324,10 +337,43 @@ const getAllHealthyPlans = async (req, res) => {
             .limit(parseInt(limit, 10))
             .lean();
 
+        // Fallback Pricing Calculation
+        const plans = rawPlans.map(plan => {
+            const pPerMeal = Number(plan.pricing?.pricePerMeal || 0);
+            const dPricePerMeal = Number(plan.pricing?.discountPricePerMeal || 0);
+
+            let mealsPerDay = 3;
+            if (plan.programType === 'Lunches & Dinners' || plan.programType === 'Breakfast & Lunch') {
+                mealsPerDay = 2;
+            }
+            const totalMeals = mealsPerDay * (Number(plan.daysCount) || 1);
+
+            const finalTotalPrice = plan.pricing?.totalPrice && Number(plan.pricing.totalPrice) > 0 
+                ? Number(plan.pricing.totalPrice) 
+                : (pPerMeal * totalMeals);
+
+            const finalDiscountTotalPrice = plan.pricing?.discountTotalPrice && Number(plan.pricing.discountTotalPrice) > 0 
+                ? Number(plan.pricing.discountTotalPrice) 
+                : ((dPricePerMeal > 0 ? dPricePerMeal : pPerMeal) * totalMeals);
+
+            const finalSavingsAmount = Math.max(0, finalTotalPrice - finalDiscountTotalPrice);
+
+            return {
+                ...plan,
+                pricing: {
+                    pricePerMeal: pPerMeal,
+                    discountPricePerMeal: dPricePerMeal,
+                    totalPrice: finalTotalPrice,
+                    discountTotalPrice: finalDiscountTotalPrice,
+                    savingsAmount: finalSavingsAmount
+                }
+            };
+        });
+
         res.json({
             success: true,
             totalDocs,
-            totalPages: Math.ceil(totalDocs / parseInt(limit, 10)),
+            totalPages: Math.ceil(totalDocs / parseInt(limit, 10)) || 1,
             currentPage: parseInt(page, 10),
             count: plans.length,
             data: plans
@@ -516,8 +562,10 @@ const updateHealthyPlan = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
-// --- 2.5 SOFT DELETE HEALTHY PLAN (ADMIN ACTION) ---
+// ==========================================
+// 🗑️ 2.5 SMART CONDITIONAL DELETE (HARD DELETE IF UNUSED | SOFT DELETE IF ACTIVE ORDERS EXIST)
 // Full Path: DELETE /admin/food/healthy-plans/delete/:id
+// ==========================================
 const deleteHealthyPlan = async (req, res) => {
     try {
         const { id } = req.params;
@@ -526,37 +574,70 @@ const deleteHealthyPlan = async (req, res) => {
             ? { $or: [{ _id: id }, { planId: id }] }
             : { planId: id };
 
-        // 1. Soft Delete the Plan (Never hard delete so existing orders & images stay safe)
-        const plan = await FoodHealthyPlans.findOneAndUpdate(
-            query,
-            { 
-                $set: { 
-                    isDeleted: true, 
-                    isActive: false, 
-                    deletedAt: new Date() 
-                } 
-            },
-            { new: true }
-        );
+        const plan = await FoodHealthyPlans.findOne(query);
 
         if (!plan) {
             return res.status(404).json({ success: false, message: "Healthy diet plan not found." });
         }
 
-        // 2. Disable this plan in all vendors' active inventory mappings
-        const VendorHealthyPlan = require('../../../models/VendorHealthyPlan');
+        // 🔍 Step 1: Check if ANY user has ever purchased/subscribed to this plan
+        const hasPurchases = await FoodBooking.exists({
+            bookingType: 'Healthy Plan',
+            $or: [
+                { "healthyPlanDetails.healthyPlanId": plan._id },
+                { "healthyPlanDetails.planId": plan.planId }
+            ]
+        });
+
+        // ====================================================
+        // 🟢 CASE 1: PERMANENT (HARD) DELETE — Never Purchased
+        // ====================================================
+        if (!hasPurchases) {
+            // 1. Physically delete images from storage
+            if (plan.bannerImage) deleteFile(plan.bannerImage);
+            if (Array.isArray(plan.images) && plan.images.length > 0) {
+                plan.images.forEach(img => deleteFile(img));
+            }
+
+            // 2. Remove all vendor inventory mappings completely
+            await VendorHealthyPlan.deleteMany({ healthyPlanId: plan._id });
+
+            // 3. Permanently remove document from database
+            await FoodHealthyPlans.findByIdAndDelete(plan._id);
+
+            return res.json({
+                success: true,
+                deletionType: "Permanent (Hard Delete)",
+                message: `Healthy Diet Plan '${plan.title}' (${plan.planId}) had no user purchases and has been permanently removed from database and storage.`,
+                data: {
+                    planId: plan.planId,
+                    isPermanentlyDeleted: true
+                }
+            });
+        }
+
+        // ====================================================
+        // 🟡 CASE 2: ARCHIVED (SOFT) DELETE — Order History Exists
+        // ====================================================
+        plan.isDeleted = true;
+        plan.isActive = false;
+        plan.deletedAt = new Date();
+        await plan.save();
+
+        // Disable availability for all kitchens
         await VendorHealthyPlan.updateMany(
             { healthyPlanId: plan._id },
             { $set: { isAvailable: false } }
         );
 
-        res.json({
+        return res.json({
             success: true,
-            message: `Healthy Diet Plan '${plan.title}' (${plan.planId}) has been disabled and archived successfully. Active subscribers will continue their plan uninterrupted.`,
+            deletionType: "Archived (Soft Delete)",
+            message: `Healthy Diet Plan '${plan.title}' (${plan.planId}) has historical user subscriptions. It has been archived and disabled from public view without breaking past user order history.`,
             data: {
                 planId: plan.planId,
-                isDeleted: plan.isDeleted,
-                isActive: plan.isActive,
+                isDeleted: true,
+                isActive: false,
                 deletedAt: plan.deletedAt
             }
         });
