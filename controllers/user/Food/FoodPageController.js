@@ -698,6 +698,158 @@ const getComboDetailsById = async (req, res) => {
 // 📅 5. GET NEAREST GEOLOCATED TIFFIN PLANS (User Storefront)
 // 🌟 isAvailable: true plans first, then distance & latest created
 // ==========================================
+// const getNearestPlans = async (req, res) => {
+//     try {
+//         const { lat, lng } = req.body;
+//         const page = parseInt(req.query.page) || 1;
+//         const limit = parseInt(req.query.limit) || 20;
+
+//         if (!lat || !lng) {
+//             return res.status(400).json({ success: false, message: "User latitude and longitude are required." });
+//         }
+
+//         // 1. Fetch platform-wide dynamic KM limit
+//         const limitConfig = await VendorKMLimit.findOne({ vendorType: 'Food', isActive: true });
+//         const maxDistanceLimit = limitConfig ? limitConfig.kmLimit : 10;
+
+//         // 2. Fetch all approved active kitchen vendors
+//         const vendors = await Food.find({ profileStatus: 'Approved', isActive: true })
+//             .select('name location rating address profileImage')
+//             .lean();
+
+//         const nearestVendors = [];
+//         const nearestVendorsMap = new Map();
+
+//         // 3. Filter vendors by Haversine distance
+//         for (let vendor of vendors) {
+//             if (!vendor.location || !vendor.location.lat || !vendor.location.lng) continue;
+
+//             const distance = calculateHaversineDistance(
+//                 Number(lat),
+//                 Number(lng),
+//                 Number(vendor.location.lat),
+//                 Number(vendor.location.lng)
+//             );
+
+//             if (distance <= maxDistanceLimit) {
+//                 const vData = {
+//                     ...vendor,
+//                     distance: Number(distance.toFixed(2)),
+//                     distanceText: `${distance.toFixed(1)} km`
+//                 };
+//                 nearestVendors.push(vData);
+//                 nearestVendorsMap.set(vendor._id.toString(), vData);
+//             }
+//         }
+
+//         // Sort nearest vendors ascending
+//         nearestVendors.sort((a, b) => a.distance - b.distance);
+//         const serviceableVendorIds = nearestVendors.map(v => v._id);
+
+//         if (nearestVendors.length === 0) {
+//             return res.json({ success: true, count: 0, data: [] });
+//         }
+
+//         // 4. Fetch all master plans created by Admin with deep slot population
+//         const masterPlans = await TiffinPlan.find({ isActive: true })
+//             .populate('slotDishes.breakfast.itemId', 'name imageUrl price discountPrice dietType calories')
+//             .populate('slotDishes.lunch.itemId', 'name imageUrl price discountPrice dietType calories')
+//             .populate('slotDishes.dinner.itemId', 'name imageUrl price discountPrice calories dietType')
+//             .populate('dishPool', 'name imageUrl price discountPrice dietType calories')
+//             .lean();
+
+//         // 5. Fetch vendor mappings for nearby kitchens
+//         const vendorPlanMappings = await VendorTiffinPlan.find({
+//             vendorId: { $in: serviceableVendorIds }
+//         }).lean();
+
+//         const mappedPlansList = [];
+
+//         // 6. Map and attach proximity metadata
+//         for (let plan of masterPlans) {
+//             const planMappings = vendorPlanMappings.filter(
+//                 map => map.planId.toString() === plan._id.toString()
+//             );
+
+//             const activeMapping = planMappings.find(m => m.isAvailable === true);
+
+//             let isAvailable = false;
+//             let finalPrice = plan.price;
+//             let targetVendor = nearestVendors[0]; // Fallback to closest kitchen
+
+//             if (activeMapping) {
+//                 isAvailable = true;
+//                 targetVendor = nearestVendorsMap.get(activeMapping.vendorId.toString());
+//                 if (activeMapping.customPrice !== null) finalPrice = activeMapping.customPrice;
+//             } else {
+//                 const anyMapping = planMappings[0];
+//                 if (anyMapping) {
+//                     targetVendor = nearestVendorsMap.get(anyMapping.vendorId.toString());
+//                 }
+//             }
+
+//             mappedPlansList.push({
+//                 _id: plan._id,
+//                 planId: plan.planId,
+//                 name: plan.name,
+//                 planCycle: plan.planCycle,
+//                 mealsPerDay: plan.mealsPerDay,
+//                 price: finalPrice,
+//                 permittedSlots: plan.permittedSlots,
+//                 slotDishes: plan.slotDishes || { breakfast: [], lunch: [], dinner: [] },
+//                 dishPool: plan.dishPool || [],
+//                 description: plan.description,
+//                 activeSubscribers: plan.activeSubscribers || 0,
+//                 isAvailable,
+//                 UnavailablePlan: !isAvailable,
+//                 vendorId: {
+//                     _id: targetVendor._id,
+//                     name: targetVendor.name,
+//                     address: targetVendor.address,
+//                     rating: targetVendor.rating,
+//                     profileImage: targetVendor.profileImage
+//                 },
+//                 distance: targetVendor.distance,
+//                 distanceText: targetVendor.distanceText,
+//                 createdAt: plan.createdAt
+//             });
+//         }
+
+//         // 🚨 7. SORT LOGIC: isAvailable: true FIRST -> Nearest Distance -> Latest Created
+//         mappedPlansList.sort((a, b) => {
+//             if (a.isAvailable !== b.isAvailable) {
+//                 return a.isAvailable ? -1 : 1; // True comes before False
+//             }
+//             if (a.distance !== b.distance) {
+//                 return a.distance - b.distance; // Closer kitchen first
+//             }
+//             return new Date(b.createdAt) - new Date(a.createdAt); // Latest plan first
+//         });
+
+//         // 8. In-Memory Pagination
+//         const totalDocs = mappedPlansList.length;
+//         const skip = (page - 1) * limit;
+//         const paginatedPlans = mappedPlansList.slice(skip, skip + limit);
+
+//         res.json({
+//             success: true,
+//             maxDistanceLimitApplied: `${maxDistanceLimit} km`,
+//             totalDocs,
+//             totalPages: Math.ceil(totalDocs / limit),
+//             currentPage: page,
+//             limit,
+//             data: paginatedPlans
+//         });
+
+//     } catch (error) {
+//         res.status(500).json({ success: false, message: error.message });
+//     }
+// };
+
+// ==========================================
+// 📅 5. GET NEAREST GEOLOCATED TIFFIN PLANS (STOREFRONT DISCOVERY)
+// Full Path: POST /api/foodpage/nearest-plans
+// ==========================================
 const getNearestPlans = async (req, res) => {
     try {
         const { lat, lng } = req.body;
@@ -708,21 +860,18 @@ const getNearestPlans = async (req, res) => {
             return res.status(400).json({ success: false, message: "User latitude and longitude are required." });
         }
 
-        // 1. Fetch platform-wide dynamic KM limit
         const limitConfig = await VendorKMLimit.findOne({ vendorType: 'Food', isActive: true });
         const maxDistanceLimit = limitConfig ? limitConfig.kmLimit : 10;
 
-        // 2. Fetch all approved active kitchen vendors
-        const vendors = await Food.find({ profileStatus: 'Approved', isActive: true })
+        const vendors = await Food.find({ profileStatus: 'Approved', isActive: true, isOnline: true })
             .select('name location rating address profileImage')
             .lean();
 
         const nearestVendors = [];
         const nearestVendorsMap = new Map();
 
-        // 3. Filter vendors by Haversine distance
         for (let vendor of vendors) {
-            if (!vendor.location || !vendor.location.lat || !vendor.location.lng) continue;
+            if (!vendor.location?.lat || !vendor.location?.lng) continue;
 
             const distance = calculateHaversineDistance(
                 Number(lat),
@@ -742,7 +891,6 @@ const getNearestPlans = async (req, res) => {
             }
         }
 
-        // Sort nearest vendors ascending
         nearestVendors.sort((a, b) => a.distance - b.distance);
         const serviceableVendorIds = nearestVendors.map(v => v._id);
 
@@ -750,42 +898,35 @@ const getNearestPlans = async (req, res) => {
             return res.json({ success: true, count: 0, data: [] });
         }
 
-        // 4. Fetch all master plans created by Admin with deep slot population
-        const masterPlans = await TiffinPlan.find({ isActive: true })
-            .populate('slotDishes.breakfast.itemId', 'name imageUrl price discountPrice dietType calories')
-            .populate('slotDishes.lunch.itemId', 'name imageUrl price discountPrice dietType calories')
-            .populate('slotDishes.dinner.itemId', 'name imageUrl price discountPrice calories dietType')
-            .populate('dishPool', 'name imageUrl price discountPrice dietType calories')
-            .lean();
+        // 🚨 Fetch only active & non-deleted master plans for users
+        const masterPlans = await TiffinPlan.find({ 
+            isActive: true, 
+            isDeleted: { $ne: true } 
+        })
+        .populate({
+            path: 'slotDishes.breakfast.itemId slotDishes.lunch.itemId slotDishes.dinner.itemId dishPool',
+            select: 'name imageUrl price discountPrice dietType calories',
+            strictPopulate: false
+        })
+        .lean();
 
-        // 5. Fetch vendor mappings for nearby kitchens
         const vendorPlanMappings = await VendorTiffinPlan.find({
             vendorId: { $in: serviceableVendorIds }
         }).lean();
 
         const mappedPlansList = [];
 
-        // 6. Map and attach proximity metadata
         for (let plan of masterPlans) {
-            const planMappings = vendorPlanMappings.filter(
-                map => map.planId.toString() === plan._id.toString()
+            const activeMapping = vendorPlanMappings.find(
+                map => map.planId.toString() === plan._id.toString() && map.isAvailable === true
             );
 
-            const activeMapping = planMappings.find(m => m.isAvailable === true);
-
-            let isAvailable = false;
+            let isAvailable = Boolean(activeMapping);
             let finalPrice = plan.price;
-            let targetVendor = nearestVendors[0]; // Fallback to closest kitchen
+            let targetVendor = activeMapping ? nearestVendorsMap.get(activeMapping.vendorId.toString()) : nearestVendors[0];
 
-            if (activeMapping) {
-                isAvailable = true;
-                targetVendor = nearestVendorsMap.get(activeMapping.vendorId.toString());
-                if (activeMapping.customPrice !== null) finalPrice = activeMapping.customPrice;
-            } else {
-                const anyMapping = planMappings[0];
-                if (anyMapping) {
-                    targetVendor = nearestVendorsMap.get(anyMapping.vendorId.toString());
-                }
+            if (activeMapping && activeMapping.customPrice !== null) {
+                finalPrice = activeMapping.customPrice;
             }
 
             mappedPlansList.push({
@@ -815,18 +956,13 @@ const getNearestPlans = async (req, res) => {
             });
         }
 
-        // 🚨 7. SORT LOGIC: isAvailable: true FIRST -> Nearest Distance -> Latest Created
+        // Sort: isAvailable: true first -> Nearest Kitchen -> Latest
         mappedPlansList.sort((a, b) => {
-            if (a.isAvailable !== b.isAvailable) {
-                return a.isAvailable ? -1 : 1; // True comes before False
-            }
-            if (a.distance !== b.distance) {
-                return a.distance - b.distance; // Closer kitchen first
-            }
-            return new Date(b.createdAt) - new Date(a.createdAt); // Latest plan first
+            if (a.isAvailable !== b.isAvailable) return a.isAvailable ? -1 : 1;
+            if (a.distance !== b.distance) return a.distance - b.distance;
+            return new Date(b.createdAt) - new Date(a.createdAt);
         });
 
-        // 8. In-Memory Pagination
         const totalDocs = mappedPlansList.length;
         const skip = (page - 1) * limit;
         const paginatedPlans = mappedPlansList.slice(skip, skip + limit);
@@ -846,24 +982,166 @@ const getNearestPlans = async (req, res) => {
     }
 };
 
+
 // ==========================================
 // 📅 6. GET SINGLE TIFFIN PLAN FULL DETAILS BY ID (With Geolocated Context)
+// ==========================================
+// const getPlanDetailsById = async (req, res) => {
+//     try {
+//         const { id } = req.params;
+//         const { lat, lng } = req.query;
+
+//         // 1. Fetch Master Plan with full populated dishes & metadata
+//         const plan = await TiffinPlan.findOne({ 
+//             $or: [{ _id: id }, { planId: id }], 
+//             isActive: true 
+//         })
+//         .populate('slotDishes.breakfast.itemId', 'name imageUrl price discountPrice calories dietType ingredients tags foodEffectCategory')
+//         .populate('slotDishes.lunch.itemId', 'name imageUrl price discountPrice calories dietType ingredients tags foodEffectCategory')
+//         .populate('slotDishes.dinner.itemId', 'name imageUrl price discountPrice calories dietType ingredients tags foodEffectCategory')
+//         .populate('dishPool', 'name imageUrl price discountPrice dietType calories')
+//         .lean();
+
+//         if (!plan) {
+//             return res.status(404).json({ success: false, message: "Tiffin subscription plan is currently unavailable." });
+//         }
+
+//         let targetVendor = null;
+//         let distance = null;
+//         let distanceText = null;
+//         let isAvailable = false;
+//         let finalPrice = plan.price;
+
+//         const vendors = await Food.find({ profileStatus: 'Approved', isActive: true })
+//             .select('name location address rating profileImage')
+//             .lean();
+
+//         // 2. Proximity & Vendor Resolution
+//         if (lat && lng && vendors.length > 0) {
+//             const nearestVendors = [];
+//             const nearestVendorsMap = new Map();
+
+//             for (let vendor of vendors) {
+//                 if (!vendor.location || !vendor.location.lat || !vendor.location.lng) continue;
+
+//                 const computedDistance = calculateHaversineDistance(
+//                     Number(lat),
+//                     Number(lng),
+//                     Number(vendor.location.lat),
+//                     Number(vendor.location.lng)
+//                 );
+
+//                 const vData = {
+//                     ...vendor,
+//                     distance: Number(computedDistance.toFixed(2)),
+//                     distanceText: `${computedDistance.toFixed(1)} km`
+//                 };
+//                 nearestVendors.push(vData);
+//                 nearestVendorsMap.set(vendor._id.toString(), vData);
+//             }
+
+//             nearestVendors.sort((a, b) => a.distance - b.distance);
+
+//             if (nearestVendors.length > 0) {
+//                 const serviceableVendorIds = nearestVendors.map(v => v._id);
+
+//                 const mappings = await VendorTiffinPlan.find({
+//                     planId: plan._id,
+//                     vendorId: { $in: serviceableVendorIds }
+//                 }).lean();
+
+//                 const activeMapping = mappings.find(m => m.isAvailable === true);
+
+//                 if (activeMapping) {
+//                     isAvailable = true;
+//                     const vInfo = nearestVendorsMap.get(activeMapping.vendorId.toString());
+//                     targetVendor = {
+//                         _id: vInfo._id,
+//                         name: vInfo.name,
+//                         address: vInfo.address,
+//                         rating: vInfo.rating,
+//                         profileImage: vInfo.profileImage
+//                     };
+//                     distance = vInfo.distance;
+//                     distanceText = vInfo.distanceText;
+//                     if (activeMapping.customPrice !== null) finalPrice = activeMapping.customPrice;
+//                 } else {
+//                     const fallbackVendor = nearestVendors[0];
+//                     targetVendor = {
+//                         _id: fallbackVendor._id,
+//                         name: fallbackVendor.name,
+//                         address: fallbackVendor.address,
+//                         rating: fallbackVendor.rating,
+//                         profileImage: fallbackVendor.profileImage
+//                     };
+//                     distance = fallbackVendor.distance;
+//                     distanceText = fallbackVendor.distanceText;
+//                 }
+//             }
+//         } else {
+//             // Fallback if no user coordinates
+//             const anyMapping = await VendorTiffinPlan.findOne({ planId: plan._id })
+//                 .populate('vendorId', 'name address rating profileImage')
+//                 .lean();
+
+//             if (anyMapping && anyMapping.vendorId) {
+//                 targetVendor = anyMapping.vendorId;
+//                 isAvailable = anyMapping.isAvailable;
+//             } else if (vendors.length > 0) {
+//                 targetVendor = {
+//                     _id: vendors[0]._id,
+//                     name: vendors[0].name,
+//                     address: vendors[0].address,
+//                     rating: vendors[0].rating,
+//                     profileImage: vendors[0].profileImage
+//                 };
+//             }
+//         }
+
+//         res.json({
+//             success: true,
+//             data: {
+//                 ...plan,
+//                 price: finalPrice,
+//                 isAvailable,
+//                 UnavailablePlan: !isAvailable,
+//                 vendorId: targetVendor,
+//                 distance,
+//                 distanceText
+//             }
+//         });
+
+//     } catch (error) {
+//         res.status(500).json({ success: false, message: error.message });
+//     }
+// };
+
+// ==========================================
+// 📅 6. GET SINGLE TIFFIN PLAN FULL DETAILS (OBJECT_ID & PLN-101 SAFE)
+// Full Path: GET /api/foodpage/plans/:id
 // ==========================================
 const getPlanDetailsById = async (req, res) => {
     try {
         const { id } = req.params;
         const { lat, lng } = req.query;
 
-        // 1. Fetch Master Plan with full populated dishes & metadata
-        const plan = await TiffinPlan.findOne({ 
-            $or: [{ _id: id }, { planId: id }], 
-            isActive: true 
-        })
-        .populate('slotDishes.breakfast.itemId', 'name imageUrl price discountPrice calories dietType ingredients tags foodEffectCategory')
-        .populate('slotDishes.lunch.itemId', 'name imageUrl price discountPrice calories dietType ingredients tags foodEffectCategory')
-        .populate('slotDishes.dinner.itemId', 'name imageUrl price discountPrice calories dietType ingredients tags foodEffectCategory')
-        .populate('dishPool', 'name imageUrl price discountPrice dietType calories')
-        .lean();
+        // 🛡️ Safe Query Builder (Prevents CastError for PLN-101)
+        const query = mongoose.Types.ObjectId.isValid(id)
+            ? { $or: [{ _id: id }, { planId: id }], isActive: true, isDeleted: { $ne: true } }
+            : { planId: id, isActive: true, isDeleted: { $ne: true } };
+
+        const plan = await TiffinPlan.findOne(query)
+            .populate({
+                path: 'slotDishes.breakfast.itemId slotDishes.lunch.itemId slotDishes.dinner.itemId',
+                select: 'name imageUrl price discountPrice calories dietType ingredients tags foodEffectCategory',
+                strictPopulate: false
+            })
+            .populate({
+                path: 'dishPool',
+                select: 'name imageUrl price discountPrice dietType calories',
+                strictPopulate: false
+            })
+            .lean();
 
         if (!plan) {
             return res.status(404).json({ success: false, message: "Tiffin subscription plan is currently unavailable." });
@@ -875,17 +1153,16 @@ const getPlanDetailsById = async (req, res) => {
         let isAvailable = false;
         let finalPrice = plan.price;
 
-        const vendors = await Food.find({ profileStatus: 'Approved', isActive: true })
+        const vendors = await Food.find({ profileStatus: 'Approved', isActive: true, isOnline: true })
             .select('name location address rating profileImage')
             .lean();
 
-        // 2. Proximity & Vendor Resolution
         if (lat && lng && vendors.length > 0) {
             const nearestVendors = [];
             const nearestVendorsMap = new Map();
 
             for (let vendor of vendors) {
-                if (!vendor.location || !vendor.location.lat || !vendor.location.lng) continue;
+                if (!vendor.location?.lat || !vendor.location?.lng) continue;
 
                 const computedDistance = calculateHaversineDistance(
                     Number(lat),
@@ -942,14 +1219,14 @@ const getPlanDetailsById = async (req, res) => {
                 }
             }
         } else {
-            // Fallback if no user coordinates
-            const anyMapping = await VendorTiffinPlan.findOne({ planId: plan._id })
+            const anyMapping = await VendorTiffinPlan.findOne({ planId: plan._id, isAvailable: true })
                 .populate('vendorId', 'name address rating profileImage')
                 .lean();
 
             if (anyMapping && anyMapping.vendorId) {
                 targetVendor = anyMapping.vendorId;
-                isAvailable = anyMapping.isAvailable;
+                isAvailable = true;
+                if (anyMapping.customPrice !== null) finalPrice = anyMapping.customPrice;
             } else if (vendors.length > 0) {
                 targetVendor = {
                     _id: vendors[0]._id,
@@ -979,19 +1256,80 @@ const getPlanDetailsById = async (req, res) => {
     }
 };
 
+
 // ==========================================
 // 📅 7. GET SINGLE VENDOR TIFFIN PLANS (Vendor Storefront Screen)
+// ==========================================
+// const getVendorPlansForUser = async (req, res) => {
+//     try {
+//         const { vendorId } = req.params;
+
+//         const masterPlans = await TiffinPlan.find({ isActive: true })
+//             .populate('slotDishes.breakfast.itemId', 'name imageUrl price discountPrice dietType calories')
+//             .populate('slotDishes.lunch.itemId', 'name imageUrl price discountPrice dietType calories')
+//             .populate('slotDishes.dinner.itemId', 'name imageUrl price discountPrice calories dietType')
+//             .populate('dishPool', 'name imageUrl price discountPrice dietType calories')
+//             .lean();
+
+//         const vendorMappings = await VendorTiffinPlan.find({ vendorId }).lean();
+
+//         const finalMappedPlans = masterPlans.map(plan => {
+//             const mapping = vendorMappings.find(
+//                 map => map.planId.toString() === plan._id.toString()
+//             );
+
+//             let UnavailablePlan = true;
+//             let finalPrice = plan.price;
+
+//             if (mapping && mapping.isAvailable === true) {
+//                 UnavailablePlan = false;
+//                 if (mapping.customPrice !== null) finalPrice = mapping.customPrice;
+//             }
+
+//             return {
+//                 ...plan,
+//                 price: finalPrice,
+//                 isAvailable: mapping ? mapping.isAvailable : false,
+//                 UnavailablePlan
+//             };
+//         });
+
+//         // Available first
+//         finalMappedPlans.sort((a, b) => {
+//             if (a.isAvailable !== b.isAvailable) return a.isAvailable ? -1 : 1;
+//             return new Date(b.createdAt) - new Date(a.createdAt);
+//         });
+
+//         res.json({
+//             success: true,
+//             vendorId,
+//             count: finalMappedPlans.length,
+//             data: finalMappedPlans
+//         });
+
+//     } catch (error) {
+//         res.status(500).json({ success: false, message: error.message });
+//     }
+// };
+
+// ==========================================
+// 📅 7. GET SPECIFIC VENDOR'S TIFFIN PLANS
+// Full Path: GET /api/foodpage/vendor-plans/:vendorId
 // ==========================================
 const getVendorPlansForUser = async (req, res) => {
     try {
         const { vendorId } = req.params;
 
-        const masterPlans = await TiffinPlan.find({ isActive: true })
-            .populate('slotDishes.breakfast.itemId', 'name imageUrl price discountPrice dietType calories')
-            .populate('slotDishes.lunch.itemId', 'name imageUrl price discountPrice dietType calories')
-            .populate('slotDishes.dinner.itemId', 'name imageUrl price discountPrice calories dietType')
-            .populate('dishPool', 'name imageUrl price discountPrice dietType calories')
-            .lean();
+        const masterPlans = await TiffinPlan.find({ 
+            isActive: true, 
+            isDeleted: { $ne: true } 
+        })
+        .populate({
+            path: 'slotDishes.breakfast.itemId slotDishes.lunch.itemId slotDishes.dinner.itemId dishPool',
+            select: 'name imageUrl price discountPrice dietType calories',
+            strictPopulate: false
+        })
+        .lean();
 
         const vendorMappings = await VendorTiffinPlan.find({ vendorId }).lean();
 
@@ -1016,7 +1354,6 @@ const getVendorPlansForUser = async (req, res) => {
             };
         });
 
-        // Available first
         finalMappedPlans.sort((a, b) => {
             if (a.isAvailable !== b.isAvailable) return a.isAvailable ? -1 : 1;
             return new Date(b.createdAt) - new Date(a.createdAt);
@@ -1033,6 +1370,7 @@ const getVendorPlansForUser = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
 
 
 

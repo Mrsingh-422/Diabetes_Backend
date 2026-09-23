@@ -207,6 +207,10 @@ app.use('/admin/food/manage/combo', require('./routes/admin/Food/foodComboContro
 app.use('/admin/food/tiffin/plans', require('./routes/admin/Food/TiffinPlanAdminRoute')); 
 app.use('/admin/food/peak-charges', require('./routes/admin/Food/PeakOrderChargeAdminRoute')); 
 app.use('/admin/food/healthy-plans', require('./routes/admin/Food/FoodHealthyPlansAdminRoute')); 
+app.use('/admin/food/plan-orders', require('./routes/admin/Food/AdminPlanOrdersRoute'));
+app.use('/admin/food/vendor-orders', require('./routes/admin/Food/AdminFoodVendorOrdersRoute'));
+
+
 
 // =========================== Admin Food Routes End =============================================
 

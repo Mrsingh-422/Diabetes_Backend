@@ -97,6 +97,16 @@ const tiffinPlanSchema = new mongoose.Schema({
         type: Number, 
         default: 0 
     },
+    //  SOFT DELETE & LIFECYCLE FIELDS
+    isDeleted: { 
+        type: Boolean, 
+        default: false,
+        index: true 
+    },
+    deletedAt: { 
+        type: Date, 
+        default: null 
+    },
     // Status Switch (Active / Inactive)
     isActive: { 
         type: Boolean, 

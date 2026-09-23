@@ -288,13 +288,11 @@ const createHealthyPlan = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
-// --- 2.2 GET ALL HEALTHY PLANS (ADMIN - SHOWS ALL 100% PLANS) ---
+// --- 2.2 GET ALL HEALTHY PLANS (WITH TOTAL SUBSCRIBERS ADDED) ---
 // Full Path: GET /admin/food/healthy-plans/get
 const getAllHealthyPlans = async (req, res) => {
     try {
         const { mainCategory, subCategory, programType, daysCount, search, page = 1, limit = 20 } = req.query;
-        
-        // 🚨 Empty query: Admin ko sabhi plans dikhenge (chahe active/inactive ya isDeleted true ho)
         const query = {};
 
         if (mainCategory) query.mainCategory = new RegExp(`^${mainCategory.trim()}$`, 'i');
@@ -337,8 +335,29 @@ const getAllHealthyPlans = async (req, res) => {
             .limit(parseInt(limit, 10))
             .lean();
 
-        // Fallback Pricing Calculation
+        // 🧮 Dynamic Aggregation: Calculate Subscribers for each plan
+        const planStats = await FoodBooking.aggregate([
+            { $match: { bookingType: 'Healthy Plan' } },
+            {
+                $group: {
+                    _id: '$healthyPlanDetails.healthyPlanId',
+                    totalSubscribersCount: { $sum: 1 },
+                    activeSubscribersCount: {
+                        $sum: { $cond: [{ $eq: ['$status', 'Active'] }, 1, 0] }
+                    }
+                }
+            }
+        ]);
+
+        const statsMap = new Map();
+        planStats.forEach(s => {
+            if (s._id) statsMap.set(s._id.toString(), s);
+        });
+
         const plans = rawPlans.map(plan => {
+            const planKey = plan._id ? plan._id.toString() : null;
+            const stat = statsMap.get(planKey) || { totalSubscribersCount: 0, activeSubscribersCount: 0 };
+
             const pPerMeal = Number(plan.pricing?.pricePerMeal || 0);
             const dPricePerMeal = Number(plan.pricing?.discountPricePerMeal || 0);
 
@@ -360,6 +379,9 @@ const getAllHealthyPlans = async (req, res) => {
 
             return {
                 ...plan,
+                // 🌟 Added Subscriber Counts (Zero existing fields changed)
+                totalSubscribersCount: stat.totalSubscribersCount,
+                activeSubscribersCount: stat.activeSubscribersCount,
                 pricing: {
                     pricePerMeal: pPerMeal,
                     discountPricePerMeal: dPricePerMeal,
@@ -384,7 +406,7 @@ const getAllHealthyPlans = async (req, res) => {
     }
 };
 
-// --- 2.3 GET SINGLE HEALTHY PLAN FULL DETAILS BY ID ---
+// --- 2.3 GET SINGLE HEALTHY PLAN FULL DETAILS BY ID (WITH TOTAL SUBSCRIBERS ADDED) ---
 // Full Path: GET /admin/food/healthy-plans/get/:id
 const getHealthyPlanById = async (req, res) => {
     try {
@@ -419,7 +441,29 @@ const getHealthyPlanById = async (req, res) => {
             });
         }
 
-        res.json({ success: true, data: plan });
+        // 🧮 Count total subscribers for this plan
+        const [totalSubscribersCount, activeSubscribersCount] = await Promise.all([
+            FoodBooking.countDocuments({
+                bookingType: 'Healthy Plan',
+                $or: [{ "healthyPlanDetails.healthyPlanId": plan._id }, { "healthyPlanDetails.planId": plan.planId }]
+            }),
+            FoodBooking.countDocuments({
+                bookingType: 'Healthy Plan',
+                status: 'Active',
+                $or: [{ "healthyPlanDetails.healthyPlanId": plan._id }, { "healthyPlanDetails.planId": plan.planId }]
+            })
+        ]);
+
+        res.json({
+            success: true,
+            data: {
+                ...plan,
+                // 🌟 Added Subscriber Counts
+                totalSubscribersCount,
+                activeSubscribersCount
+            }
+        });
+
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
