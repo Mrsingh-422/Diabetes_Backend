@@ -218,15 +218,15 @@ const getVendorOrderHistoryModal = async (req, res) => {
     }
 };
 
+
 // ==========================================
-// 🚫 3. GET ALL CANCELLED FOOD ORDERS (ALL BOOKING TYPES FOR SPECIAL COUPONS)
+// 🚫 3. GET ALL CANCELLED FOOD ORDERS (WITH IS_COUPON_ISSUED STATUS)
 // Full Path: GET /admin/food/vendor-orders/cancelled-orders
 // ==========================================
 const getAllCancelledFoodOrders = async (req, res) => {
     try {
         const { bookingType, foodId, search, page = 1, limit = 20 } = req.query;
 
-        // 1. Strictly query ALL Cancelled Orders
         const query = { status: 'Cancelled' };
 
         if (bookingType) query.bookingType = bookingType;
@@ -246,7 +246,7 @@ const getAllCancelledFoodOrders = async (req, res) => {
         const totalDocs = await FoodBooking.countDocuments(query);
 
         const orders = await FoodBooking.find(query)
-            .select('_id bookingId status bookingType cancelReason paymentMethod paymentStatus paymentDetails billSummary healthyPlanDetails subscriptionDetails customTiffinDetails items foodId userId createdAt updatedAt')
+            .select('_id bookingId status bookingType cancelReason isCouponIssued issuedCouponCode paymentMethod paymentStatus paymentDetails billSummary healthyPlanDetails subscriptionDetails customTiffinDetails items foodId userId createdAt updatedAt')
             .populate('userId', 'name phone email profilePic')
             .populate('foodId', 'name city profileImage phone')
             .sort({ updatedAt: -1 })
@@ -254,7 +254,6 @@ const getAllCancelledFoodOrders = async (req, res) => {
             .limit(parseInt(limit, 10))
             .lean();
 
-        // 2. Format Clean List with User & Payment Details (Ready for Special Coupon Flow)
         const cancelledList = orders.map(order => {
             let itemSummary = "Food Order";
 
@@ -274,16 +273,20 @@ const getAllCancelledFoodOrders = async (req, res) => {
 
             return {
                 _id: order._id,
-                bookingId: order.bookingId, // E.g. "ORD-8821" / "HLP-ORD-781920"
+                bookingId: order.bookingId,
                 bookingType: order.bookingType,
                 itemSummary,
                 cancelReason: order.cancelReason || "No cancellation reason provided.",
                 cancelledAt: order.updatedAt,
                 createdAt: order.createdAt,
 
-                // 👤 Customer Info (Essential for Admin Special Coupon)
+                // 🎁 Compensation Coupon Status (For Frontend Button Disable):
+                isCouponIssued: Boolean(order.isCouponIssued), // 👈 true hote hi button disable ho jayega
+                issuedCouponCode: order.issuedCouponCode || null,
+
+                // 👤 Customer Info
                 customer: {
-                    userId: order.userId?._id || null, // 👈 Used to create special coupon
+                    userId: order.userId?._id || null,
                     name: order.userId?.name || "Customer",
                     phone: order.userId?.phone || "N/A",
                     email: order.userId?.email || "N/A",

@@ -1,6 +1,8 @@
 const { sendPushNotification } = require('../../../utils/notification');
 const User = require('../../../models/User');
 const Coupon = require('../../../models/Coupon');
+const FoodBooking = require('../../../models/FoodBooking');
+const mongoose = require('mongoose');
 
 // Helper: Normalize Role to match Coupon Enum ['Lab', 'Pharmacy', 'Food', 'Ambulance', 'Doctor', 'Clinic', 'All']
 const normalizeVendorType = (user) => {
@@ -272,12 +274,13 @@ const getCouponEnumTypes = async (req, res) => {
     }
 };
 // ==========================================
-// 🌟 ADMIN: CREATE SPECIAL USER-SPECIFIC COUPON (ON CANCELLED TIFFIN)
+// 🌟 ADMIN: CREATE SPECIAL USER-SPECIFIC COUPON (FOR HEALTHY PLAN, TIFFIN & CUSTOM TIFFIN)
 // Full Path: POST /provider/coupons/admin/special-user
 // ==========================================
+
 const createAdminUserSpecificCoupon = async (req, res) => {
     try {
-        const { 
+        let { 
             userId, 
             cancellationBookingId, 
             couponName, 
@@ -288,27 +291,79 @@ const createAdminUserSpecificCoupon = async (req, res) => {
             maxUsagePerUser = 1 
         } = req.body;
 
-        if (!userId || !couponName || !discountPercentage || !maxDiscount || !expiryDate) {
+        if (!couponName || !discountPercentage || !maxDiscount || !expiryDate) {
             return res.status(400).json({ 
                 success: false, 
-                message: "userId, couponName, discountPercentage, maxDiscount, and expiryDate are required." 
+                message: "couponName, discountPercentage, maxDiscount, and expiryDate are required." 
             });
         }
 
-        const user = await User.findById(userId);
-        if (!user) {
+        let planTitle = "Food Order / Plan";
+        let bookingType = "Food Plan";
+        let cancelledBookingDoc = null;
+
+        // 1. 🔍 Check Cancelled Booking & Prevent Duplicate Issuance
+        if (cancellationBookingId) {
+            const cleanBookingId = String(cancellationBookingId).trim();
+
+            cancelledBookingDoc = await FoodBooking.findOne({
+                $or: [
+                    { bookingId: cleanBookingId },
+                    ...(mongoose.Types.ObjectId.isValid(cleanBookingId) ? [{ _id: cleanBookingId }] : [])
+                ]
+            });
+
+            if (cancelledBookingDoc) {
+                // 🚨 DUPLICATE GUARD: Check if coupon was already issued
+                if (cancelledBookingDoc.isCouponIssued) {
+                    return res.status(400).json({
+                        success: false,
+                        message: `An apology coupon has already been issued for this booking (${cancelledBookingDoc.bookingId}) with code: '${cancelledBookingDoc.issuedCouponCode}'. Duplicate issuance is blocked.`
+                    });
+                }
+
+                if (!userId && cancelledBookingDoc.userId) {
+                    userId = cancelledBookingDoc.userId;
+                }
+
+                bookingType = cancelledBookingDoc.bookingType || "Food Plan";
+
+                if (cancelledBookingDoc.bookingType === 'Healthy Plan') {
+                    planTitle = cancelledBookingDoc.healthyPlanDetails?.title || "Healthy Diet Plan";
+                } else if (cancelledBookingDoc.bookingType === 'Subscription') {
+                    planTitle = cancelledBookingDoc.subscriptionDetails?.planName || "Standard Tiffin Plan";
+                } else if (cancelledBookingDoc.bookingType === 'Custom Plate') {
+                    const days = cancelledBookingDoc.customTiffinDetails?.packageDays || 10;
+                    planTitle = `Custom ${days}-Day Tiffin Package`;
+                } else if (cancelledBookingDoc.bookingType === 'Direct') {
+                    planTitle = "Direct Food Order";
+                }
+            }
+        }
+
+        if (!userId) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "userId is required (or provide a valid cancellationBookingId)." 
+            });
+        }
+
+        // 2. Verify Target User Exists
+        const targetUser = await User.findById(userId);
+        if (!targetUser) {
             return res.status(404).json({ success: false, message: "Target user not found." });
         }
 
+        // 3. Create Exclusive User-Specific Coupon
         const coupon = await Coupon.create({
             creatorId: req.user.id,
             vendorType: 'Food',
             vendorId: null,
             isAdminCreated: true,
             isUserSpecific: true,
-            assignedUserId: userId,
-            cancellationBookingId: cancellationBookingId || null,
-            couponName: couponName.trim().toUpperCase(),
+            assignedUserId: targetUser._id,
+            cancellationBookingId: cancellationBookingId ? String(cancellationBookingId).trim() : null,
+            couponName: String(couponName).trim().toUpperCase(),
             discountPercentage: Number(discountPercentage),
             maxDiscount: Number(maxDiscount),
             minOrderAmount: Number(minOrderAmount),
@@ -318,28 +373,67 @@ const createAdminUserSpecificCoupon = async (req, res) => {
             isActive: true
         });
 
-        // 🔔 Send Apology / Compensation Push Notification to User
+        // 4. 🔒 Auto-Lock Cancelled Booking (isCouponIssued = true)
+        if (cancelledBookingDoc) {
+            cancelledBookingDoc.isCouponIssued = true;
+            cancelledBookingDoc.issuedCouponCode = coupon.couponName;
+            cancelledBookingDoc.issuedCouponId = coupon._id;
+            await cancelledBookingDoc.save();
+        }
+
+        // 5. 🔔 Send Apology Notification
         sendPushNotification(
-            userId,
+            targetUser._id,
             'user',
-            'Exclusive Discount Coupon For You! 🎁',
-            `We apologize for the cancellation. Use code ${coupon.couponName} to get ${discountPercentage}% OFF on your next Food order!`,
-            { couponCode: coupon.couponName, type: 'SPECIAL_COUPON_GIFT' }
+            'Exclusive Apology Voucher For You! 🎁',
+            `We sincerely apologize for the cancellation of your ${planTitle}. Use code ${coupon.couponName} to get ${discountPercentage}% OFF on your next Food order!`,
+            { 
+                couponCode: coupon.couponName, 
+                discountPercentage: String(discountPercentage),
+                maxDiscount: String(maxDiscount),
+                type: 'SPECIAL_COMPENSATION_COUPON',
+                cancellationBookingId: cancellationBookingId || ""
+            }
         ).catch(() => {});
 
         res.status(201).json({
             success: true,
-            message: `Special exclusive coupon created for user ${user.name || user.phone}!`,
-            data: coupon
+            message: `Special exclusive coupon '${coupon.couponName}' created for user ${targetUser.name || targetUser.phone}! Booking is now locked.`,
+            data: {
+                _id: coupon._id,
+                couponName: coupon.couponName,
+                discountPercentage: coupon.discountPercentage,
+                maxDiscount: coupon.maxDiscount,
+                isUserSpecific: coupon.isUserSpecific,
+                assignedUser: {
+                    _id: targetUser._id,
+                    name: targetUser.name || "Customer",
+                    phone: targetUser.phone || "",
+                    email: targetUser.email || ""
+                },
+                cancellationDetails: {
+                    bookingId: cancellationBookingId || null,
+                    planType: bookingType,
+                    planTitle: planTitle,
+                    isCouponIssued: true // 👈 Marked True
+                },
+                startDate: coupon.startDate,
+                expiryDate: coupon.expiryDate,
+                isActive: coupon.isActive
+            }
         });
 
     } catch (error) {
         if (error.code === 11000) {
-            return res.status(400).json({ success: false, message: "Coupon code already exists. Please use a unique name." });
+            return res.status(400).json({ 
+                success: false, 
+                message: `Coupon code '${req.body.couponName}' already exists. Please use a unique coupon name.` 
+            });
         }
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
 module.exports = {
     createCoupon,
     getMyCoupons,

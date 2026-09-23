@@ -212,7 +212,21 @@ const foodBookingSchema = new mongoose.Schema({
     arrivedAt: { type: Date, default: null },
     deliveredAt: { type: Date, default: null },
     cancelReason: { type: String, default: null },
-
+    
+    //  APOLOGY / COMPENSATION COUPON TRACKER
+    isCouponIssued: { 
+        type: Boolean, 
+        default: false 
+    },
+    issuedCouponCode: { 
+        type: String, 
+        default: null 
+    },
+    issuedCouponId: { 
+        type: mongoose.Schema.Types.ObjectId, 
+        ref: 'Coupon', 
+        default: null 
+    },
     paymentDetails: {
         razorpayPaymentId: { type: String, default: "" },
         razorpayOrderId: { type: String, default: "" },
