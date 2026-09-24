@@ -7,10 +7,10 @@ const { protect } = require('../../../middleware/authMiddleware');
 const {
     getVendorTiffinSubscriptions,
     getVendorTiffinSubscriptionById,
+    handleStandardTiffinSubscriptionAction,
     getVendorCustomTiffinRequests,
     getVendorCustomTiffinRequestById,
-    handleCustomTiffinRequestAction,
-    handleStandardTiffinSubscriptionAction
+    handleCustomTiffinRequestAction
 } = require('../../../controllers/provider/Food/VendorTiffinOrderController');
 
 // Base URL: /provider/food/tiffin
@@ -18,8 +18,7 @@ const {
 // 🍱 1. Standard Tiffin Subscriptions
 router.get('/subscriptions', protect('provider'), getVendorTiffinSubscriptions);
 router.get('/subscriptions/:id', protect('provider'), getVendorTiffinSubscriptionById);
-router.patch('/subscriptions/:id/action', protect('provider'), handleStandardTiffinSubscriptionAction); // 👈 Action Route (Accept / Reject)
-
+router.patch('/subscriptions/:id/action', protect('provider'), handleStandardTiffinSubscriptionAction);
 
 // 🎨 2. Custom Tiffin Requests
 router.get('/custom-requests', protect('provider'), getVendorCustomTiffinRequests);

@@ -1204,6 +1204,25 @@ const foodHealthyPlanUploads = multer({
     { name: 'images', maxCount: 10 }       // 👈 Multiple Images Array
 ]);
 
+// ==========================================
+//  SMOOTHIES, JUICES & DRINKS MULTI-IMAGE CONFIGURATION
+// ==========================================
+const smoothieDrinkDir = 'public/uploads/foods/drinks';
+ensureDir(smoothieDrinkDir);
+
+const smoothieDrinkUploads = multer({
+    storage: multer.diskStorage({
+        destination: (req, file, cb) => cb(null, smoothieDrinkDir),
+        filename: (req, file, cb) => {
+            const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
+            cb(null, `drink-${uniqueSuffix}${path.extname(file.originalname)}`);
+        }
+    }),
+    fileFilter: docFileFilter,
+    limits: { fileSize: 5 * 1024 * 1024 } // 10MB limit per image
+}).fields([
+    { name: 'images', maxCount: 10 } // 👈 Multiple images upload (up to 10 files)
+]);
 module.exports = {
     clinicUploads,
     contentUploads,
@@ -1254,6 +1273,6 @@ module.exports = {
     docPrescriptionUpload, hospitalPrescriptionUploads, hospitalDischargeFieldsUpload, blogUploads,
     videoUploads, videoUpdateUploads, footerUploads, aboutUsUploads,
     foodDocUploads, foodServiceImageUpload, bannerUploadParser, foodAddonImageUpload, clinicDoctorUploads,doctorApptReportUpload,
-    foodHealthyPlanUploads
+    foodHealthyPlanUploads,smoothieDrinkUploads
 
 };  

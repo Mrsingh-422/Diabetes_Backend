@@ -7,7 +7,9 @@ const { protect, checkRoleAccess } = require('../../../middleware/authMiddleware
 const {
     getApprovedFoodOutletsList,
     getVendorOrderHistoryModal,
-    getAllCancelledFoodOrders
+    getAllCancelledFoodOrders,
+    processAdminFoodRefund
+
 } = require('../../../controllers/admin/Food/AdminFoodVendorOrders');
 
 // Base URL: /admin/food/vendor-orders
@@ -23,5 +25,8 @@ router.get('/:vendorId/orders', protect('admin'), checkRoleAccess(35), getVendor
 
 // 🚫 Get All Cancelled Food Orders (All Booking Types)
 router.get('/cancelled-orders', protect('admin'), checkRoleAccess(35), getAllCancelledFoodOrders);
+
+//  Admin Process Refund API
+router.post('/process-refund/:id', protect('admin'), checkRoleAccess(35), processAdminFoodRefund);
 
 module.exports = router;

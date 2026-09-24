@@ -232,7 +232,25 @@ const foodBookingSchema = new mongoose.Schema({
         razorpayOrderId: { type: String, default: "" },
         razorpaySignature: { type: String, default: "" },
         paidAt: { type: Date, default: null }
-    }
+    },
+    //  DYNAMIC REFUND & PRO-RATA CALCULATION TRACKER
+    refundDetails: {
+        isRefundApplicable: { type: Boolean, default: false },
+        refundAmount: { type: Number, default: 0 },
+        totalPaidAmount: { type: Number, default: 0 },
+        totalPlanDays: { type: Number, default: 0 },
+        consumedDays: { type: Number, default: 0 },
+        remainingDays: { type: Number, default: 0 },
+        refundStatus: { 
+            type: String, 
+            enum: ['Not Applicable', 'Pending', 'Processed', 'Failed'], 
+            default: 'Not Applicable' 
+        },
+        refundedAt: { type: Date, default: null },
+        refundTransactionId: { type: String, default: null },
+        razorpayRefundId: { type: String, default: null },
+        refundNote: { type: String, default: "" }
+    },
     
 }, { timestamps: true });
 

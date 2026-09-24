@@ -2,6 +2,8 @@
 
 const Food = require('../../../models/Food');
 const FoodBooking = require('../../../models/FoodBooking');
+const { refundRazorpayPayment } = require('../../../utils/razorpay');
+
 const mongoose = require('mongoose');
 
 // ==========================================
@@ -220,7 +222,7 @@ const getVendorOrderHistoryModal = async (req, res) => {
 
 
 // ==========================================
-// 🚫 3. GET ALL CANCELLED FOOD ORDERS (WITH IS_COUPON_ISSUED STATUS)
+// 🚫 3. GET ALL CANCELLED FOOD ORDERS (WITH REFUND CALCULATION)
 // Full Path: GET /admin/food/vendor-orders/cancelled-orders
 // ==========================================
 const getAllCancelledFoodOrders = async (req, res) => {
@@ -246,7 +248,7 @@ const getAllCancelledFoodOrders = async (req, res) => {
         const totalDocs = await FoodBooking.countDocuments(query);
 
         const orders = await FoodBooking.find(query)
-            .select('_id bookingId status bookingType cancelReason isCouponIssued issuedCouponCode paymentMethod paymentStatus paymentDetails billSummary healthyPlanDetails subscriptionDetails customTiffinDetails items foodId userId createdAt updatedAt')
+            .select('_id bookingId status bookingType cancelReason isCouponIssued issuedCouponCode paymentMethod paymentStatus paymentDetails billSummary healthyPlanDetails subscriptionDetails customTiffinDetails items foodId userId refundDetails createdAt updatedAt')
             .populate('userId', 'name phone email profilePic')
             .populate('foodId', 'name city profileImage phone')
             .sort({ updatedAt: -1 })
@@ -271,6 +273,8 @@ const getAllCancelledFoodOrders = async (req, res) => {
                 itemSummary = `Custom 7-Day Plate (${c.packageDays || 10} Days - ${c.dietaryType || 'veg'})`;
             }
 
+            const ref = order.refundDetails || {};
+
             return {
                 _id: order._id,
                 bookingId: order.bookingId,
@@ -280,8 +284,21 @@ const getAllCancelledFoodOrders = async (req, res) => {
                 cancelledAt: order.updatedAt,
                 createdAt: order.createdAt,
 
-                // 🎁 Compensation Coupon Status (For Frontend Button Disable):
-                isCouponIssued: Boolean(order.isCouponIssued), // 👈 true hote hi button disable ho jayega
+                // 💰 🌟 DYNAMIC PRO-RATA REFUND BREAKDOWN:
+                refundInfo: {
+                    isRefundApplicable: Boolean(ref.isRefundApplicable),
+                    refundAmount: ref.refundAmount || 0,
+                    refundStatus: ref.refundStatus || "Not Applicable",
+                    totalPaidAmount: ref.totalPaidAmount || order.billSummary?.totalAmount || 0,
+                    totalPlanDays: ref.totalPlanDays || 1,
+                    consumedDays: ref.consumedDays || 0,
+                    remainingDays: ref.remainingDays || 0,
+                    refundedAt: ref.refundedAt || null,
+                    razorpayRefundId: ref.razorpayRefundId || null
+                },
+
+                // 🎁 Compensation Coupon Status
+                isCouponIssued: Boolean(order.isCouponIssued),
                 issuedCouponCode: order.issuedCouponCode || null,
 
                 // 👤 Customer Info
@@ -308,7 +325,6 @@ const getAllCancelledFoodOrders = async (req, res) => {
                     paymentStatus: order.paymentStatus || "Pending",
                     totalAmount: order.billSummary?.totalAmount || 0,
                     razorpayPaymentId: order.paymentDetails?.razorpayPaymentId || "",
-                    razorpayOrderId: order.paymentDetails?.razorpayOrderId || "",
                     paidAt: order.paymentDetails?.paidAt || null
                 }
             };
@@ -329,8 +345,90 @@ const getAllCancelledFoodOrders = async (req, res) => {
     }
 };
 
+// ==========================================
+// 💸 4. ADMIN: PROCESS REFUND FOR CANCELLED ORDER (RAZORPAY / MANUAL)
+// Full Path: POST /admin/food/vendor-orders/process-refund/:id
+// ==========================================
+const processAdminFoodRefund = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { refundNote = "", manualRefundAmount } = req.body;
+
+        const query = mongoose.Types.ObjectId.isValid(id)
+            ? { $or: [{ _id: id }, { bookingId: id }], status: 'Cancelled' }
+            : { bookingId: id, status: 'Cancelled' };
+
+        const order = await FoodBooking.findOne(query);
+
+        if (!order) {
+            return res.status(404).json({ success: false, message: "Cancelled food order not found." });
+        }
+
+        if (order.refundDetails?.refundStatus === 'Processed') {
+            return res.status(400).json({ 
+                success: false, 
+                message: `Refund of ₹${order.refundDetails.refundAmount} has already been processed on ${new Date(order.refundDetails.refundedAt).toLocaleString()}.` 
+            });
+        }
+
+        const payableRefund = manualRefundAmount !== undefined ? Number(manualRefundAmount) : (order.refundDetails?.refundAmount || 0);
+
+        if (payableRefund <= 0) {
+            return res.status(400).json({ success: false, message: "Refund amount must be greater than zero." });
+        }
+
+        let razorpayRefundData = null;
+
+        // Online Payment Gateway Auto Refund via Razorpay API
+        if (order.paymentMethod === 'Online' && order.paymentDetails?.razorpayPaymentId) {
+            try {
+                razorpayRefundData = await refundRazorpayPayment(
+                    order.paymentDetails.razorpayPaymentId,
+                    payableRefund,
+                    order.bookingId
+                );
+            } catch (err) {
+                order.refundDetails.refundStatus = 'Failed';
+                await order.save();
+                return res.status(500).json({ 
+                    success: false, 
+                    message: `Razorpay Refund Failed: ${err.message}` 
+                });
+            }
+        }
+
+        // Update Booking Status
+        order.paymentStatus = 'Refunded';
+        order.refundDetails = {
+            ...order.refundDetails,
+            isRefundApplicable: true,
+            refundAmount: payableRefund,
+            refundStatus: 'Processed',
+            refundedAt: new Date(),
+            razorpayRefundId: razorpayRefundData ? razorpayRefundData.id : "MANUAL-REFUND",
+            refundNote: refundNote || "Refund processed successfully by Admin."
+        };
+
+        await order.save();
+
+        res.json({
+            success: true,
+            message: `Refund of ₹${payableRefund} processed successfully for order ${order.bookingId}!`,
+            data: {
+                bookingId: order.bookingId,
+                paymentStatus: order.paymentStatus,
+                refundInfo: order.refundDetails
+            }
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 module.exports = {
     getApprovedFoodOutletsList,
     getVendorOrderHistoryModal,
-    getAllCancelledFoodOrders 
+    getAllCancelledFoodOrders,
+    processAdminFoodRefund
 };

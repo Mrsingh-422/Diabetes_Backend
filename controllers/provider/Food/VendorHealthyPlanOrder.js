@@ -3,6 +3,82 @@
 const FoodBooking = require('../../../models/FoodBooking');
 const { sendPushNotification } = require('../../../utils/notification');
 
+
+
+// ==========================================
+// 💡 HELPER: CALCULATE REMAINING DAYS PRO-RATA REFUND
+// ==========================================
+const calculatePlanCancellationRefund = (order) => {
+    const totalPaid = order.billSummary?.totalAmount || 0;
+    const isPaid = order.paymentStatus === 'Paid';
+
+    // Agar payment hi nahi hua (Unpaid COD) toh refund zero
+    if (!isPaid || totalPaid <= 0) {
+        return {
+            isRefundApplicable: false,
+            refundAmount: 0,
+            totalPaidAmount: 0,
+            totalPlanDays: 0,
+            consumedDays: 0,
+            remainingDays: 0,
+            refundStatus: 'Not Applicable'
+        };
+    }
+
+    let totalDays = 1;
+    let startDate = order.createdAt;
+
+    if (order.bookingType === 'Healthy Plan') {
+        totalDays = Number(order.healthyPlanDetails?.daysCount) || 5;
+        startDate = order.healthyPlanDetails?.startAtThisDate || order.healthyPlanDetails?.startDate || order.createdAt;
+    } else if (order.bookingType === 'Subscription') {
+        totalDays = Number(order.subscriptionDetails?.durationDays) || (order.subscriptionDetails?.billingCycle === 'monthly' ? 30 : 7);
+        startDate = order.subscriptionDetails?.startDate || order.createdAt;
+    } else if (order.bookingType === 'Custom Plate') {
+        totalDays = Number(order.customTiffinDetails?.packageDays) || 10;
+        startDate = order.customTiffinDetails?.startDate || order.createdAt;
+    }
+
+    const start = new Date(startDate);
+    const today = new Date();
+    start.setHours(0, 0, 0, 0);
+    today.setHours(0, 0, 0, 0);
+
+    let consumedDays = 0;
+    let remainingDays = totalDays;
+
+    if (today < start) {
+        // Case A: Plan abhi start hi nahi hua tha -> 100% Full Refund
+        consumedDays = 0;
+        remainingDays = totalDays;
+    } else {
+        // Case B: Plan chal raha tha -> Calculate consumed days
+        const diffMs = today.getTime() - start.getTime();
+        const daysPassed = Math.floor(diffMs / (1000 * 60 * 60 * 24)) + 1;
+        consumedDays = Math.min(totalDays, Math.max(1, daysPassed));
+        remainingDays = Math.max(0, totalDays - consumedDays);
+    }
+
+    // Direct single orders always get full refund if cancelled
+    if (order.bookingType === 'Direct') {
+        consumedDays = 0;
+        remainingDays = 1;
+        totalDays = 1;
+    }
+
+    const perDayCost = totalPaid / totalDays;
+    const refundAmount = Math.round(perDayCost * remainingDays);
+
+    return {
+        isRefundApplicable: refundAmount > 0,
+        refundAmount,
+        totalPaidAmount: totalPaid,
+        totalPlanDays: totalDays,
+        consumedDays,
+        remainingDays,
+        refundStatus: refundAmount > 0 ? 'Pending' : 'Not Applicable'
+    };
+};
 // ==========================================
 // 📦 1. GET ALL VENDOR HEALTHY PLAN ORDERS (Auto-Activated List)
 // Full Path: GET /provider/food/healthy-plans/orders
@@ -135,7 +211,7 @@ const getVendorHealthyPlanOrderById = async (req, res) => {
 };
 
 // ==========================================
-// ⚡ 3. EMERGENCY CANCEL BY VENDOR (ONLY WITH REASON)
+// ⚡ 3. EMERGENCY CANCEL BY VENDOR (WITH AUTO-REFUND CALCULATION)
 // Full Path: PATCH /provider/food/healthy-plans/orders/:id/cancel
 // ==========================================
 const cancelVendorHealthyPlanOrder = async (req, res) => {
@@ -172,10 +248,22 @@ const cancelVendorHealthyPlanOrder = async (req, res) => {
             return res.status(400).json({ success: false, message: "Cannot cancel a completed or expired plan." });
         }
 
+        // 1. Set Cancelled Status & Reason
         order.status = 'Cancelled';
         order.cancelReason = cancelReason.trim();
+
+        // 2. 🧮 Auto-Calculate Pro-Rata Refund for Remaining Days
+        const refundCalc = calculatePlanCancellationRefund(order);
+        order.refundDetails = refundCalc;
+
+        if (refundCalc.isRefundApplicable) {
+            order.paymentStatus = 'Refund-Initiated';
+        }
+
+        // 3. Single Clean Database Save
         await order.save();
 
+        // 4. 🔔 Send Push Notification to User
         if (order.userId) {
             sendPushNotification(
                 order.userId,
@@ -188,12 +276,14 @@ const cancelVendorHealthyPlanOrder = async (req, res) => {
 
         return res.json({
             success: true,
-            message: `Healthy Diet Plan (${order.bookingId}) cancelled successfully. Reason logged.`,
+            message: `Healthy Diet Plan (${order.bookingId}) cancelled successfully. Reason logged and refund initiated.`,
             data: {
                 bookingId: order.bookingId,
                 bookingType: "Healthy Plan",
                 status: order.status,
+                paymentStatus: order.paymentStatus,
                 cancelReason: order.cancelReason,
+                refundInfo: order.refundDetails,
                 updatedAt: order.updatedAt
             }
         });

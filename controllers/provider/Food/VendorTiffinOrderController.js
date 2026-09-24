@@ -2,6 +2,80 @@
 
 const FoodBooking = require('../../../models/FoodBooking');
 const { sendPushNotification } = require('../../../utils/notification');
+const mongoose = require('mongoose'); // 👈 Fixed: Added missing mongoose import
+
+// ==========================================
+// 💡 HELPER: CALCULATE REMAINING DAYS PRO-RATA REFUND
+// ==========================================
+const calculatePlanCancellationRefund = (order) => {
+    const totalPaid = order.billSummary?.totalAmount || 0;
+    const isPaid = order.paymentStatus === 'Paid';
+
+    if (!isPaid || totalPaid <= 0) {
+        return {
+            isRefundApplicable: false,
+            refundAmount: 0,
+            totalPaidAmount: 0,
+            totalPlanDays: 0,
+            consumedDays: 0,
+            remainingDays: 0,
+            refundStatus: 'Not Applicable'
+        };
+    }
+
+    let totalDays = 1;
+    let startDate = order.createdAt;
+
+    if (order.bookingType === 'Healthy Plan') {
+        totalDays = Number(order.healthyPlanDetails?.daysCount) || 5;
+        startDate = order.healthyPlanDetails?.startAtThisDate || order.healthyPlanDetails?.startDate || order.createdAt;
+    } else if (order.bookingType === 'Subscription') {
+        totalDays = Number(order.subscriptionDetails?.durationDays) || (order.subscriptionDetails?.billingCycle === 'monthly' ? 30 : 7);
+        startDate = order.subscriptionDetails?.startDate || order.createdAt;
+    } else if (order.bookingType === 'Custom Plate') {
+        totalDays = Number(order.customTiffinDetails?.packageDays) || 10;
+        startDate = order.customTiffinDetails?.startDate || order.createdAt;
+    }
+
+    const start = new Date(startDate);
+    const today = new Date();
+    start.setHours(0, 0, 0, 0);
+    today.setHours(0, 0, 0, 0);
+
+    let consumedDays = 0;
+    let remainingDays = totalDays;
+
+    if (today < start) {
+        // Plan shuru nahi hua tha -> 100% Full Refund
+        consumedDays = 0;
+        remainingDays = totalDays;
+    } else {
+        // Plan ongoing tha -> Consumed days calculation
+        const diffMs = today.getTime() - start.getTime();
+        const daysPassed = Math.floor(diffMs / (1000 * 60 * 60 * 24)) + 1;
+        consumedDays = Math.min(totalDays, Math.max(1, daysPassed));
+        remainingDays = Math.max(0, totalDays - consumedDays);
+    }
+
+    if (order.bookingType === 'Direct') {
+        consumedDays = 0;
+        remainingDays = 1;
+        totalDays = 1;
+    }
+
+    const perDayCost = totalPaid / totalDays;
+    const refundAmount = Math.round(perDayCost * remainingDays);
+
+    return {
+        isRefundApplicable: refundAmount > 0,
+        refundAmount,
+        totalPaidAmount: totalPaid,
+        totalPlanDays: totalDays,
+        consumedDays,
+        remainingDays,
+        refundStatus: refundAmount > 0 ? 'Pending' : 'Not Applicable'
+    };
+};
 
 // ==========================================
 // 🍱 1. GET ALL VENDOR STANDARD SUBSCRIPTIONS (Lightweight Card List)
@@ -33,7 +107,6 @@ const getVendorTiffinSubscriptions = async (req, res) => {
         const skip = (parseInt(page, 10) - 1) * parseInt(limit, 10);
         const totalDocs = await FoodBooking.countDocuments(query);
 
-        // Essential fields for clean lightweight card rendering
         const subscriptions = await FoodBooking.find(query)
             .select('_id bookingId status bookingType subscriptionDetails.planName subscriptionDetails.billingCycle subscriptionDetails.startDate subscriptionDetails.endDate billSummary.totalAmount address.name address.phone createdAt')
             .populate('userId', 'name phone')
@@ -42,7 +115,6 @@ const getVendorTiffinSubscriptions = async (req, res) => {
             .limit(parseInt(limit, 10))
             .lean();
 
-        // 🛡️ Format clean card payload with explicit discriminator keys
         const cleanList = subscriptions.map(sub => {
             const start = sub.subscriptionDetails?.startDate;
             const end = sub.subscriptionDetails?.endDate;
@@ -50,8 +122,8 @@ const getVendorTiffinSubscriptions = async (req, res) => {
             return {
                 _id: sub._id,
                 bookingId: sub.bookingId,
-                bookingType: "Subscription",                                              // 👈 🌟 Discriminator Key
-                planType: "Subscription",                                                 // 👈 🌟 Helper Key
+                bookingType: "Subscription",
+                planType: "Subscription",
                 customerName: sub.userId?.name || sub.address?.name || "Customer",
                 customerPhone: sub.userId?.phone || sub.address?.phone || "",
                 planName: sub.subscriptionDetails?.planName || "Tiffin Subscription Plan",
@@ -67,7 +139,7 @@ const getVendorTiffinSubscriptions = async (req, res) => {
         res.json({
             success: true,
             totalDocs,
-            totalPages: Math.ceil(totalDocs / parseInt(limit, 10)),
+            totalPages: Math.ceil(totalDocs / parseInt(limit, 10)) || 1,
             currentPage: parseInt(page, 10),
             limit: parseInt(limit, 10),
             count: cleanList.length,
@@ -88,20 +160,20 @@ const getVendorTiffinSubscriptionById = async (req, res) => {
         const vendorId = req.user.id;
         const { id } = req.params;
 
-        const subscription = await FoodBooking.findOne({
-            $or: [{ _id: id }, { bookingId: id }],
-            foodId: vendorId,
-            bookingType: 'Subscription'
-        })
-        .populate('userId', 'name phone email gender dob profilePic')
-        .populate('driverId', 'name phone vehicleType vehicleNumber profilePic status location')
-        .populate({
-            path: 'subscriptionDetails.dailyMealSchedule.mealId',
-            select: 'name imageUrl price discountPrice calories dietType ingredients tags foodEffectCategory',
-            strictPopulate: false
-        })
-        .populate('billSummary.couponId', 'couponName discountPercentage maxDiscount')
-        .lean();
+        const query = mongoose.Types.ObjectId.isValid(id)
+            ? { $or: [{ _id: id }, { bookingId: id }], foodId: vendorId, bookingType: 'Subscription' }
+            : { bookingId: id, foodId: vendorId, bookingType: 'Subscription' };
+
+        const subscription = await FoodBooking.findOne(query)
+            .populate('userId', 'name phone email gender dob profilePic')
+            .populate('driverId', 'name phone vehicleType vehicleNumber profilePic status location')
+            .populate({
+                path: 'subscriptionDetails.dailyMealSchedule.mealId',
+                select: 'name description imageUrl price discountPrice calories dietType foodEffectCategory ingredients tags',
+                strictPopulate: false
+            })
+            .populate('billSummary.couponId', 'couponName discountPercentage maxDiscount')
+            .lean();
 
         if (!subscription) {
             return res.status(404).json({ 
@@ -110,12 +182,18 @@ const getVendorTiffinSubscriptionById = async (req, res) => {
             });
         }
 
+        // Clean unneeded blocks
+        delete subscription.customTiffinDetails;
+        delete subscription.healthyPlanDetails;
+        delete subscription.items;
+        delete subscription.addons;
+
         res.json({
             success: true,
             data: {
                 ...subscription,
-                bookingType: "Subscription", // 👈 🌟 Explicit Key in Detail View
-                planType: "Subscription"     // 👈 🌟 Explicit Key in Detail View
+                bookingType: "Subscription",
+                planType: "Subscription"
             }
         });
 
@@ -125,7 +203,7 @@ const getVendorTiffinSubscriptionById = async (req, res) => {
 };
 
 // ==========================================
-// ⚡ CANCEL STANDARD SUBSCRIPTION (ANYTIME WITH REASON)
+// ⚡ 3. CANCEL STANDARD SUBSCRIPTION (WITH PRO-RATA AUTO-REFUND)
 // Full Path: PATCH /provider/food/tiffin/subscriptions/:id/action
 // ==========================================
 const handleStandardTiffinSubscriptionAction = async (req, res) => {
@@ -141,11 +219,11 @@ const handleStandardTiffinSubscriptionAction = async (req, res) => {
             });
         }
 
-        const subscription = await FoodBooking.findOne({
-            $or: [{ _id: id }, { bookingId: id }],
-            foodId: vendorId,
-            bookingType: 'Subscription'
-        });
+        const query = mongoose.Types.ObjectId.isValid(id)
+            ? { $or: [{ _id: id }, { bookingId: id }], foodId: vendorId, bookingType: 'Subscription' }
+            : { bookingId: id, foodId: vendorId, bookingType: 'Subscription' };
+
+        const subscription = await FoodBooking.findOne(query);
 
         if (!subscription) {
             return res.status(404).json({ 
@@ -155,44 +233,54 @@ const handleStandardTiffinSubscriptionAction = async (req, res) => {
         }
 
         if (subscription.status === 'Cancelled') {
-            return res.status(400).json({
-                success: false,
-                message: "This subscription is already cancelled."
-            });
+            return res.status(400).json({ success: false, message: "This subscription is already cancelled." });
         }
 
         if (subscription.status === 'Delivered' || subscription.status === 'Expired') {
-            return res.status(400).json({
-                success: false,
-                message: `Cannot cancel subscription in '${subscription.status}' state.`
+            return res.status(400).json({ 
+                success: false, 
+                message: `Cannot cancel a completed or expired subscription (Current status: '${subscription.status}').` 
             });
         }
 
-        const previousState = subscription.status;
+        // 1. Set Status & Reason
         subscription.status = 'Cancelled';
         subscription.cancelReason = cancelReason.trim();
+
+        // 2. 🧮 Auto-Calculate Pro-Rata Refund
+        const refundCalc = calculatePlanCancellationRefund(subscription);
+        subscription.refundDetails = refundCalc;
+
+        if (refundCalc.isRefundApplicable) {
+            subscription.paymentStatus = 'Refund-Initiated';
+        }
+
+        // 3. Save in DB
         await subscription.save();
 
+        // 4. 🔔 Send Push Notification
         if (subscription.userId) {
+            const planDisplayName = subscription.subscriptionDetails?.planName || 'Tiffin Subscription';
             sendPushNotification(
                 subscription.userId,
                 'user',
-                'Tiffin Subscription Cancelled',
-                `Your tiffin subscription was cancelled by the kitchen. Reason: ${subscription.cancelReason}`,
-                { bookingId: subscription.bookingId, type: 'TIFFIN_SUBSCRIPTION_REJECTED' }
+                `${planDisplayName} Cancelled`,
+                `Your ${planDisplayName} was cancelled by the kitchen. Reason: ${subscription.cancelReason}`,
+                { bookingId: subscription.bookingId, type: 'TIFFIN_SUBSCRIPTION_REJECTED', bookingType: 'Subscription' }
             ).catch(() => {});
         }
 
         return res.json({
             success: true,
-            message: `Tiffin subscription (${subscription.bookingId}) cancelled successfully. Reason logged.`,
+            message: `Tiffin subscription (${subscription.bookingId}) cancelled successfully. Reason logged and refund calculated.`,
             data: {
                 bookingId: subscription.bookingId,
                 bookingType: "Subscription",
                 planType: "Subscription",
                 status: subscription.status,
+                paymentStatus: subscription.paymentStatus,
                 cancelReason: subscription.cancelReason,
-                previousState,
+                refundInfo: subscription.refundDetails,
                 updatedAt: subscription.updatedAt
             }
         });
@@ -201,6 +289,7 @@ const handleStandardTiffinSubscriptionAction = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
 // ==========================================
 // 🎨 4. GET ALL CUSTOM TIFFIN REQUESTS (Lightweight Card List)
 // Full Path: GET /provider/food/tiffin/custom-requests
@@ -229,7 +318,6 @@ const getVendorCustomTiffinRequests = async (req, res) => {
         const skip = (parseInt(page, 10) - 1) * parseInt(limit, 10);
         const totalDocs = await FoodBooking.countDocuments(query);
 
-        // Essential fields for clean lightweight card rendering
         const customRequests = await FoodBooking.find(query)
             .select('_id bookingId status bookingType customTiffinDetails.packageDays customTiffinDetails.startDate customTiffinDetails.endDate customTiffinDetails.dietaryType billSummary.totalAmount address.name address.phone createdAt')
             .populate('userId', 'name phone')
@@ -238,7 +326,6 @@ const getVendorCustomTiffinRequests = async (req, res) => {
             .limit(parseInt(limit, 10))
             .lean();
 
-        // 🛡️ Format clean card payload with explicit discriminator keys
         const cleanList = customRequests.map(plan => {
             const start = plan.customTiffinDetails?.startDate;
             const end = plan.customTiffinDetails?.endDate;
@@ -246,8 +333,8 @@ const getVendorCustomTiffinRequests = async (req, res) => {
             return {
                 _id: plan._id,
                 bookingId: plan.bookingId,
-                bookingType: "Custom Plate",                                            // 👈 🌟 Discriminator Key
-                planType: "Custom Plate",                                               // 👈 🌟 Helper Key
+                bookingType: "Custom Plate",
+                planType: "Custom Plate",
                 customerName: plan.userId?.name || plan.address?.name || "Customer",
                 customerPhone: plan.userId?.phone || plan.address?.phone || "",
                 packageDays: plan.customTiffinDetails?.packageDays || 10,
@@ -263,7 +350,7 @@ const getVendorCustomTiffinRequests = async (req, res) => {
         res.json({
             success: true,
             totalDocs,
-            totalPages: Math.ceil(totalDocs / parseInt(limit, 10)),
+            totalPages: Math.ceil(totalDocs / parseInt(limit, 10)) || 1,
             currentPage: parseInt(page, 10),
             limit: parseInt(limit, 10),
             count: cleanList.length,
@@ -284,30 +371,20 @@ const getVendorCustomTiffinRequestById = async (req, res) => {
         const vendorId = req.user.id;
         const { id } = req.params;
 
-        const customOrder = await FoodBooking.findOne({
-            $or: [{ _id: id }, { bookingId: id }],
-            foodId: vendorId,
-            bookingType: 'Custom Plate'
-        })
-        .populate('userId', 'name phone email gender dob profilePic')
-        .populate('driverId', 'name phone vehicleType vehicleNumber status')
-        .populate({
-            path: 'customTiffinDetails.weeklyCustomSchedule.breakfast.mealId',
-            select: 'name imageUrl price discountPrice calories dietType ingredients tags foodEffectCategory',
-            strictPopulate: false
-        })
-        .populate({
-            path: 'customTiffinDetails.weeklyCustomSchedule.lunch.mealId',
-            select: 'name imageUrl price discountPrice calories dietType ingredients tags foodEffectCategory',
-            strictPopulate: false
-        })
-        .populate({
-            path: 'customTiffinDetails.weeklyCustomSchedule.dinner.mealId',
-            select: 'name imageUrl price discountPrice calories dietType ingredients tags foodEffectCategory',
-            strictPopulate: false
-        })
-        .populate('billSummary.couponId', 'couponName discountPercentage maxDiscount')
-        .lean();
+        const query = mongoose.Types.ObjectId.isValid(id)
+            ? { $or: [{ _id: id }, { bookingId: id }], foodId: vendorId, bookingType: 'Custom Plate' }
+            : { bookingId: id, foodId: vendorId, bookingType: 'Custom Plate' };
+
+        const customOrder = await FoodBooking.findOne(query)
+            .populate('userId', 'name phone email gender dob profilePic')
+            .populate('driverId', 'name phone vehicleType vehicleNumber status')
+            .populate({
+                path: 'customTiffinDetails.weeklyCustomSchedule.breakfast.mealId customTiffinDetails.weeklyCustomSchedule.lunch.mealId customTiffinDetails.weeklyCustomSchedule.dinner.mealId',
+                select: 'name description imageUrl price discountPrice calories dietType foodEffectCategory ingredients tags',
+                strictPopulate: false
+            })
+            .populate('billSummary.couponId', 'couponName discountPercentage maxDiscount')
+            .lean();
 
         if (!customOrder) {
             return res.status(404).json({ 
@@ -316,12 +393,18 @@ const getVendorCustomTiffinRequestById = async (req, res) => {
             });
         }
 
+        // Clean unneeded blocks
+        delete customOrder.subscriptionDetails;
+        delete customOrder.healthyPlanDetails;
+        delete customOrder.items;
+        delete customOrder.addons;
+
         res.json({
             success: true,
             data: {
                 ...customOrder,
-                bookingType: "Custom Plate", // 👈 🌟 Explicit Key in Detail View
-                planType: "Custom Plate"     // 👈 🌟 Explicit Key in Detail View
+                bookingType: "Custom Plate",
+                planType: "Custom Plate"
             }
         });
 
@@ -331,7 +414,7 @@ const getVendorCustomTiffinRequestById = async (req, res) => {
 };
 
 // ==========================================
-// ⚡ HANDLE CUSTOM TIFFIN ACTION
+// ⚡ 6. HANDLE CUSTOM TIFFIN ACTION (ACCEPT / CANCEL WITH REFUND)
 // Full Path: PATCH /provider/food/tiffin/custom-requests/:id/action
 // ==========================================
 const handleCustomTiffinRequestAction = async (req, res) => {
@@ -344,40 +427,29 @@ const handleCustomTiffinRequestAction = async (req, res) => {
         if (!action || !['Accept', 'Reject', 'Cancel'].includes(action)) {
             return res.status(400).json({ 
                 success: false, 
-                message: "Action must be 'Accept', 'Reject' (for New orders), or 'Cancel' (for Active orders)." 
+                message: "Action must be 'Accept', 'Reject' (for New requests), or 'Cancel' (for Active requests)." 
             });
         }
 
-        const customOrder = await FoodBooking.findOne({
-            $or: [{ _id: id }, { bookingId: id }],
-            foodId: vendorId,
-            bookingType: 'Custom Plate'
-        });
+        const query = mongoose.Types.ObjectId.isValid(id)
+            ? { $or: [{ _id: id }, { bookingId: id }], foodId: vendorId, bookingType: 'Custom Plate' }
+            : { bookingId: id, foodId: vendorId, bookingType: 'Custom Plate' };
+
+        const customOrder = await FoodBooking.findOne(query);
 
         if (!customOrder) {
-            return res.status(404).json({ 
-                success: false, 
-                message: "Custom tiffin request not found or not assigned to your kitchen." 
-            });
+            return res.status(404).json({ success: false, message: "Custom tiffin request not found." });
         }
 
         if (customOrder.status === 'Cancelled') {
-            return res.status(400).json({
-                success: false,
-                message: "This custom tiffin package is already cancelled."
-            });
+            return res.status(400).json({ success: false, message: "This custom tiffin package is already cancelled." });
         }
 
         if (customOrder.status === 'Delivered' || customOrder.status === 'Expired') {
-            return res.status(400).json({
-                success: false,
-                message: `Cannot modify package in '${customOrder.status}' state.`
-            });
+            return res.status(400).json({ success: false, message: "Cannot modify a completed or expired custom package." });
         }
 
-        // ==========================================
-        // 🟡 PHASE 1: INITIAL STATE ('New' / 'Pending')
-        // ==========================================
+        // --- PHASE 1: INITIAL REQUEST ('New' / 'Pending') ---
         if (customOrder.status === 'New' || customOrder.status === 'Pending') {
             if (action === 'Cancel') {
                 return res.status(400).json({
@@ -406,7 +478,6 @@ const handleCustomTiffinRequestAction = async (req, res) => {
                     data: {
                         bookingId: customOrder.bookingId,
                         bookingType: "Custom Plate",
-                        planType: "Custom Plate",
                         status: customOrder.status,
                         updatedAt: customOrder.updatedAt
                     }
@@ -423,6 +494,14 @@ const handleCustomTiffinRequestAction = async (req, res) => {
 
                 customOrder.status = 'Cancelled';
                 customOrder.cancelReason = reason.trim();
+
+                // 🧮 Auto-Calculate 100% Full Refund if rejected before starting
+                const refundCalc = calculatePlanCancellationRefund(customOrder);
+                customOrder.refundDetails = refundCalc;
+                if (refundCalc.isRefundApplicable) {
+                    customOrder.paymentStatus = 'Refund-Initiated';
+                }
+
                 await customOrder.save();
 
                 if (customOrder.userId) {
@@ -437,34 +516,26 @@ const handleCustomTiffinRequestAction = async (req, res) => {
 
                 return res.json({
                     success: true,
-                    message: `Custom Tiffin package (${customOrder.bookingId}) rejected. Reason logged.`,
+                    message: `Custom Tiffin package (${customOrder.bookingId}) rejected. Reason logged and refund initiated.`,
                     data: {
                         bookingId: customOrder.bookingId,
                         bookingType: "Custom Plate",
-                        planType: "Custom Plate",
                         status: customOrder.status,
-                        rejectReason: customOrder.cancelReason, // 👈 Sirf reject ke waqt aayega
+                        paymentStatus: customOrder.paymentStatus,
+                        cancelReason: customOrder.cancelReason,
+                        refundInfo: customOrder.refundDetails,
                         updatedAt: customOrder.updatedAt
                     }
                 });
             }
         }
 
-        // ==========================================
-        // 🟢 PHASE 2: ALREADY ACCEPTED ('Active' State)
-        // ==========================================
+        // --- PHASE 2: ALREADY ACTIVE ('Active') ---
         if (customOrder.status === 'Active') {
-            if (action === 'Accept') {
-                return res.status(400).json({
-                    success: false,
-                    message: "This custom tiffin package is already Active."
-                });
-            }
-
-            if (action === 'Reject') {
-                return res.status(400).json({
-                    success: false,
-                    message: "This package is already Active. Use action 'Cancel' with cancelReason to cancel an ongoing subscription."
+            if (action === 'Accept' || action === 'Reject') {
+                return res.status(400).json({ 
+                    success: false, 
+                    message: "This package is already Active. Use action 'Cancel' with cancelReason to cancel an ongoing subscription." 
                 });
             }
 
@@ -478,6 +549,14 @@ const handleCustomTiffinRequestAction = async (req, res) => {
 
                 customOrder.status = 'Cancelled';
                 customOrder.cancelReason = reason.trim();
+
+                // 🧮 Auto-Calculate Pro-Rata Refund for Remaining Days
+                const refundCalc = calculatePlanCancellationRefund(customOrder);
+                customOrder.refundDetails = refundCalc;
+                if (refundCalc.isRefundApplicable) {
+                    customOrder.paymentStatus = 'Refund-Initiated';
+                }
+
                 await customOrder.save();
 
                 if (customOrder.userId) {
@@ -492,14 +571,14 @@ const handleCustomTiffinRequestAction = async (req, res) => {
 
                 return res.json({
                     success: true,
-                    message: `Active Custom Tiffin package (${customOrder.bookingId}) cancelled successfully. Reason logged.`,
+                    message: `Active Custom Tiffin package (${customOrder.bookingId}) cancelled successfully. Reason logged and refund initiated.`,
                     data: {
                         bookingId: customOrder.bookingId,
                         bookingType: "Custom Plate",
-                        planType: "Custom Plate",
                         status: customOrder.status,
-                        cancelReason: customOrder.cancelReason, // 👈 Sirf cancelReason jayega
-                        previousState: "Active",
+                        paymentStatus: customOrder.paymentStatus,
+                        cancelReason: customOrder.cancelReason,
+                        refundInfo: customOrder.refundDetails,
                         updatedAt: customOrder.updatedAt
                     }
                 });
@@ -514,8 +593,8 @@ const handleCustomTiffinRequestAction = async (req, res) => {
 module.exports = {
     getVendorTiffinSubscriptions,
     getVendorTiffinSubscriptionById,
+    handleStandardTiffinSubscriptionAction,
     getVendorCustomTiffinRequests,
     getVendorCustomTiffinRequestById,
-    handleCustomTiffinRequestAction,
-    handleStandardTiffinSubscriptionAction
+    handleCustomTiffinRequestAction
 };

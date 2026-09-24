@@ -207,8 +207,9 @@ app.use('/admin/food/manage/combo', require('./routes/admin/Food/foodComboContro
 app.use('/admin/food/tiffin/plans', require('./routes/admin/Food/TiffinPlanAdminRoute')); 
 app.use('/admin/food/peak-charges', require('./routes/admin/Food/PeakOrderChargeAdminRoute')); 
 app.use('/admin/food/healthy-plans', require('./routes/admin/Food/FoodHealthyPlansAdminRoute')); 
-app.use('/admin/food/plan-orders', require('./routes/admin/Food/AdminPlanOrdersRoute'));
 app.use('/admin/food/vendor-orders', require('./routes/admin/Food/AdminFoodVendorOrdersRoute'));
+app.use('/admin/food/drinks', require('./routes/admin/Food/SmoothieDrinkAdminRoute'));
+
 
 
 
@@ -263,6 +264,8 @@ app.use('/admin/food/tiffin/plans', require('./routes/user/Food/FoodCheckoutRout
 app.use('/api/food/tiffin', require('./routes/user/Food/UserTiffinSubscriptionRoute')); 
 app.use('/api/food/custom-tiffin', require('./routes/user/Food/CustomTiffinRoute')); 
 app.use('/api/food/healthy-plans', require('./routes/user/Food/UserHealthyPlanOrderRoute'));
+app.use('/api/food/drinks', require('./routes/user/Food/UserSmoothieDrinkRoute'));
+
 
 
 //////////////// Doctor Routes ///////////////////////
@@ -293,7 +296,8 @@ app.use('/api/clinic/booking', require('./routes/clinic/clinicAppointmentsRoute'
 
 ////////////////////////////// Food Routes User /////////////////////////////////
 app.use('/api/foodpage', require('./routes/user/Food/FoodPageRoute')); // Food Page Management Route
-app.use('/api/food/checkout', require('./routes/user/Food/FoodCheckoutRoute')); 
+app.use('/api/food/checkout', require('./routes/user/Food/FoodCheckoutRoute'));
+
 
 
 //////////////// Provider Routes /////////////////////
@@ -311,6 +315,8 @@ app.use('/provider/food/orders', require('./routes/provider/Food/FoodOrderRoute'
 app.use('/provider/food/profile', require('./routes/provider/Food/ProfileRoute')); 
 app.use('/provider/food/tiffin', require('./routes/provider/Food/VendorTiffinOrderRoute')); 
 app.use('/provider/food/healthy-plans', require('./routes/provider/Food/VendorHealthyPlanOrderRoute'));
+app.use('/provider/food/drinks', require('./routes/provider/Food/VendorSmoothieDrinkRoute'));
+
 // =================== Food Provider Routes END=========================
 
 // --- Provider Lab Routes ---
