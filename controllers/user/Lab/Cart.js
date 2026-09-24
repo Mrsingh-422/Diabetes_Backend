@@ -15,6 +15,7 @@ const DeliveryCharge = require('../../../models/DeliveryCharge');
 const Coupon = require('../../../models/Coupon');
 const FoodService = require('../../../models/FoodService');
 const FoodComboOffer = require('../../../models/FoodComboOffer');
+const smoothiDrinks = require('../../../models/smoothiDrinks'); 
 
 
 const calculateBill = async (vendorId, items, patientsCount, couponCode, isRapid, vendorType) => {
@@ -948,10 +949,6 @@ const getAvailableCoupons = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// ==========================================
-//  FOOD CART CRUD SECTION (WITH DYNAMIC POPULATE)
-// ==========================================
-
 // --- 2.1 ADD TO FOOD CART (POST /user/cart/food/add) ---
 const addToFoodCart = async (req, res) => {
     try {
@@ -962,27 +959,41 @@ const addToFoodCart = async (req, res) => {
             return res.status(400).json({ success: false, message: "foodId and itemId are required." });
         }
 
-        // Auto-detect whether itemId belongs to FoodService or FoodComboOffer
+        // Auto-detect whether itemId belongs to FoodService, FoodComboOffer, or smoothiDrinks
         let resolvedItemType = 'FoodService';
         let activePrice = 0;
         let itemName = '';
 
+        // 1. Check if it is a Single Meal (FoodService)
         const meal = await FoodService.findById(itemId);
         if (meal) {
             resolvedItemType = 'FoodService';
             activePrice = meal.discountPrice > 0 ? meal.discountPrice : meal.price;
             itemName = meal.name;
         } else {
+            // 2. Check if it is a Combo Bundle (FoodComboOffer)
             const combo = await FoodComboOffer.findById(itemId);
             if (combo) {
                 resolvedItemType = 'FoodComboOffer';
                 activePrice = combo.comboPrice;
                 itemName = combo.name;
+            } else {
+                // 3. 🥤 Check if it is a Smoothie / Drink (smoothiDrinks)
+                const drink = await smoothiDrinks.findById(itemId);
+                if (drink) {
+                    resolvedItemType = 'smoothiDrinks';
+                    activePrice = drink.discountPrice > 0 ? drink.discountPrice : drink.price;
+                    itemName = drink.name;
+                }
             }
         }
 
-        if (!meal && !activePrice) {
-            return res.status(404).json({ success: false, message: "Item not found in meals catalog or combo offers." });
+        // Agar teeno collections me se kisi me bhi nahi mila
+        if (!activePrice && !itemName) {
+            return res.status(404).json({ 
+                success: false, 
+                message: "Item not found in meals catalog, combo offers, or smoothies/drinks." 
+            });
         }
 
         let cart = await Cart.findOne({ userId });
@@ -1013,7 +1024,7 @@ const addToFoodCart = async (req, res) => {
             cart.foodCart.items[itemIndex].quantity += Number(quantity);
         } else {
             cart.foodCart.items.push({
-                itemType: resolvedItemType,
+                itemType: resolvedItemType, // 'FoodService' | 'FoodComboOffer' | 'smoothiDrinks'
                 itemId,
                 name: itemName,
                 price: activePrice,
@@ -1036,9 +1047,13 @@ const addToFoodCart = async (req, res) => {
                 }
             });
 
+        let itemDisplayType = 'Food item';
+        if (resolvedItemType === 'FoodComboOffer') itemDisplayType = 'Combo bundle';
+        else if (resolvedItemType === 'smoothiDrinks') itemDisplayType = 'Smoothie/Drink';
+
         res.json({
             success: true,
-            message: `${resolvedItemType === 'FoodComboOffer' ? 'Combo bundle' : 'Food item'} added to cart successfully!`,
+            message: `${itemDisplayType} added to cart successfully!`,
             data: populatedCart.foodCart
         });
 
@@ -1180,7 +1195,6 @@ const getFoodCart = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
-
 
 module.exports = { updateSelectedPatients,addToLabCart,updateCartQuantity, getMyCart, clearLabCart, removeItem,
     compareCartOnMap,

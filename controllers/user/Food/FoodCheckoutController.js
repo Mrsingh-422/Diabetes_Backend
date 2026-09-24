@@ -13,6 +13,8 @@ const CodConfig = require('../../../models/CodConfig');
 const { deleteFile } = require('../../../utils/fileHandler');
 const VendorFoodCombo = require('../../../models/VendorFoodCombo');
 const VendorFoodItem = require('../../../models/VendorFoodItem');
+const smoothiDrinks = require('../../../models/smoothiDrinks');
+const VendorSmoothieDrink = require('../../../models/VendorSmoothieDrink');
 const { getDistance } = require('../../../utils/helpers');
 
 const crypto = require('crypto');
@@ -38,14 +40,14 @@ const calculateDistance = (lat1, lon1, lat2, lon2) => {
 };
 
 // ==========================================
-// 💡 SECURE BILLING ENGINE (SAFE & DEFENSIVE)
+// 💡 SECURE BILLING ENGINE (SUPPORTS MEALS, COMBOS & SMOOTHIES/DRINKS)
 // ==========================================
 const calculateFoodBillHelper = async ({ 
     userId, 
     foodId, 
     items = [], 
     addons = [], 
-    address = null,      // 👈 User Delivery Address Object
+    address = null,
     userLat, 
     userLng, 
     couponCode, 
@@ -60,35 +62,54 @@ const calculateFoodBillHelper = async ({
         ? foodId._id.toString() 
         : (foodId?.id ? foodId.id.toString() : (foodId ? foodId.toString() : null));
 
-    // 🛡️ 2. Verify Meals & Combos from DB
+    // 🛡️ 2. Verify Meals, Combos & Smoothies/Drinks from DB
     for (let item of items) {
         let price = 0;
         let name = '';
         let resolvedProductType = 'MealItem';
 
-        // Handles item.itemId._id, item.itemId, item._id, or item.id safely
         const rawItemId = item.itemId?._id 
             ? item.itemId._id.toString() 
             : (item.itemId ? item.itemId.toString() : (item._id ? item._id.toString() : (item.id ? item.id.toString() : null)));
 
-        if (!rawItemId) {
-            continue; // Skip invalid item safely
-        }
+        if (!rawItemId) continue;
 
         const isCombo = item.productType === 'Combo' || item.itemType === 'FoodComboOffer' || item.itemType === 'Combo';
+        const isDrink = item.productType === 'Drink' || item.itemType === 'smoothiDrinks' || item.productType === 'Smoothie' || item.itemType === 'Drink';
 
         if (isCombo) {
+            // A. Combo Package
             const combo = await FoodComboOffer.findById(rawItemId);
             if (!combo || !combo.isActive) throw new Error(`Combo bundle '${item.name || rawItemId}' is currently unavailable.`);
             price = combo.comboPrice;
             name = combo.name;
             resolvedProductType = 'Combo';
+        } else if (isDrink) {
+            // B. 🥤 Smoothie / Juice / Drink
+            const drink = await smoothiDrinks.findById(rawItemId);
+            if (!drink || !drink.isActive) throw new Error(`Smoothie/Drink '${item.name || rawItemId}' is currently unavailable.`);
+            price = drink.discountPrice > 0 ? drink.discountPrice : drink.price;
+            name = drink.name;
+            resolvedProductType = 'Drink';
         } else {
+            // C. Single Meal Item (with fallback check to smoothiDrinks)
             const meal = await FoodService.findById(rawItemId);
-            if (!meal || !meal.isActive) throw new Error(`Dish '${item.name || rawItemId}' is currently unavailable.`);
-            price = meal.discountPrice > 0 ? meal.discountPrice : meal.price;
-            name = meal.name;
-            resolvedProductType = 'MealItem';
+            if (meal) {
+                if (!meal.isActive) throw new Error(`Dish '${item.name || rawItemId}' is currently unavailable.`);
+                price = meal.discountPrice > 0 ? meal.discountPrice : meal.price;
+                name = meal.name;
+                resolvedProductType = 'MealItem';
+            } else {
+                const drink = await smoothiDrinks.findById(rawItemId);
+                if (drink) {
+                    if (!drink.isActive) throw new Error(`Smoothie/Drink '${item.name || rawItemId}' is currently unavailable.`);
+                    price = drink.discountPrice > 0 ? drink.discountPrice : drink.price;
+                    name = drink.name;
+                    resolvedProductType = 'Drink';
+                } else {
+                    throw new Error(`Item '${item.name || rawItemId}' is currently unavailable.`);
+                }
+            }
         }
 
         const qty = Math.max(1, Number(item.quantity || 1));
@@ -100,24 +121,23 @@ const calculateFoodBillHelper = async ({
             name,
             price,
             quantity: qty,
-            mealType: item.mealType || 'Single Meal',
+            mealType: item.mealType || (resolvedProductType === 'Drink' ? 'Drink / Beverage' : 'Single Meal'),
             isComboApplied: Boolean(item.isComboApplied),
             comboOfferId: item.comboOfferId || null
         });
     }
 
     if (verifiedItems.length === 0) {
-        throw new Error("No valid food items found to calculate bill.");
+        throw new Error("No valid food items or drinks found to calculate bill.");
     }
 
-    // 🛡️ 3. Non-Food Addons Calculation (Spoons, Bowls, Bags)
+    // 🛡️ 3. Non-Food Addons Calculation
     if (addons && Array.isArray(addons) && addons.length > 0) {
         for (let add of addons) {
             const rawAddonId = add.addonId?._id || add.addonId || add._id || add.id;
             if (!rawAddonId) continue;
 
             const addonDoc = await FoodAddon.findById(rawAddonId);
-
             if (addonDoc) {
                 const addPrice = Number(addonDoc.price || 0);
                 const addQty = Math.max(1, Number(add.quantity || 1));
@@ -133,12 +153,15 @@ const calculateFoodBillHelper = async ({
         }
     }
 
-    // 🛡️ 4. Auto-Resolve Vendor ID if missing for Combos / Meals
+    // 🛡️ 4. Auto-Resolve Vendor ID (Handles Combos, Meals & Drinks)
     if (!resolvedFoodId && verifiedItems.length > 0) {
         const firstItem = verifiedItems[0];
         if (firstItem.productType === 'Combo') {
             const comboMapping = await VendorFoodCombo.findOne({ foodComboId: firstItem.itemId, isAvailable: true });
             if (comboMapping) resolvedFoodId = comboMapping.vendorId.toString();
+        } else if (firstItem.productType === 'Drink') {
+            const drinkMapping = await VendorSmoothieDrink.findOne({ drinkId: firstItem.itemId, isAvailable: true });
+            if (drinkMapping) resolvedFoodId = drinkMapping.vendorId.toString();
         } else {
             const mealMapping = await VendorFoodItem.findOne({ foodServiceId: firstItem.itemId, isAvailable: true });
             if (mealMapping) resolvedFoodId = mealMapping.vendorId.toString();
@@ -146,7 +169,7 @@ const calculateFoodBillHelper = async ({
     }
 
     if (!resolvedFoodId) {
-        throw new Error("Kitchen Vendor ID (foodId) could not be resolved for the selected items.");
+        throw new Error("Kitchen Vendor ID (foodId) could not be resolved for the selected items/drinks.");
     }
 
     // 🛡️ 5. Kitchen Status Check
@@ -159,7 +182,7 @@ const calculateFoodBillHelper = async ({
     const codSetting = await CodConfig.findOne({ vendorType: 'Food' });
     const isCodAvailable = codSetting ? Boolean(codSetting.isCodAvailable) : true;
 
-    // 🛡️ 7. 📍 Location-Based Delivery Charges Resolution (Priority 1 to 5)
+    // 🛡️ 7. Location-Based Delivery Charges Resolution
     let parsedAddress = address;
     if (typeof address === 'string') {
         try { parsedAddress = JSON.parse(address); } catch (e) { parsedAddress = null; }
@@ -169,8 +192,6 @@ const calculateFoodBillHelper = async ({
     const userState = parsedAddress?.state ? parsedAddress.state.trim() : null;
 
     let chargesConfig = null;
-
-    // Priority 1: Match City
     if (userCity) {
         chargesConfig = await DeliveryCharge.findOne({
             vendorType: 'Food',
@@ -178,8 +199,6 @@ const calculateFoodBillHelper = async ({
             isAdminGlobal: true
         });
     }
-
-    // Priority 2: Match State
     if (!chargesConfig && userState) {
         chargesConfig = await DeliveryCharge.findOne({
             vendorType: 'Food',
@@ -188,13 +207,9 @@ const calculateFoodBillHelper = async ({
             isAdminGlobal: true
         });
     }
-
-    // Priority 3: Specific Vendor Custom Rate
     if (!chargesConfig) {
         chargesConfig = await DeliveryCharge.findOne({ vendorId: resolvedFoodId });
     }
-
-    // Priority 4: Platform Global Fallback
     if (!chargesConfig) {
         chargesConfig = await DeliveryCharge.findOne({ 
             vendorType: 'Food', 
@@ -204,7 +219,6 @@ const calculateFoodBillHelper = async ({
         }) || await DeliveryCharge.findOne({ vendorType: 'Food', isAdminGlobal: true });
     }
 
-    // Priority 5: Default Fallback Object
     const finalCharges = chargesConfig || {
         fixedPrice: 40,
         fixedDistance: 5,
@@ -226,7 +240,7 @@ const calculateFoodBillHelper = async ({
     const taxPercentage = finalCharges.taxPercentage ?? 5;
     const isRapidAvailable = finalCharges.isRapidAvailable !== false;
 
-    // 🛡️ 8. 📍 Distance Calculation & Delivery Fee Computation
+    // 🛡️ 8. Distance Calculation & Delivery Fee Computation
     let deliveryCharge = 0;
     let distance = 0;
 
@@ -255,11 +269,9 @@ const calculateFoodBillHelper = async ({
             }
         }
     } else {
-        // Flat Fixed Delivery Price fallback if coordinates not passed
         deliveryCharge = (itemTotal >= freeDeliveryThreshold) ? 0 : fixedPrice;
     }
 
-    // Rapid Delivery Surcharge
     let appliedRapidFee = 0;
     if (isRapid) {
         if (!isRapidAvailable) {
@@ -269,7 +281,7 @@ const calculateFoodBillHelper = async ({
         deliveryCharge += appliedRapidFee;
     }
 
-    // 🛡️ 9. Coupon Verification (Global, Vendor & User-Specific Support)
+    // 🛡️ 9. Coupon Verification
     let couponDiscount = 0;
     let validCouponId = null;
 
@@ -282,7 +294,6 @@ const calculateFoodBillHelper = async ({
             { isUserSpecific: { $ne: true }, isAdminCreated: true, vendorType: { $in: ['Food', 'All'] } }
         ];
 
-        // Agar user logged in hai toh unka exclusive private coupon allow hoga
         if (userId) {
             couponQueryConditions.push({
                 isUserSpecific: true,
@@ -303,7 +314,6 @@ const calculateFoodBillHelper = async ({
             throw new Error(`Coupon '${cleanCode}' is invalid, expired, or not applicable to your account.`);
         }
 
-        // Security Guard: Private coupon dusra user use na kar sake
         if (coupon.isUserSpecific && (!userId || coupon.assignedUserId?.toString() !== userId.toString())) {
             throw new Error(`Coupon '${cleanCode}' is an exclusive voucher and is not valid for your account.`);
         }
@@ -323,7 +333,7 @@ const calculateFoodBillHelper = async ({
         validCouponId = coupon._id;
     }
 
-    // 🛡️ 10. GST Tax Assessment & Total Payable
+    // 🛡️ 10. Tax & Total Amount
     const taxableSubtotal = Math.max(0, (itemTotal - couponDiscount) + deliveryCharge + packagingCharge);
     const taxAmount = Math.round(taxableSubtotal * (taxPercentage / 100));
     const totalAmount = Math.max(0, (itemTotal - couponDiscount) + deliveryCharge + packagingCharge + taxAmount);
@@ -347,14 +357,11 @@ const calculateFoodBillHelper = async ({
             fastDeliveryCharge: Math.round(appliedRapidFee),
             taxAmount: Math.round(taxAmount),
             taxPercentage: taxPercentage,
-            
-            // Breakdown Parameters Snapshot
-            fixedPrice: fixedPrice,
-            fixedDistance: fixedDistance,
-            pricePerKM: pricePerKM,
-            freeDeliveryThreshold: freeDeliveryThreshold,
-            isRapidAvailable: isRapidAvailable,
-
+            fixedPrice,
+            fixedDistance,
+            pricePerKM,
+            freeDeliveryThreshold,
+            isRapidAvailable,
             couponDiscount: Math.round(couponDiscount),
             couponId: validCouponId,
             totalAmount: Math.round(totalAmount),
@@ -362,7 +369,6 @@ const calculateFoodBillHelper = async ({
         }
     };
 };
-
 // ==========================================
 // 1. BILL PREVIEW (POST /calculate)
 // ==========================================

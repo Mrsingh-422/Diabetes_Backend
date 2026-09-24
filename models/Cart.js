@@ -50,7 +50,7 @@ const cartSchema = new mongoose.Schema({
         }]
     },
 
-    // --- FOOD (KITCHEN & DIET TILES) SECTION ---
+// --- FOOD (KITCHEN, MEALS, COMBOS & SMOOTHIES) SECTION ---
     foodCart: {
         foodId: { 
             type: mongoose.Schema.Types.ObjectId, 
@@ -60,10 +60,11 @@ const cartSchema = new mongoose.Schema({
         items: [{
             itemType: {
                 type: String,
-                enum: ['FoodService', 'FoodComboOffer'],
+                //  Added 'smoothiDrinks' to enum
+                enum: ['FoodService', 'FoodComboOffer', 'smoothiDrinks'],
                 default: 'FoodService'
             },
-            // 🚨 Dynamic Reference Path: Automatically resolves to FoodService or FoodComboOffer
+            // Dynamic Reference Path: Automatically resolves to FoodService, FoodComboOffer, or smoothiDrinks
             itemId: { 
                 type: mongoose.Schema.Types.ObjectId, 
                 refPath: 'foodCart.items.itemType',

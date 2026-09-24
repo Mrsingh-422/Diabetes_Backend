@@ -45,7 +45,7 @@ const foodBookingSchema = new mongoose.Schema({
     },
     // A. DIRECT MEALS & COMBOS
     items: [{
-        productType: { type: String, enum: ['MealItem', 'Combo'], required: true, default: 'MealItem' },
+        productType: { type: String, enum: ['MealItem', 'Combo','Drink'], required: true, default: 'MealItem' },
         itemId: { type: mongoose.Schema.Types.ObjectId, required: true },
         name: { type: String, required: true },
         price: { type: Number, required: true },
