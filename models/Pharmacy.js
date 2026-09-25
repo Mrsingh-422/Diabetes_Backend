@@ -79,6 +79,18 @@ const pharmacySchema = new mongoose.Schema({
 
     isHomeDeliveryAvailable: { type: Boolean, default: true },
     is24x7: { type: Boolean, default: false },
+    openingTime: { 
+        type: String, 
+        default: "09:00 AM" 
+    },
+    closeTime: { 
+        type: String, 
+        default: "09:00 PM" 
+    },
+    holiday: { 
+        type: String, 
+        default: "Sunday" 
+    },
     about: { type: String, default: "" },
 
     bankDetails: {

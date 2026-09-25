@@ -10,7 +10,9 @@ const {
     getSingleClinicLab,
     updateClinicLab,
     toggleClinicLabStatus,
-    deleteClinicLab
+    deleteClinicLab,
+    getClinicLabTimings,
+    updateClinicLabTimings
 } = require('../../controllers/clinic/clinicLabController');
 
 // Base Route: /api/clinic/lab
@@ -32,5 +34,8 @@ router.patch('/toggle-status/:id', protect('clinic'), toggleClinicLabStatus);
 
 // 6. Delete Lab
 router.delete('/delete/:id', protect('clinic'), deleteClinicLab);
+
+router.get('/timings', protect('clinic'), getClinicLabTimings);
+router.put('/timings/update', protect('clinic'), updateClinicLabTimings);
 
 module.exports = router;

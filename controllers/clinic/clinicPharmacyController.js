@@ -7,13 +7,29 @@ const { deleteFile } = require('../../utils/fileHandler');
 const { notifyAdminsAndVendor } = require('../../utils/notification');
 
 // ==========================================
-// 1. ADD CLINIC PHARMACY (With Multer & Admin Approval Request)
+// 1. ADD CLINIC PHARMACY (With Strict 1-Pharmacy Check & Timings)
 // Endpoint: POST /api/clinic/pharmacy/add
 // ==========================================
 const addClinicPharmacy = async (req, res) => {
     try {
         const clinicId = req.user.id; // From protect('clinic')
         const files = req.files || {};
+
+        // 🛡️ 1. STRICT CHECK: Ek clinic sirf 1 hi pharmacy bana sakti hai (jab tak delete na ho jaye)
+        const existingClinicPharmacy = await Pharmacy.findOne({ clinicId, isClinic: true });
+        if (existingClinicPharmacy) {
+            // Disk Cleanup for uploaded files
+            if (files.profileImage) deleteFile(`/uploads/pharmacies/${files.profileImage[0].filename}`);
+            if (files.signatureImage) deleteFile(`/uploads/pharmacies/${files.signatureImage[0].filename}`);
+            ['pharmacyImages', 'pharmacyCertificates', 'pharmacyLicenses', 'gstCertificates', 'drugLicenses', 'otherCertificates'].forEach(key => {
+                if (files[key]) files[key].forEach(f => deleteFile(`/uploads/pharmacies/${f.filename}`));
+            });
+
+            return res.status(400).json({
+                success: false,
+                message: "A Pharmacy is already registered for this clinic facility. You cannot create another pharmacy unless the existing one is deleted."
+            });
+        }
         
         const {
             name,
@@ -31,6 +47,11 @@ const addClinicPharmacy = async (req, res) => {
             isHomeDeliveryAvailable = true,
             is24x7 = false,
 
+            // ⏰ Timings & Holiday
+            openingTime = "09:00 AM",
+            closeTime = "09:00 PM",
+            holiday = "Sunday",
+
             // Legal & Regulatory Fields
             cinNumber = "",
             gstNumber = "",
@@ -45,7 +66,7 @@ const addClinicPharmacy = async (req, res) => {
             bankDetails
         } = req.body;
 
-        // 1. Validations
+        // 2. Validations
         if (!name || !phone) {
             return res.status(400).json({
                 success: false,
@@ -60,7 +81,7 @@ const addClinicPharmacy = async (req, res) => {
             });
         }
 
-        // 2. Duplicate Check
+        // 3. Global Duplicate Check
         const query = [];
         if (email) query.push({ email: email.toLowerCase() });
         if (phone) query.push({ phone });
@@ -78,7 +99,7 @@ const addClinicPharmacy = async (req, res) => {
             return res.status(404).json({ success: false, message: "Clinic not found." });
         }
 
-        // 3. Process Uploaded Files using pharmacyDocUploads
+        // 4. Process Uploaded Files using pharmacyDocUploads
         const profileImagePath = files.profileImage?.[0] 
             ? `/uploads/pharmacies/${files.profileImage[0].filename}` 
             : null;
@@ -106,10 +127,9 @@ const addClinicPharmacy = async (req, res) => {
             otherCertificates: files.otherCertificates ? files.otherCertificates.map(f => `/uploads/pharmacies/${f.filename}`) : []
         };
 
-        // 4. Hash Password
+        // 5. Hash Password & Parse JSONs
         const hashedPassword = await bcrypt.hash(String(password), 10);
 
-        // Parse Bank Details if passed as JSON string
         let parsedBankDetails = {};
         if (bankDetails) {
             try {
@@ -119,7 +139,9 @@ const addClinicPharmacy = async (req, res) => {
             }
         }
 
-        // 5. Create Pharmacy with Pending status
+        const is24x7Bool = is24x7 === 'true' || is24x7 === true;
+
+        // 6. Create Pharmacy with Pending status
         const newPharmacy = await Pharmacy.create({
             clinicId,
             isClinic: true,
@@ -141,7 +163,10 @@ const addClinicPharmacy = async (req, res) => {
 
             about,
             isHomeDeliveryAvailable: isHomeDeliveryAvailable === 'true' || isHomeDeliveryAvailable === true,
-            is24x7: is24x7 === 'true' || is24x7 === true,
+            is24x7: is24x7Bool,
+            openingTime: is24x7Bool ? "12:00 AM" : openingTime,
+            closeTime: is24x7Bool ? "11:59 PM" : closeTime,
+            holiday: is24x7Bool ? "None" : holiday,
 
             profileImage: profileImagePath,
             documents: documentsObj,
@@ -154,7 +179,7 @@ const addClinicPharmacy = async (req, res) => {
 
         const clinicName = clinic.clinicName || clinic.name || "Clinic";
 
-        // 6. Create Admin Approval Request
+        // 7. Create Admin Approval Request
         await ProfileUpdateRequest.create({
             vendorId: newPharmacy._id,
             vendorModel: 'Pharmacy',
@@ -167,13 +192,17 @@ const addClinicPharmacy = async (req, res) => {
                 address: newPharmacy.address,
                 city: newPharmacy.city,
                 state: newPharmacy.state,
+                openingTime: newPharmacy.openingTime,
+                closeTime: newPharmacy.closeTime,
+                holiday: newPharmacy.holiday,
+                is24x7: newPharmacy.is24x7,
                 documents: documentsObj,
                 profileImage: profileImagePath
             },
             status: 'Pending'
         });
 
-        // 7. Notify Admins
+        // 8. Notify Admins
         try {
             await notifyAdminsAndVendor(
                 newPharmacy._id,
@@ -491,11 +520,80 @@ const deleteClinicPharmacy = async (req, res) => {
     }
 };
 
+// ==========================================
+// GET CLINIC PHARMACY TIMINGS
+// Endpoint: GET /api/clinic/pharmacy/timings
+// ==========================================
+const getClinicPharmacyTimings = async (req, res) => {
+    try {
+        const clinicId = req.user.id;
+        const pharmacy = await Pharmacy.findOne({ clinicId, isClinic: true })
+            .select('name is24x7 openingTime closeTime holiday');
+
+        if (!pharmacy) {
+            return res.status(404).json({ success: false, message: "Clinic Pharmacy not found." });
+        }
+
+        res.json({
+            success: true,
+            data: {
+                is24x7: pharmacy.is24x7,
+                openingTime: pharmacy.openingTime || "09:00 AM",
+                closeTime: pharmacy.closeTime || "09:00 PM",
+                holiday: pharmacy.holiday || "Sunday",
+                displayTiming: pharmacy.is24x7 ? "Open 24x7" : `${pharmacy.openingTime} - ${pharmacy.closeTime}`
+            }
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// ==========================================
+// SET / UPDATE CLINIC PHARMACY TIMINGS
+// Endpoint: PUT /api/clinic/pharmacy/timings
+// ==========================================
+const updateClinicPharmacyTimings = async (req, res) => {
+    try {
+        const clinicId = req.user.id;
+        const { is24x7, openingTime, closeTime, holiday } = req.body;
+
+        const pharmacy = await Pharmacy.findOne({ clinicId, isClinic: true });
+        if (!pharmacy) {
+            return res.status(404).json({ success: false, message: "Clinic Pharmacy not found." });
+        }
+
+        const is24x7Bool = is24x7 === true || is24x7 === 'true';
+
+        pharmacy.is24x7 = is24x7Bool;
+        pharmacy.openingTime = is24x7Bool ? "12:00 AM" : (openingTime || pharmacy.openingTime || "09:00 AM");
+        pharmacy.closeTime = is24x7Bool ? "11:59 PM" : (closeTime || pharmacy.closeTime || "09:00 PM");
+        pharmacy.holiday = is24x7Bool ? "None" : (holiday || pharmacy.holiday || "Sunday");
+
+        await pharmacy.save();
+
+        res.json({
+            success: true,
+            message: "Clinic Pharmacy timings updated successfully.",
+            data: {
+                is24x7: pharmacy.is24x7,
+                openingTime: pharmacy.openingTime,
+                closeTime: pharmacy.closeTime,
+                holiday: pharmacy.holiday
+            }
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 module.exports = {
     addClinicPharmacy,
     getMyClinicPharmacies,
     getSingleClinicPharmacy,
     updateClinicPharmacy,
     toggleClinicPharmacyStatus,
-    deleteClinicPharmacy
+    deleteClinicPharmacy,
+    getClinicPharmacyTimings,
+    updateClinicPharmacyTimings
 };

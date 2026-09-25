@@ -79,6 +79,18 @@ const labSchema = new mongoose.Schema({
     isInsuranceAccepted: { type: Boolean, default: false },
     acceptedInsurances: [{ type: String }],
     is24x7: { type: Boolean, default: false },
+    openingTime: { 
+        type: String, 
+        default: "09:00 AM" 
+    },
+    closeTime: { 
+        type: String, 
+        default: "09:00 PM" 
+    },
+    holiday: { 
+        type: String, 
+        default: "Sunday" 
+    },
     about: { type: String, default: "" },
     rating: { type: Number, default: 4.5 },
     totalReviews: { type: Number, default: 0 },

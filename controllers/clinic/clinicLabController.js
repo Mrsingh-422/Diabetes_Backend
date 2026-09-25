@@ -7,13 +7,29 @@ const { deleteFile } = require('../../utils/fileHandler');
 const { notifyAdminsAndVendor } = require('../../utils/notification');
 
 // ==========================================
-// 1. ADD CLINIC LAB (With Multer & Admin Approval Request)
+// 1. ADD CLINIC LAB (With Strict 1-Lab Check & Timings)
 // Endpoint: POST /api/clinic/lab/add
 // ==========================================
 const addClinicLab = async (req, res) => {
     try {
         const clinicId = req.user.id; // From protect('clinic')
         const files = req.files || {};
+
+        // 🛡️ 1. STRICT CHECK: Ek clinic sirf 1 hi lab bana sakti hai (jab tak delete na ho jaye)
+        const existingClinicLab = await Lab.findOne({ clinicId, isClinic: true });
+        if (existingClinicLab) {
+            // Disk Cleanup for uploaded files
+            if (files.profileImage) deleteFile(`/uploads/labs/${files.profileImage[0].filename}`);
+            if (files.signatureImage) deleteFile(`/uploads/labs/${files.signatureImage[0].filename}`);
+            ['labImages', 'labCertificates', 'labLicenses', 'gstCertificates', 'drugLicenses', 'otherCertificates'].forEach(key => {
+                if (files[key]) files[key].forEach(f => deleteFile(`/uploads/labs/${f.filename}`));
+            });
+
+            return res.status(400).json({
+                success: false,
+                message: "A Diagnostic Lab is already registered for this clinic facility. You cannot create another lab unless the existing one is deleted."
+            });
+        }
         
         const {
             name,
@@ -34,6 +50,11 @@ const addClinicLab = async (req, res) => {
             acceptedInsurances,
             is24x7 = false,
 
+            // ⏰ Timings & Holiday
+            openingTime = "08:00 AM",
+            closeTime = "08:00 PM",
+            holiday = "Sunday",
+
             // Documents & Accreditation Fields
             documentState = "",
             issuingAuthority = "",
@@ -45,7 +66,7 @@ const addClinicLab = async (req, res) => {
             bankDetails
         } = req.body;
 
-        // 1. Validations
+        // 2. Validations
         if (!name || !phone) {
             return res.status(400).json({
                 success: false,
@@ -60,7 +81,7 @@ const addClinicLab = async (req, res) => {
             });
         }
 
-        // 2. Duplicate Check
+        // 3. Global Duplicate Check
         const query = [];
         if (email) query.push({ email: email.toLowerCase() });
         if (phone) query.push({ phone });
@@ -78,7 +99,7 @@ const addClinicLab = async (req, res) => {
             return res.status(404).json({ success: false, message: "Clinic not found." });
         }
 
-        // 3. Process Uploaded Files using labDocUploads
+        // 4. Process Uploaded Files using labDocUploads
         const profileImagePath = files.profileImage?.[0] 
             ? `/uploads/labs/${files.profileImage[0].filename}` 
             : null;
@@ -102,10 +123,9 @@ const addClinicLab = async (req, res) => {
             otherCertificates: files.otherCertificates ? files.otherCertificates.map(f => `/uploads/labs/${f.filename}`) : []
         };
 
-        // 4. Hash Password
+        // 5. Hash Password & Parse JSONs
         const hashedPassword = await bcrypt.hash(String(password), 10);
 
-        // Parse Bank Details & Insurances JSON
         let parsedBankDetails = {};
         if (bankDetails) {
             try {
@@ -124,7 +144,9 @@ const addClinicLab = async (req, res) => {
             }
         }
 
-        // 5. Create Lab Record
+        const is24x7Bool = is24x7 === 'true' || is24x7 === true;
+
+        // 6. Create Lab Record
         const newLab = await Lab.create({
             clinicId,
             isClinic: true,
@@ -149,7 +171,10 @@ const addClinicLab = async (req, res) => {
             isRapidServiceAvailable: isRapidServiceAvailable === 'true' || isRapidServiceAvailable === true,
             isInsuranceAccepted: isInsuranceAccepted === 'true' || isInsuranceAccepted === true,
             acceptedInsurances: parsedInsurances,
-            is24x7: is24x7 === 'true' || is24x7 === true,
+            is24x7: is24x7Bool,
+            openingTime: is24x7Bool ? "12:00 AM" : openingTime,
+            closeTime: is24x7Bool ? "11:59 PM" : closeTime,
+            holiday: is24x7Bool ? "None" : holiday,
 
             profileImage: profileImagePath,
             signatureImage: signatureImagePath,
@@ -163,7 +188,7 @@ const addClinicLab = async (req, res) => {
 
         const clinicName = clinic.clinicName || clinic.name || "Clinic";
 
-        // 6. Create Admin Approval Request
+        // 7. Create Admin Approval Request
         await ProfileUpdateRequest.create({
             vendorId: newLab._id,
             vendorModel: 'Lab',
@@ -176,6 +201,10 @@ const addClinicLab = async (req, res) => {
                 address: newLab.address,
                 city: newLab.city,
                 state: newLab.state,
+                openingTime: newLab.openingTime,
+                closeTime: newLab.closeTime,
+                holiday: newLab.holiday,
+                is24x7: newLab.is24x7,
                 documents: documentsObj,
                 profileImage: profileImagePath,
                 signatureImage: signatureImagePath
@@ -183,7 +212,7 @@ const addClinicLab = async (req, res) => {
             status: 'Pending'
         });
 
-        // 7. Notify Admins
+        // 8. Notify Admins
         try {
             await notifyAdminsAndVendor(
                 newLab._id,
@@ -502,11 +531,79 @@ const deleteClinicLab = async (req, res) => {
     }
 };
 
+// ==========================================
+// GET CLINIC LAB TIMINGS
+// Endpoint: GET /api/clinic/lab/timings
+// ==========================================
+const getClinicLabTimings = async (req, res) => {
+    try {
+        const clinicId = req.user.id;
+        const lab = await Lab.findOne({ clinicId, isClinic: true })
+            .select('name is24x7 openingTime closeTime holiday');
+
+        if (!lab) {
+            return res.status(404).json({ success: false, message: "Clinic Lab not found." });
+        }
+
+        res.json({
+            success: true,
+            data: {
+                is24x7: lab.is24x7,
+                openingTime: lab.openingTime || "08:00 AM",
+                closeTime: lab.closeTime || "08:00 PM",
+                holiday: lab.holiday || "Sunday",
+                displayTiming: lab.is24x7 ? "Open 24x7" : `${lab.openingTime} - ${lab.closeTime}`
+            }
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// ==========================================
+// SET / UPDATE CLINIC LAB TIMINGS
+// Endpoint: PUT /api/clinic/lab/timings
+// ==========================================
+const updateClinicLabTimings = async (req, res) => {
+    try {
+        const clinicId = req.user.id;
+        const { is24x7, openingTime, closeTime, holiday } = req.body;
+
+        const lab = await Lab.findOne({ clinicId, isClinic: true });
+        if (!lab) {
+            return res.status(404).json({ success: false, message: "Clinic Lab not found." });
+        }
+
+        const is24x7Bool = is24x7 === true || is24x7 === 'true';
+
+        lab.is24x7 = is24x7Bool;
+        lab.openingTime = is24x7Bool ? "12:00 AM" : (openingTime || lab.openingTime || "08:00 AM");
+        lab.closeTime = is24x7Bool ? "11:59 PM" : (closeTime || lab.closeTime || "08:00 PM");
+        lab.holiday = is24x7Bool ? "None" : (holiday || lab.holiday || "Sunday");
+
+        await lab.save();
+
+        res.json({
+            success: true,
+            message: "Clinic Lab timings updated successfully.",
+            data: {
+                is24x7: lab.is24x7,
+                openingTime: lab.openingTime,
+                closeTime: lab.closeTime,
+                holiday: lab.holiday
+            }
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
 module.exports = {
     addClinicLab,
     getMyClinicLabs,
     getSingleClinicLab,
     updateClinicLab,
     toggleClinicLabStatus,
-    deleteClinicLab
+    deleteClinicLab,
+    getClinicLabTimings,
+    updateClinicLabTimings
 };

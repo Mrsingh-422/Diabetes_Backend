@@ -10,7 +10,9 @@ const {
     getSingleClinicPharmacy,
     updateClinicPharmacy,
     toggleClinicPharmacyStatus,
-    deleteClinicPharmacy
+    deleteClinicPharmacy,
+    getClinicPharmacyTimings,
+    updateClinicPharmacyTimings
 } = require('../../controllers/clinic/clinicPharmacyController');
 
 // Base Route: /api/clinic/pharmacy
@@ -32,5 +34,8 @@ router.patch('/toggle-status/:id', protect('clinic'), toggleClinicPharmacyStatus
 
 // 6. Delete Pharmacy
 router.delete('/delete/:id', protect('clinic'), deleteClinicPharmacy);
+
+router.get('/timings', protect('clinic'), getClinicPharmacyTimings);
+router.put('/timings/update', protect('clinic'), updateClinicPharmacyTimings);
 
 module.exports = router;
