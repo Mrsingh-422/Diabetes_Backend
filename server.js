@@ -293,6 +293,9 @@ app.use('/api/user/clinics', require('./routes/user/Clinic/clinicManageRoute'));
 app.use('/api/clinic/checkout', require('./routes/user/Clinic/clinicCheckoutRoute'));
 app.use('/api/clinic/ambulance', require('./routes/clinic/clinicAmbulanceRoute'));
 app.use('/api/clinic/booking', require('./routes/clinic/clinicAppointmentsRoute')); // Clinic Booking Management Route
+app.use('/api/clinic/pharmacy',  require('./routes/clinic/clinicPharmacyRoute')); // Clinic Pharmacy Management Route
+app.use('/api/clinic/lab',  require('./routes/clinic/clinicLabRoute')); // Clinic Pharmacy Management Route
+
 
 ////////////////////////////// Food Routes User /////////////////////////////////
 app.use('/api/foodpage', require('./routes/user/Food/FoodPageRoute')); // Food Page Management Route

@@ -1,40 +1,56 @@
-// models/Lab.js (Lab Provider Model)
+// models/Lab.js
 const mongoose = require('mongoose');
 
 const labSchema = new mongoose.Schema({
+    // 🏥 CLINIC ATTACHMENT FIELDS
+    clinicId: { 
+        type: mongoose.Schema.Types.ObjectId, 
+        ref: 'Clinic', 
+        default: null,
+        index: true 
+    },
+    isClinic: { 
+        type: Boolean, 
+        default: false,
+        index: true 
+    },
+
     name: { type: String, required: true },
     email: { type: String, unique: true, sparse: true },
     phone: { type: String, unique: true, sparse: true },
     password: { type: String, required: true, select: false },
-    role: { type: String, enum: ['Lab'], default: 'Lab', immutable: true },
-    profileStatus: { type: String, enum: ['Incomplete', 'Pending', 'Approved', 'Rejected'], default: 'Incomplete' },
-    token: { type: String, default: null },
-    fcmToken: {
-        type: String,
-        default: null
-    },
-    isActive: { type: Boolean, default: true },
-    isOnline: {
-        type: Boolean,
-        default: true
+    
+    // Role updated to support both Standalone & Clinic Lab
+    role: { 
+        type: String, 
+        enum: ['Lab', 'clinic-lab'], 
+        default: 'Lab' 
     },
 
+    profileStatus: { 
+        type: String, 
+        enum: ['Incomplete', 'Pending', 'Approved', 'Rejected'], 
+        default: 'Incomplete' 
+    },
+    token: { type: String, default: null },
+    fcmToken: { type: String, default: null },
+    isActive: { type: Boolean, default: true },
+    isOnline: { type: Boolean, default: true },
 
     profileImage: { type: String, default: null },
     signatureImage: { type: String, default: null },
 
-
     // Location Details
-    country: { type: String, default: null },
+    country: { type: String, default: 'India' },
     state: { type: String, default: null },
     city: { type: String, default: null },
     address: { type: String, default: null },
     location: {
-        lat: Number,
-        lng: Number
+        lat: { type: Number, default: 0 },
+        lng: { type: Number, default: 0 }
     },
+
     documents: {
-        // --- Image Arrays ---
         labImages: [{ type: String }],
         labCertificates: [{ type: String }],
         labLicenses: [{ type: String }],
@@ -42,14 +58,12 @@ const labSchema = new mongoose.Schema({
         drugLicenses: [{ type: String }],
         otherCertificates: [{ type: String }],
 
-        // --- Details Fields ---
         documentState: { type: String },
         issuingAuthority: { type: String },
         gstNumber: { type: String },
         experience: { type: String },
-        nablNumber: { type: String, default: "" }, 
+        nablNumber: { type: String, default: "" },
 
-        // Drug License Type (Figma Screenshot 3 options)
         drugLicenseType: {
             type: String,
             enum: ['Retail', 'Wholesale', 'Restricted', 'Blood Bank', 'None'],
@@ -57,27 +71,18 @@ const labSchema = new mongoose.Schema({
         }
     },
 
-
-
     rejectionReason: { type: String, default: null },
     alternatePhone: { type: String, default: null },
 
-
-
-    // Lab Specific Labels
     isHomeCollectionAvailable: { type: Boolean, default: false },
     isRapidServiceAvailable: { type: Boolean, default: false },
     isInsuranceAccepted: { type: Boolean, default: false },
-    about: String,
+    acceptedInsurances: [{ type: String }],
+    is24x7: { type: Boolean, default: false },
+    about: { type: String, default: "" },
     rating: { type: Number, default: 4.5 },
     totalReviews: { type: Number, default: 0 },
-    location: {
-        lat: { type: Number, default: 0 },
-        lng: { type: Number, default: 0 }
-    },
-    isInsuranceAccepted: { type: Boolean, default: false },
-    acceptedInsurances: [{ type: String }], // e.g. ["RGHS", "ECHS", "Ayushman Bharat"]
-    is24x7: { type: Boolean, default: false },
+
     bankDetails: {
         accountType: { type: String, enum: ['Savings', 'Current'], default: 'Savings' },
         bankName: { type: String, default: "" },
@@ -87,9 +92,6 @@ const labSchema = new mongoose.Schema({
         upiId: { type: String, default: "" },
         isVerified: { type: Boolean, default: false }
     }
-
-
-
 }, { timestamps: true });
 
 module.exports = mongoose.model('Lab', labSchema);

@@ -4,6 +4,7 @@ const Bed = require('../../models/Bed');
 const Appointment = require('../../models/Appointment');
 const Doctor = require('../../models/Doctor');
 const moment = require('moment');
+const mongoose = require('mongoose');
 
 // Helper: Short prefix generator (e.g., "Daycare Ward" -> "DW", "Observation" -> "O")
 const getShortName = (name) => {
@@ -136,39 +137,48 @@ const getClinicWards = async (req, res) => {
 
 
 // ==========================================
-// 🛏️ 2. GET BEDS IN CLINIC WARD (With Real-Time Reserved/Occupied Flags)
+// 🛏️ GET BEDS IN CLINIC WARD (Frontend Data Wrapper Format)
+// Endpoint: GET /api/user/clinics/wards/:wardId/beds?startDate=...&endDate=...
 // ==========================================
 const getBedsInClinicWard = async (req, res) => {
     try {
         const { wardId } = req.params;
         const { startDate, endDate } = req.query;
 
+        if (!mongoose.Types.ObjectId.isValid(wardId)) {
+            return res.status(400).json({ success: false, message: `Invalid Ward ID format: '${wardId}'` });
+        }
+
+        // 1. Fetch Ward Details
         const ward = await Ward.findById(wardId).lean();
         if (!ward) {
             return res.status(404).json({ success: false, message: "Ward not found." });
         }
 
-        // Admission Date Range Check
-        const start = startDate ? new Date(startDate) : new Date();
-        const end = endDate ? new Date(endDate) : new Date(start);
+        // 2. Fetch Beds directly from Bed Collection
+        const beds = await Bed.find({ wardId }).sort({ bedNumber: 1 }).lean();
 
-        // 🚨 Check conflicting active appointments in database
+        // 3. Admission Date Range Calculation
+        const start = startDate ? moment(startDate).startOf('day').toDate() : moment().startOf('day').toDate();
+        const end = endDate ? moment(endDate).endOf('day').toDate() : moment(start).endOf('day').toDate();
+
+        // 4. Check conflicting active appointments in database
         const activeAppointments = await Appointment.find({
-            wardId,
-            status: { $in: ['Confirmed', 'In-Progress', 'Admitted', 'Pending'] },
+            bedId: { $in: beds.map(b => b._id) },
+            status: { $in: ['Confirmed', 'In-Progress', 'Clinic-Pending', 'Discharge-Pending'] },
             $or: [
-                { startDate: { $lte: end }, endDate: { $gte: start } } // Overlapping stay dates
+                { startDate: { $lte: end }, endDate: { $gte: start } }
             ]
         }).select('bedId bedNumber bookingId status').lean();
 
         const occupiedBedIds = new Set(activeAppointments.map(a => a.bedId?.toString()).filter(Boolean));
         const occupiedBedNumbers = new Set(activeAppointments.map(a => a.bedNumber).filter(Boolean));
 
-        // 🛡️ Map each bed with real-time status
-        const bedsList = (ward.beds || []).map(bed => {
+        // 5. Map each bed with real-time availability flags
+        const bedsList = beds.map(bed => {
             const isBookedById = bed._id && occupiedBedIds.has(bed._id.toString());
             const isBookedByNum = bed.bedNumber && occupiedBedNumbers.has(bed.bedNumber);
-            const isManuallyOccupied = bed.status === 'Occupied' || bed.status === 'Reserved' || bed.isOccupied === true;
+            const isManuallyOccupied = bed.status === 'Occupied' || bed.status === 'Reserved' || bed.status === 'Maintenance';
 
             const isOccupied = isBookedById || isBookedByNum || isManuallyOccupied;
 
@@ -176,25 +186,33 @@ const getBedsInClinicWard = async (req, res) => {
                 _id: bed._id,
                 bedId: bed._id,
                 bedNumber: bed.bedNumber,
-                dailyCharge: bed.dailyCharge || ward.pricePerDay || 600,
-                status: isOccupied ? 'Occupied' : 'Available',  // 👈 Frontend matches: 'Occupied' (Grey) / 'Available' (Green)
+                pricePerDay: bed.pricePerDay || ward.pricePerDay || 600,
+                dailyCharge: bed.pricePerDay || ward.pricePerDay || 600,
+                status: isOccupied ? (bed.status === 'Maintenance' ? 'Maintenance' : 'Occupied') : 'Available',
                 isAvailable: !isOccupied,
                 isOccupied: isOccupied
             };
         });
 
+        // 🎯 6. Response wrapped inside 'data' for Frontend compatibility
         res.json({
             success: true,
-            wardId: ward._id,
-            wardName: ward.wardName,
-            wardType: ward.wardType,
-            pricePerDay: ward.pricePerDay || 600,
-            availableBedsCount: bedsList.filter(b => b.isAvailable).length,
-            totalBedsCount: bedsList.length,
-            beds: bedsList
+            data: {
+                _id: ward._id,
+                wardId: ward._id,
+                name: ward.name,
+                wardName: ward.name,
+                type: ward.type,
+                wardType: ward.type,
+                pricePerDay: ward.pricePerDay || 600,
+                availableBedsCount: bedsList.filter(b => b.isAvailable).length,
+                totalBedsCount: bedsList.length,
+                beds: bedsList
+            }
         });
 
     } catch (error) {
+        console.error("Get Beds in Ward Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };

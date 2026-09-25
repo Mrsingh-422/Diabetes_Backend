@@ -3,7 +3,7 @@ const Admin = require('../models/Admin');
 const User = require('../models/User');
 const Doctor = require('../models/Doctor');
 const Clinic = require('../models/Clinic');
-const Ambulance = require('../models/Ambulance'); 
+const Ambulance = require('../models/Ambulance');
 const Lab = require('../models/Lab');
 const Pharmacy = require('../models/Pharmacy');
 const Food = require('../models/Food');
@@ -24,7 +24,7 @@ const protect = (modelType) => async (req, res, next) => {
             const decoded = jwt.verify(token, process.env.JWT_SECRET, verifyOptions);
 
             let user;
-            
+
             // FIX: Normalize modelType to single string if passed as an array (for role matching)
             let activeModelType;
             if (Array.isArray(modelType)) {
@@ -46,17 +46,19 @@ const protect = (modelType) => async (req, res, next) => {
                 case 'clinic-doctor':
                     user = await Doctor.findById(decoded.id);
                     break;
-                case 'clinic': 
+                case 'clinic':
                     user = await Clinic.findById(decoded.id);
                     break;
-                    case 'ambulance':
-                        case 'clinic-ambulance':
-                            user = await Ambulance.findById(decoded.id);
-                            break;
+                case 'ambulance':
+                case 'clinic-ambulance':
+                    user = await Ambulance.findById(decoded.id);
+                    break;
                 case 'lab':
+                case 'clinic-lab': //  Added
                     user = await Lab.findById(decoded.id);
                     break;
                 case 'pharmacy':
+                case 'clinic-pharmacy': //  Added
                     user = await Pharmacy.findById(decoded.id);
                     break;
                 case 'food':
@@ -66,9 +68,9 @@ const protect = (modelType) => async (req, res, next) => {
                     user = await Driver.findById(decoded.id);
                     break;
                 case 'provider':
-                    user = await Lab.findById(decoded.id) || 
-                           await Pharmacy.findById(decoded.id) || 
-                           await Food.findById(decoded.id);
+                    user = await Lab.findById(decoded.id) ||
+                        await Pharmacy.findById(decoded.id) ||
+                        await Food.findById(decoded.id);
                     break;
 
                 default:
@@ -82,7 +84,7 @@ const protect = (modelType) => async (req, res, next) => {
                 return res.status(403).json({ message: 'Account is deactivated' });
             }
 
-            req.user = user; 
+            req.user = user;
             next();
         } catch (error) {
             console.error("Auth Error:", error.message);
@@ -97,47 +99,47 @@ const protect = (modelType) => async (req, res, next) => {
 // const checkRoleAccess = (tabId) => {
 //     return async (req, res, next) => {
 //         try {
-           
+
 //             if (req.user.role === 'superadmin') return next();
- 
-       
+
+
 //             const Tab = require('../models/Tab');
 //             const globalTab = await Tab.findOne({ tabId: Number(tabId), isActive: true });
 //             if (!globalTab) return res.status(403).json({ message: "This module is temporarily disabled by Admin" });
- 
-       
+
+
 //             const roleTypes = req.user.roleType;
-           
-       
+
+
 //             if (!roleTypes || !Array.isArray(roleTypes) || roleTypes.length === 0) {
 //                 return res.status(403).json({ message: "Access Denied: No Role Assigned" });
 //             }
- 
-           
+
+
 //             let allAllowedTabs = [];
 //             roleTypes.forEach(role => {
 //                 if (role && role.tabIds) {
 //                     allAllowedTabs.push(...role.tabIds);
 //                 }
 //             });
- 
-       
+
+
 //             const hasAccess = allAllowedTabs.includes(Number(tabId));
-           
+
 //             if (!hasAccess) {
 //                 return res.status(403).json({
 //                     success: false,
 //                     message: "Access Denied: You do not have permission for this module."
 //                 });
 //             }
-           
+
 //             next(); // Access Granted!
 //         } catch (error) {
 //             res.status(500).json({ message: error.message });
 //         }
 //     };
 // };
- 
+
 const checkRoleAccess = (tabId) => {
     return async (req, res, next) => {
         try {
@@ -145,12 +147,12 @@ const checkRoleAccess = (tabId) => {
             if (req.user.role === 'superadmin') return next();
 
             // 2. Global active check
-            const Tab = require('../models/Tab'); 
+            const Tab = require('../models/Tab');
             const globalTab = await Tab.findOne({ tabId: Number(tabId), isActive: true });
             if (!globalTab) return res.status(403).json({ message: "This module is temporarily disabled by Admin" });
 
             const roleTypeData = req.user.roleType;
-            
+
             if (!roleTypeData) {
                 return res.status(403).json({ message: "Access Denied: No Role Assigned" });
             }
@@ -172,17 +174,17 @@ const checkRoleAccess = (tabId) => {
 
             // Check access
             const hasAccess = allAllowedTabs.includes(Number(tabId));
-            
+
             if (!hasAccess) {
-                return res.status(403).json({ 
-                    success: false, 
-                    message: "Access Denied: You do not have permission for this module." 
+                return res.status(403).json({
+                    success: false,
+                    message: "Access Denied: You do not have permission for this module."
                 });
             }
-            
+
             next(); // Access Granted!
-        } catch (error) { 
-            res.status(500).json({ message: error.message }); 
+        } catch (error) {
+            res.status(500).json({ message: error.message });
         }
     };
 };
@@ -200,7 +202,7 @@ const getLocationFilter = (req) => {
     if (access.country) filter.country = access.country;
     if (access.state) filter.state = access.state;
     if (access.city) filter.city = access.city;
-    
+
     return filter;
 };
 

@@ -2,7 +2,7 @@
 
 const Lab = require('../../models/Lab');
 const Pharmacy = require('../../models/Pharmacy');
-const Food = require('../../models/Food'); // 🚀 Imported Food instead of Nurse
+const Food = require('../../models/Food');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto'); 
@@ -15,7 +15,7 @@ const generateToken = (id, role) => {
     return jwt.sign({ id, role }, process.env.JWT_SECRET, { expiresIn: expiry });
 };
 
-// Helper: Category to Model Mapping (Nurse replaced with Food)
+// Helper: Category to Model Mapping
 const getModelByCategory = (category) => {
     const map = { 'Lab': Lab, 'Pharmacy': Pharmacy, 'Food': Food };
     return map[category];
@@ -31,7 +31,7 @@ const checkGlobalExists = async (query) => {
     return false;
 };
 
-// --- 1. REGISTER PROVIDER (Unified API) ---
+// --- 1. REGISTER PROVIDER (Standalone - Not Clinic) ---
 const registerProvider = async (req, res) => {
     try {
         const { name, email, phone, password, category, country, state, city } = req.body;
@@ -52,6 +52,11 @@ const registerProvider = async (req, res) => {
             category,
             role: category, 
             country, state, city,
+            
+            // 🔴 STANDALONE MARKERS
+            clinicId: null,        // 👈 Explicitly null
+            isClinic: false,       // 👈 Explicitly false
+
             profileStatus: 'Incomplete'
         });
 
@@ -197,106 +202,120 @@ const toggleProviderOnlineStatus = async (req, res) => {
 const uploadLabDocs = async (req, res) => {
     try {
         const labId = req.user.id;
-        const { documentState, issuingAuthority, gstNumber, experience, drugLicenseType, about } = req.body;
+        const { documentState, issuingAuthority, gstNumber, experience, drugLicenseType, nablNumber, about } = req.body;
         const files = req.files;
 
         const existingLab = await Lab.findById(labId);
         if (!existingLab) return res.status(404).json({ success: false, message: "Lab not found." });
 
-        // 🚨 Fixed: Mapped files path using f.filename to bypass public folder and backslashes
         const documentsObj = {
-            documentState,
-            issuingAuthority,
-            gstNumber,
-            experience,
-            drugLicenseType,
-            labImages: files?.labImages ? files.labImages.map(f => `/uploads/labs/${f.filename}`) : [],
-            labCertificates: files?.labCertificates ? files.labCertificates.map(f => `/uploads/labs/${f.filename}`) : [],
-            labLicenses: files?.labLicenses ? files.labLicenses.map(f => `/uploads/labs/${f.filename}`) : [],
-            gstCertificates: files?.gstCertificates ? files.gstCertificates.map(f => `/uploads/labs/${f.filename}`) : [],
-            drugLicenses: files?.drugLicenses ? files.drugLicenses.map(f => `/uploads/labs/${f.filename}`) : [],
-            otherCertificates: files?.otherCertificates ? files.otherCertificates.map(f => `/uploads/labs/${f.filename}`) : []
+            documentState: documentState || existingLab.documents?.documentState,
+            issuingAuthority: issuingAuthority || existingLab.documents?.issuingAuthority,
+            gstNumber: gstNumber || existingLab.documents?.gstNumber,
+            experience: experience || existingLab.documents?.experience,
+            nablNumber: nablNumber || existingLab.documents?.nablNumber || "",
+            drugLicenseType: drugLicenseType || existingLab.documents?.drugLicenseType || 'None',
+            
+            labImages: files?.labImages ? files.labImages.map(f => `/uploads/labs/${f.filename}`) : (existingLab.documents?.labImages || []),
+            labCertificates: files?.labCertificates ? files.labCertificates.map(f => `/uploads/labs/${f.filename}`) : (existingLab.documents?.labCertificates || []),
+            labLicenses: files?.labLicenses ? files.labLicenses.map(f => `/uploads/labs/${f.filename}`) : (existingLab.documents?.labLicenses || []),
+            gstCertificates: files?.gstCertificates ? files.gstCertificates.map(f => `/uploads/labs/${f.filename}`) : (existingLab.documents?.gstCertificates || []),
+            drugLicenses: files?.drugLicenses ? files.drugLicenses.map(f => `/uploads/labs/${f.filename}`) : (existingLab.documents?.drugLicenses || []),
+            otherCertificates: files?.otherCertificates ? files.otherCertificates.map(f => `/uploads/labs/${f.filename}`) : (existingLab.documents?.otherCertificates || [])
         };
 
         if (files?.profileImage && existingLab.profileImage) {
             deleteFile(existingLab.profileImage);
         }
-
-        if (existingLab.documents) {
-            const documentFields = ['labImages', 'labCertificates', 'labLicenses', 'gstCertificates', 'drugLicenses', 'otherCertificates'];
-            documentFields.forEach(field => {
-                const oldFileList = existingLab.documents[field];
-                if (Array.isArray(oldFileList)) {
-                    oldFileList.forEach(filePath => { if (filePath) deleteFile(filePath); });
-                }
-            });
+        if (files?.signatureImage && existingLab.signatureImage) {
+            deleteFile(existingLab.signatureImage);
         }
 
         const updatedLab = await Lab.findByIdAndUpdate(
             labId, 
             { 
                 $set: { 
-                    about,
+                    about: about !== undefined ? about : existingLab.about,
                     profileStatus: 'Pending',
                     rejectionReason: null,
                     documents: documentsObj,
-                    ...(files?.profileImage && { profileImage: `/uploads/labs/${files.profileImage[0].filename}` })
+                    ...(files?.profileImage && { profileImage: `/uploads/labs/${files.profileImage[0].filename}` }),
+                    ...(files?.signatureImage && { signatureImage: `/uploads/labs/${files.signatureImage[0].filename}` })
                 } 
             }, 
             { new: true, runValidators: true }
         );
 
-        res.json({ success: true, message: "Documents uploaded.", data: updatedLab });
+        res.json({ success: true, message: "Documents uploaded successfully.", data: updatedLab });
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
 };
 
-// --- 5. UPLOAD DOCS: PHARMACY ---
+// --- 5. UPLOAD DOCS: PHARMACY (With New Fields) ---
 const uploadPharmacyDocs = async (req, res) => {
     try {
         const pharmacyId = req.user.id;
-        const { documentState, issuingAuthority, gstNumber, drugLicenseType, about, isHomeDeliveryAvailable, is24x7 } = req.body;
+        const { 
+            documentState, 
+            issuingAuthority, 
+            gstNumber, 
+            drugLicenseType, 
+            about, 
+            isHomeDeliveryAvailable, 
+            is24x7,
+            // 🔴 NEW PHARMACY LEGAL FIELDS
+            cinNumber,
+            tanNumber,
+            panNumber,
+            drugLicenseNumber,
+            foodLicenseNumber
+        } = req.body;
+        
         const files = req.files;
 
         const existingPharmacy = await Pharmacy.findById(pharmacyId);
         if (!existingPharmacy) return res.status(404).json({ success: false, message: "Pharmacy not found." });
 
-        // 🚨 Fixed: Mapped files path using f.filename to bypass public folder and backslashes
         const documentsObj = {
-            documentState,
-            issuingAuthority,
-            gstNumber,
-            drugLicenseType,
-            pharmacyImages: files?.pharmacyImages ? files.pharmacyImages.map(f => `/uploads/pharmacies/${f.filename}`) : [],
-            pharmacyCertificates: files?.pharmacyCertificates ? files.pharmacyCertificates.map(f => `/uploads/pharmacies/${f.filename}`) : [],
-            pharmacyLicenses: files?.pharmacyLicenses ? files.pharmacyLicenses.map(f => `/uploads/pharmacies/${f.filename}`) : [],
-            gstCertificates: files?.gstCertificates ? files.gstCertificates.map(f => `/uploads/pharmacies/${f.filename}`) : [],
-            drugLicenses: files?.drugLicenses ? files.drugLicenses.map(f => `/uploads/pharmacies/${f.filename}`) : [],
-            otherCertificates: files?.otherCertificates ? files.otherCertificates.map(f => `/uploads/pharmacies/${f.filename}`) : []
+            documentState: documentState || existingPharmacy.documents?.documentState,
+            issuingAuthority: issuingAuthority || existingPharmacy.documents?.issuingAuthority,
+            gstNumber: gstNumber || existingPharmacy.documents?.gstNumber || "",
+            drugLicenseType: drugLicenseType || existingPharmacy.documents?.drugLicenseType || 'Retail',
+            
+            // New legal fields mapped
+            cinNumber: cinNumber !== undefined ? cinNumber : (existingPharmacy.documents?.cinNumber || ""),
+            tanNumber: tanNumber !== undefined ? tanNumber : (existingPharmacy.documents?.tanNumber || ""),
+            panNumber: panNumber !== undefined ? panNumber : (existingPharmacy.documents?.panNumber || ""),
+            drugLicenseNumber: drugLicenseNumber !== undefined ? drugLicenseNumber : (existingPharmacy.documents?.drugLicenseNumber || ""),
+            foodLicenseNumber: foodLicenseNumber !== undefined ? foodLicenseNumber : (existingPharmacy.documents?.foodLicenseNumber || ""),
+            
+            signatureImage: files?.signatureImage 
+                ? `/uploads/pharmacies/${files.signatureImage[0].filename}` 
+                : (existingPharmacy.documents?.signatureImage || null),
+
+            pharmacyImages: files?.pharmacyImages ? files.pharmacyImages.map(f => `/uploads/pharmacies/${f.filename}`) : (existingPharmacy.documents?.pharmacyImages || []),
+            pharmacyCertificates: files?.pharmacyCertificates ? files.pharmacyCertificates.map(f => `/uploads/pharmacies/${f.filename}`) : (existingPharmacy.documents?.pharmacyCertificates || []),
+            pharmacyLicenses: files?.pharmacyLicenses ? files.pharmacyLicenses.map(f => `/uploads/pharmacies/${f.filename}`) : (existingPharmacy.documents?.pharmacyLicenses || []),
+            gstCertificates: files?.gstCertificates ? files.gstCertificates.map(f => `/uploads/pharmacies/${f.filename}`) : (existingPharmacy.documents?.gstCertificates || []),
+            drugLicenses: files?.drugLicenses ? files.drugLicenses.map(f => `/uploads/pharmacies/${f.filename}`) : (existingPharmacy.documents?.drugLicenses || []),
+            otherCertificates: files?.otherCertificates ? files.otherCertificates.map(f => `/uploads/pharmacies/${f.filename}`) : (existingPharmacy.documents?.otherCertificates || [])
         };
 
         if (files?.profileImage && existingPharmacy.profileImage) {
             deleteFile(existingPharmacy.profileImage);
         }
-
-        if (existingPharmacy.documents) {
-            const documentFields = ['pharmacyImages', 'pharmacyCertificates', 'pharmacyLicenses', 'gstCertificates', 'drugLicenses', 'otherCertificates'];
-            documentFields.forEach(field => {
-                const oldFileList = existingPharmacy.documents[field];
-                if (Array.isArray(oldFileList)) {
-                    oldFileList.forEach(filePath => { if (filePath) deleteFile(filePath); });
-                }
-            });
+        if (files?.signatureImage && existingPharmacy.documents?.signatureImage) {
+            deleteFile(existingPharmacy.documents.signatureImage);
         }
 
         const updatedPharmacy = await Pharmacy.findByIdAndUpdate(
             pharmacyId, 
             { 
                 $set: { 
-                    about,
-                    isHomeDeliveryAvailable,
-                    is24x7,
+                    about: about !== undefined ? about : existingPharmacy.about,
+                    isHomeDeliveryAvailable: isHomeDeliveryAvailable !== undefined ? isHomeDeliveryAvailable : existingPharmacy.isHomeDeliveryAvailable,
+                    is24x7: is24x7 !== undefined ? is24x7 : existingPharmacy.is24x7,
                     profileStatus: 'Pending',
                     rejectionReason: null,
                     documents: documentsObj,
@@ -306,7 +325,7 @@ const uploadPharmacyDocs = async (req, res) => {
             { new: true, runValidators: true }
         );
 
-        res.json({ success: true, message: "Pharmacy documents submitted.", data: updatedPharmacy });
+        res.json({ success: true, message: "Pharmacy documents submitted successfully.", data: updatedPharmacy });
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
@@ -322,7 +341,6 @@ const uploadFoodDocs = async (req, res) => {
         const existingFood = await Food.findById(foodId);
         if (!existingFood) return res.status(404).json({ success: false, message: "Food partner not found." });
 
-        // Maintain old values if new files/data are not provided
         const documentsObj = {
             documentState: documentState !== undefined ? documentState : existingFood.documents?.documentState,
             issuingAuthority: issuingAuthority !== undefined ? issuingAuthority : existingFood.documents?.issuingAuthority,
@@ -346,22 +364,8 @@ const uploadFoodDocs = async (req, res) => {
                 : (existingFood.documents?.otherCertificates || [])
         };
 
-        // Delete old profile image if a new one is uploaded
         if (files?.profileImage && existingFood.profileImage) {
             deleteFile(existingFood.profileImage);
-        }
-
-        // Only delete old certificate files if new files are actively uploaded for that specific array
-        if (existingFood.documents) {
-            const documentFields = ['kitchenImages', 'fssaiCertificates', 'gstCertificates', 'otherCertificates'];
-            documentFields.forEach(field => {
-                if (files && files[field]) { // Check if new files exist for this field
-                    const oldFileList = existingFood.documents[field];
-                    if (Array.isArray(oldFileList)) {
-                        oldFileList.forEach(filePath => { if (filePath) deleteFile(filePath); });
-                    }
-                }
-            });
         }
 
         const updatedFood = await Food.findByIdAndUpdate(
@@ -461,7 +465,7 @@ module.exports = {
     toggleProviderOnlineStatus,
     uploadLabDocs, 
     uploadPharmacyDocs, 
-    uploadFoodDocs, // 🚀 Updated
+    uploadFoodDocs,
     forgotPasswordProvider, 
     resetPasswordProvider, 
     getProviderProfile 

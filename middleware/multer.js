@@ -132,6 +132,7 @@ const pharmacyDocUploads = multer({
     { name: 'profileImage', maxCount: 1 },
     { name: 'pharmacyImages', maxCount: 10 },
     { name: 'pharmacyCertificates', maxCount: 10 },
+    { name: 'signatureImage', maxCount: 1 }, 
     { name: 'pharmacyLicenses', maxCount: 10 },
     { name: 'gstCertificates', maxCount: 5 },
     { name: 'drugLicenses', maxCount: 5 },

@@ -1,48 +1,73 @@
-// models/Pharmacy.js (Pharmacy Model)
+// models/Pharmacy.js
 const mongoose = require('mongoose');
 
 const pharmacySchema = new mongoose.Schema({
+    // 🏥 CLINIC ATTACHMENT FIELDS
+    clinicId: { 
+        type: mongoose.Schema.Types.ObjectId, 
+        ref: 'Clinic', 
+        default: null,
+        index: true 
+    },
+    isClinic: { 
+        type: Boolean, 
+        default: false,
+        index: true 
+    },
+
     name: { type: String, required: true },
     email: { type: String, unique: true, sparse: true },
     phone: { type: String, unique: true, sparse: true },
     password: { type: String, required: true, select: false },
-    role: { type: String, enum: ['Pharmacy'], default: 'Pharmacy', immutable: true },
-    profileStatus: { type: String, enum: ['Incomplete', 'Pending', 'Approved', 'Rejected'], default: 'Incomplete' },
+    
+    // Role updated to support both Standalone & Clinic Pharmacy
+    role: { 
+        type: String, 
+        enum: ['Pharmacy', 'clinic-pharmacy'], 
+        default: 'Pharmacy' 
+    },
+    
+    profileStatus: { 
+        type: String, 
+        enum: ['Incomplete', 'Pending', 'Approved', 'Rejected'], 
+        default: 'Incomplete' 
+    },
     token: { type: String, default: null },
-    fcmToken: {
-        type: String,
-        default: null
-    },
+    fcmToken: { type: String, default: null },
     isActive: { type: Boolean, default: true },
-    isOnline: {
-        type: Boolean,
-        default: true
-    },
-
+    isOnline: { type: Boolean, default: true },
 
     profileImage: { type: String, default: null },
 
     // Location Details
-    country: { type: String, default: null },
+    country: { type: String, default: 'India' },
     state: { type: String, default: null },
     city: { type: String, default: null },
     address: { type: String, default: null },
     location: {
-        lat: Number,
-        lng: Number
+        lat: { type: Number, default: 0 },
+        lng: { type: Number, default: 0 }
     },
-    documents: {
-        pharmacyImages: [{ type: String }],       // Figma: Pharmacy Image
-        pharmacyCertificates: [{ type: String }], // Figma: Pharmacy Certificate Image
-        pharmacyLicenses: [{ type: String }],     // Figma: Pharmacy License Certificate
-        gstCertificates: [{ type: String }],      // Figma: GST Certificate (Optional)
-        drugLicenses: [{ type: String }],        // Figma: Drug License
-        otherCertificates: [{ type: String }],   // Figma: Other Certificate (Optional)
 
-        documentState: { type: String },          // Figma: State
-        issuingAuthority: { type: String },       // Figma: Issuing Authority Name
-        gstNumber: { type: String },              // Figma: GST Certificate Number
-        drugLicenseType: {                        // Figma: Drug License Type
+    documents: {
+        pharmacyImages: [{ type: String }],
+        pharmacyCertificates: [{ type: String }],
+        pharmacyLicenses: [{ type: String }],
+        gstCertificates: [{ type: String }],
+        drugLicenses: [{ type: String }],
+        otherCertificates: [{ type: String }],
+
+        cinNumber: { type: String, default: "" },
+        gstNumber: { type: String, default: "" },
+        tanNumber: { type: String, default: "" },
+        panNumber: { type: String, default: "" },
+        drugLicenseNumber: { type: String, default: "" },
+        foodLicenseNumber: { type: String, default: "" },
+        signatureImage: { type: String, default: null },
+
+        documentState: { type: String },
+        issuingAuthority: { type: String },
+        drugLicenseType: {
             type: String,
             enum: ['Retail', 'Wholesale', 'Restricted', 'Blood Bank', 'None'],
             default: 'Retail'
@@ -50,17 +75,12 @@ const pharmacySchema = new mongoose.Schema({
     },
 
     alternatePhone: { type: String, default: null },
-
     rejectionReason: { type: String, default: null },
 
-    // Pharmacy Specific (Potential future fields)
     isHomeDeliveryAvailable: { type: Boolean, default: true },
     is24x7: { type: Boolean, default: false },
     about: { type: String, default: "" },
-    location: {
-        lat: { type: Number, default: 0 },
-        lng: { type: Number, default: 0 }
-    },
+
     bankDetails: {
         accountType: { type: String, enum: ['Savings', 'Current'], default: 'Savings' },
         bankName: { type: String, default: "" },
@@ -70,11 +90,6 @@ const pharmacySchema = new mongoose.Schema({
         upiId: { type: String, default: "" },
         isVerified: { type: Boolean, default: false }
     }
-
-
-
 }, { timestamps: true });
-pharmacySchema.index({ location: "2dsphere" });
-
 
 module.exports = mongoose.model('Pharmacy', pharmacySchema);
