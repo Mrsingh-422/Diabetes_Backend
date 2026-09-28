@@ -5,8 +5,8 @@ const Pharmacy = require('../../models/Pharmacy');
 const Food = require('../../models/Food');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const crypto = require('crypto'); 
-const sendEmailOTP = require('../../utils/emailService'); 
+const crypto = require('crypto');
+const sendEmailOTP = require('../../utils/emailService');
 const { deleteFile } = require('../../utils/fileHandler');
 
 // Helper: Token Generation
@@ -17,7 +17,11 @@ const generateToken = (id, role) => {
 
 // Helper: Category to Model Mapping
 const getModelByCategory = (category) => {
-    const map = { 'Lab': Lab, 'Pharmacy': Pharmacy, 'Food': Food };
+    const map = {
+        'Lab': Lab, 'Pharmacy': Pharmacy, 'Food': Food,
+        // 'clinic-pharmacy': Pharmacy,
+        // 'clinic-lab': Lab
+    };
     return map[category];
 };
 
@@ -45,14 +49,14 @@ const registerProvider = async (req, res) => {
         const hashedPassword = await bcrypt.hash(password, 10);
 
         const newProvider = await Model.create({
-            name, 
-            email: email?.toLowerCase(), 
+            name,
+            email: email?.toLowerCase(),
             phone,
             password: hashedPassword,
             category,
-            role: category, 
+            role: category,
             country, state, city,
-            
+
             // 🔴 STANDALONE MARKERS
             clinicId: null,        // 👈 Explicitly null
             isClinic: false,       // 👈 Explicitly false
@@ -64,12 +68,12 @@ const registerProvider = async (req, res) => {
         newProvider.token = token;
         await newProvider.save();
 
-        res.status(201).json({ 
-            success: true, 
-            message: 'Registered successfully. Please login to upload documents.', 
+        res.status(201).json({
+            success: true,
+            message: 'Registered successfully. Please login to upload documents.',
             token,
             category,
-            profileStatus: 'Incomplete' 
+            profileStatus: 'Incomplete'
         });
     } catch (error) {
         res.status(500).json({ message: error.message });
@@ -80,7 +84,7 @@ const registerProvider = async (req, res) => {
 const loginProvider = async (req, res) => {
     try {
         const { email, phone, password, category } = req.body;
-        
+
         const Model = getModelByCategory(category);
         if (!Model) return res.status(400).json({ message: "Specify category (Lab/Pharmacy/Food)" });
 
@@ -92,51 +96,51 @@ const loginProvider = async (req, res) => {
         }
 
         if (provider.isActive === false) {
-            return res.status(403).json({ 
-                success: false, 
-                message: `Access Denied: Your ${category} partner account is inactive. Please contact support.` 
+            return res.status(403).json({
+                success: false,
+                message: `Access Denied: Your ${category} partner account is inactive. Please contact support.`
             });
         }
 
         if (provider.profileStatus === 'Pending') {
-            return res.status(200).json({ 
-                success: true, 
+            return res.status(200).json({
+                success: true,
                 fullAccess: false,
                 profileStatus: 'Pending',
-                message: 'Your profile is under review. Please wait for Admin approval.' 
+                message: 'Your profile is under review. Please wait for Admin approval.'
             });
         }
 
         if (provider.profileStatus === 'Incomplete') {
             const token = provider.token || generateToken(provider._id, category);
-            
+
             if (!provider.token) {
                 await Model.findByIdAndUpdate(provider._id, { $set: { token: token } });
             }
 
-            return res.status(200).json({ 
-                success: true, 
-                fullAccess: false, 
-                token, 
+            return res.status(200).json({
+                success: true,
+                fullAccess: false,
+                token,
                 profileStatus: 'Incomplete',
-                message: 'Profile incomplete. Please upload documents to proceed.' 
+                message: 'Profile incomplete. Please upload documents to proceed.'
             });
         }
 
         if (provider.profileStatus === 'Rejected') {
             const token = provider.token || generateToken(provider._id, category);
-            
+
             if (!provider.token) {
                 await Model.findByIdAndUpdate(provider._id, { $set: { token: token } });
             }
 
-            return res.status(200).json({ 
-                success: true, 
-                fullAccess: false, 
-                token, 
+            return res.status(200).json({
+                success: true,
+                fullAccess: false,
+                token,
                 profileStatus: 'Rejected',
                 rejectionReason: provider.rejectionReason,
-                message: `Application Rejected: ${provider.rejectionReason}. Please re-upload documents.` 
+                message: `Application Rejected: ${provider.rejectionReason}. Please re-upload documents.`
             });
         }
 
@@ -153,13 +157,19 @@ const loginProvider = async (req, res) => {
             await Model.findByIdAndUpdate(provider._id, { $set: { token: token } });
         }
 
-        provider.password = undefined;
-        res.json({ 
-            success: true, 
-            fullAccess: true, 
-            token, 
-            profileStatus: 'Approved', 
-            data: provider 
+        // 🛡️ Data mein isClinic aur clinicId check show karna
+        const providerData = provider.toObject();
+        delete providerData.password;
+
+        providerData.isClinic = providerData.isClinic || false;
+        providerData.clinicId = providerData.clinicId || null;
+
+        res.json({
+            success: true,
+            fullAccess: true,
+            token,
+            profileStatus: 'Approved',
+            data: providerData
         });
 
     } catch (error) {
@@ -172,7 +182,7 @@ const toggleProviderOnlineStatus = async (req, res) => {
     try {
         const { isOnline } = req.body;
         const providerId = req.user.id;
-        const role = req.user.role; 
+        const role = req.user.role;
 
         if (isOnline === undefined) {
             return res.status(400).json({ success: false, message: "isOnline status value is required." });
@@ -215,7 +225,7 @@ const uploadLabDocs = async (req, res) => {
             experience: experience || existingLab.documents?.experience,
             nablNumber: nablNumber || existingLab.documents?.nablNumber || "",
             drugLicenseType: drugLicenseType || existingLab.documents?.drugLicenseType || 'None',
-            
+
             labImages: files?.labImages ? files.labImages.map(f => `/uploads/labs/${f.filename}`) : (existingLab.documents?.labImages || []),
             labCertificates: files?.labCertificates ? files.labCertificates.map(f => `/uploads/labs/${f.filename}`) : (existingLab.documents?.labCertificates || []),
             labLicenses: files?.labLicenses ? files.labLicenses.map(f => `/uploads/labs/${f.filename}`) : (existingLab.documents?.labLicenses || []),
@@ -232,17 +242,17 @@ const uploadLabDocs = async (req, res) => {
         }
 
         const updatedLab = await Lab.findByIdAndUpdate(
-            labId, 
-            { 
-                $set: { 
+            labId,
+            {
+                $set: {
                     about: about !== undefined ? about : existingLab.about,
                     profileStatus: 'Pending',
                     rejectionReason: null,
                     documents: documentsObj,
                     ...(files?.profileImage && { profileImage: `/uploads/labs/${files.profileImage[0].filename}` }),
                     ...(files?.signatureImage && { signatureImage: `/uploads/labs/${files.signatureImage[0].filename}` })
-                } 
-            }, 
+                }
+            },
             { new: true, runValidators: true }
         );
 
@@ -256,13 +266,13 @@ const uploadLabDocs = async (req, res) => {
 const uploadPharmacyDocs = async (req, res) => {
     try {
         const pharmacyId = req.user.id;
-        const { 
-            documentState, 
-            issuingAuthority, 
-            gstNumber, 
-            drugLicenseType, 
-            about, 
-            isHomeDeliveryAvailable, 
+        const {
+            documentState,
+            issuingAuthority,
+            gstNumber,
+            drugLicenseType,
+            about,
+            isHomeDeliveryAvailable,
             is24x7,
             // 🔴 NEW PHARMACY LEGAL FIELDS
             cinNumber,
@@ -271,7 +281,7 @@ const uploadPharmacyDocs = async (req, res) => {
             drugLicenseNumber,
             foodLicenseNumber
         } = req.body;
-        
+
         const files = req.files;
 
         const existingPharmacy = await Pharmacy.findById(pharmacyId);
@@ -282,16 +292,16 @@ const uploadPharmacyDocs = async (req, res) => {
             issuingAuthority: issuingAuthority || existingPharmacy.documents?.issuingAuthority,
             gstNumber: gstNumber || existingPharmacy.documents?.gstNumber || "",
             drugLicenseType: drugLicenseType || existingPharmacy.documents?.drugLicenseType || 'Retail',
-            
+
             // New legal fields mapped
             cinNumber: cinNumber !== undefined ? cinNumber : (existingPharmacy.documents?.cinNumber || ""),
             tanNumber: tanNumber !== undefined ? tanNumber : (existingPharmacy.documents?.tanNumber || ""),
             panNumber: panNumber !== undefined ? panNumber : (existingPharmacy.documents?.panNumber || ""),
             drugLicenseNumber: drugLicenseNumber !== undefined ? drugLicenseNumber : (existingPharmacy.documents?.drugLicenseNumber || ""),
             foodLicenseNumber: foodLicenseNumber !== undefined ? foodLicenseNumber : (existingPharmacy.documents?.foodLicenseNumber || ""),
-            
-            signatureImage: files?.signatureImage 
-                ? `/uploads/pharmacies/${files.signatureImage[0].filename}` 
+
+            signatureImage: files?.signatureImage
+                ? `/uploads/pharmacies/${files.signatureImage[0].filename}`
                 : (existingPharmacy.documents?.signatureImage || null),
 
             pharmacyImages: files?.pharmacyImages ? files.pharmacyImages.map(f => `/uploads/pharmacies/${f.filename}`) : (existingPharmacy.documents?.pharmacyImages || []),
@@ -310,9 +320,9 @@ const uploadPharmacyDocs = async (req, res) => {
         }
 
         const updatedPharmacy = await Pharmacy.findByIdAndUpdate(
-            pharmacyId, 
-            { 
-                $set: { 
+            pharmacyId,
+            {
+                $set: {
                     about: about !== undefined ? about : existingPharmacy.about,
                     isHomeDeliveryAvailable: isHomeDeliveryAvailable !== undefined ? isHomeDeliveryAvailable : existingPharmacy.isHomeDeliveryAvailable,
                     is24x7: is24x7 !== undefined ? is24x7 : existingPharmacy.is24x7,
@@ -320,8 +330,8 @@ const uploadPharmacyDocs = async (req, res) => {
                     rejectionReason: null,
                     documents: documentsObj,
                     ...(files?.profileImage && { profileImage: `/uploads/pharmacies/${files.profileImage[0].filename}` })
-                } 
-            }, 
+                }
+            },
             { new: true, runValidators: true }
         );
 
@@ -346,21 +356,21 @@ const uploadFoodDocs = async (req, res) => {
             issuingAuthority: issuingAuthority !== undefined ? issuingAuthority : existingFood.documents?.issuingAuthority,
             gstNumber: gstNumber !== undefined ? gstNumber : existingFood.documents?.gstNumber,
             fssaiNumber: fssaiNumber !== undefined ? fssaiNumber : existingFood.documents?.fssaiNumber,
-            
-            kitchenImages: files?.kitchenImages 
-                ? files.kitchenImages.map(f => `/uploads/foods/${f.filename}`) 
+
+            kitchenImages: files?.kitchenImages
+                ? files.kitchenImages.map(f => `/uploads/foods/${f.filename}`)
                 : (existingFood.documents?.kitchenImages || []),
-            
-            fssaiCertificates: files?.fssaiCertificates 
-                ? files.fssaiCertificates.map(f => `/uploads/foods/${f.filename}`) 
+
+            fssaiCertificates: files?.fssaiCertificates
+                ? files.fssaiCertificates.map(f => `/uploads/foods/${f.filename}`)
                 : (existingFood.documents?.fssaiCertificates || []),
-            
-            gstCertificates: files?.gstCertificates 
-                ? files.gstCertificates.map(f => `/uploads/foods/${f.filename}`) 
+
+            gstCertificates: files?.gstCertificates
+                ? files.gstCertificates.map(f => `/uploads/foods/${f.filename}`)
                 : (existingFood.documents?.gstCertificates || []),
-                
-            otherCertificates: files?.otherCertificates 
-                ? files.otherCertificates.map(f => `/uploads/foods/${f.filename}`) 
+
+            otherCertificates: files?.otherCertificates
+                ? files.otherCertificates.map(f => `/uploads/foods/${f.filename}`)
                 : (existingFood.documents?.otherCertificates || [])
         };
 
@@ -369,16 +379,16 @@ const uploadFoodDocs = async (req, res) => {
         }
 
         const updatedFood = await Food.findByIdAndUpdate(
-            foodId, 
-            { 
-                $set: { 
+            foodId,
+            {
+                $set: {
                     about: about !== undefined ? about : existingFood.about,
                     profileStatus: 'Pending',
                     rejectionReason: null,
-                    documents: documentsObj, 
+                    documents: documentsObj,
                     ...(files?.profileImage && { profileImage: `/uploads/foods/${files.profileImage[0].filename}` })
-                } 
-            }, 
+                }
+            },
             { new: true, runValidators: true }
         );
 
@@ -445,8 +455,8 @@ const resetPasswordProvider = async (req, res) => {
 // --- GET PROVIDER PROFILE ---
 const getProviderProfile = async (req, res) => {
     try {
-        const { id, role } = req.user; 
-        const Model = getModelByCategory(role); 
+        const { id, role } = req.user;
+        const Model = getModelByCategory(role);
 
         if (!Model) return res.status(400).json({ message: "Invalid Provider Role" });
 
@@ -459,14 +469,14 @@ const getProviderProfile = async (req, res) => {
     }
 };
 
-module.exports = { 
-    registerProvider, 
-    loginProvider, 
+module.exports = {
+    registerProvider,
+    loginProvider,
     toggleProviderOnlineStatus,
-    uploadLabDocs, 
-    uploadPharmacyDocs, 
+    uploadLabDocs,
+    uploadPharmacyDocs,
     uploadFoodDocs,
-    forgotPasswordProvider, 
-    resetPasswordProvider, 
-    getProviderProfile 
+    forgotPasswordProvider,
+    resetPasswordProvider,
+    getProviderProfile
 };

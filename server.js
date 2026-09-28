@@ -160,6 +160,8 @@ app.use('/api/auth/admin', require('./routes/admin/authAdmin'));
 app.use('/api/admin', require('./routes/admin/user/insruranceAdd'));
 app.use('/api/admin/approval', require('./routes/admin/approvalRoute'));
 app.use('/admin/doctor-data', require('./routes/admin/others/doctorDataRoute'));
+app.use('/api/admin/doctor-appointments', require('./routes/admin/Doctor/adminDoctorAppointmentsRoute'));
+
 app.use('/admin/banners', require('./routes/admin/others/BannerRoute')); // Banner Management Route
 app.use('/admin/emergency-contacts', require('./routes/admin/others/EmergencyContactRoute'));
 app.use('/admin/articles', require('./routes/admin/others/AdminArticleRoute'));
@@ -286,6 +288,7 @@ app.use('/doctor/video-call', require('./routes/doctor/VideoCallRoute')); // Doc
 
 app.use('/api/auth/clinic', require('./routes/clinic/authClinicRoute')); 
 app.use('/api/admin/clinic/', require('./routes/admin/Clinic/ClinicAdminRoute')); // Clinic Admin Management Route
+app.use('/api/admin/clinic-appointments', require('./routes/admin/Clinic/adminClinicAppointmentsRoute'));
 app.use('/api/clinic/doctors', require('./routes/clinic/clinicDoctorRoute')); // Clinic Doctor Management Route
 app.use('/api/clinic/timings', require('./routes/clinic/clinicTimingRoute'));
 app.use('/api/clinic/wards', require('./routes/clinic/clinicWardBedRoute'));
@@ -295,6 +298,7 @@ app.use('/api/clinic/ambulance', require('./routes/clinic/clinicAmbulanceRoute')
 app.use('/api/clinic/booking', require('./routes/clinic/clinicAppointmentsRoute')); // Clinic Booking Management Route
 app.use('/api/clinic/pharmacy',  require('./routes/clinic/clinicPharmacyRoute')); // Clinic Pharmacy Management Route
 app.use('/api/clinic/lab',  require('./routes/clinic/clinicLabRoute')); // Clinic Pharmacy Management Route
+
 
 
 ////////////////////////////// Food Routes User /////////////////////////////////
