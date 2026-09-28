@@ -1,4 +1,4 @@
-// routes/admin/Clinic/adminClinicAppointmentsRoute.js
+// routes/admin/Clinic/clinicAppointmentsRoute.js
 const express = require('express');
 const router = express.Router();
 const { protect } = require('../../../middleware/authMiddleware');
