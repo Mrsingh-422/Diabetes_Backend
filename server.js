@@ -216,7 +216,7 @@ app.use('/admin/food/drinks', require('./routes/admin/Food/SmoothieDrinkAdminRou
 // =========================== Admin Food Routes End =============================================
 
 // --- Admin Doctor Routes ---
-app.use('/admin/doctor', require('./routes/admin/Doctor/DoctorAdminRoute')); // Doctor Management Route
+app.use('/admin/doctor', require('./routes/admin/Doctor/DoctorAdminRoute')); // Doctor Management 
 app.use('/api/admin/doctor-appointments', require('./routes/admin/Doctor/adminDoctorAppointmentsRoute'));
 
 
