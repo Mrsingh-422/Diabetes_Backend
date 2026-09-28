@@ -226,10 +226,6 @@ app.use('/admin/dashboard', require('./routes/admin/Dashboard/DashboardRoute'));
 app.use('/api/admin/wallet', require('./routes/admin/AdminWalletRoute')); // Wallet Management Route
 
 
-
-
-
-
 /////////////  User Routes /////////////////////////
 app.use('/user/homepage', require('./routes/user/SearchRoutes'));
 
