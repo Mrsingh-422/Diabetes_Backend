@@ -217,7 +217,7 @@ app.use('/admin/food/drinks', require('./routes/admin/Food/SmoothieDrinkAdminRou
 
 // --- Admin Doctor Routes ---
 app.use('/admin/doctor', require('./routes/admin/Doctor/DoctorAdminRoute')); // Doctor Management 
-app.use('/api/admin/doctor-appointments', require('./routes/admin/Doctor/adminDoctorAppointmentsRoute'));
+app.use('/api/admin/doctor-appointments', require('./routes/admin/Doctor/doctorAppointmentsRoute'));
 
 
 // --- Admin Dashboard Routes ---
