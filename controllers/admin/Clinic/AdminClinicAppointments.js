@@ -1,4 +1,4 @@
-// controllers/admin/Clinic/AdminClinicAppointmentsController.js
+// controllers/admin/Clinic/AdminClinicAppointments.js
 const Clinic = require('../../../models/Clinic');
 const Appointment = require('../../../models/Appointment');
 const mongoose = require('mongoose');
