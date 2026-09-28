@@ -160,8 +160,6 @@ app.use('/api/auth/admin', require('./routes/admin/authAdmin'));
 app.use('/api/admin', require('./routes/admin/user/insruranceAdd'));
 app.use('/api/admin/approval', require('./routes/admin/approvalRoute'));
 app.use('/admin/doctor-data', require('./routes/admin/others/doctorDataRoute'));
-app.use('/api/admin/doctor-appointments', require('./routes/admin/Doctor/adminDoctorAppointmentsRoute'));
-
 app.use('/admin/banners', require('./routes/admin/others/BannerRoute')); // Banner Management Route
 app.use('/admin/emergency-contacts', require('./routes/admin/others/EmergencyContactRoute'));
 app.use('/admin/articles', require('./routes/admin/others/AdminArticleRoute'));
@@ -219,6 +217,8 @@ app.use('/admin/food/drinks', require('./routes/admin/Food/SmoothieDrinkAdminRou
 
 // --- Admin Doctor Routes ---
 app.use('/admin/doctor', require('./routes/admin/Doctor/DoctorAdminRoute')); // Doctor Management Route
+app.use('/api/admin/doctor-appointments', require('./routes/admin/Doctor/adminDoctorAppointmentsRoute'));
+
 
 // --- Admin Dashboard Routes ---
 app.use('/admin/dashboard', require('./routes/admin/Dashboard/DashboardRoute')); // Dashboard Management Route
