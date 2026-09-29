@@ -20,7 +20,7 @@ const getModelByCategory = (category) => {
     const map = {
         'Lab': Lab, 'Pharmacy': Pharmacy, 'Food': Food,
         // 'clinic-pharmacy': Pharmacy,
-        // 'clinic-lab': Lab
+        'clinic-lab': Lab
     };
     return map[category];
 };

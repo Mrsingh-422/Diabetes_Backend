@@ -1,7 +1,10 @@
 // controllers/clinic/clinicTimingController.js
 const Clinic = require('../../models/Clinic');
 const Availability = require('../../models/Availability');
+const { generateTimeSlots } = require('../../utils/timeSlotHelper');
 const moment = require('moment');
+const Pharmacy = require('../../models/Pharmacy');
+const Lab = require('../../models/Lab');
 
 // Helper: Calculate Metrics (Considers 24x7 & Shifts)
 const calculateMetrics = (startDay, endDay, morningStart, morningEnd, eveningStart, eveningEnd, holiday, is24x7) => {
@@ -425,9 +428,403 @@ const getAvailableBookingSlots = async (req, res) => {
     }
 };
 
+// ==========================================
+// 1. GET CLINIC PHARMACY TIMINGS & GENERATED SLOTS
+// Endpoint: GET /api/clinic/timings/pharmacy
+// ==========================================
+const getClinicPharmacyTiming = async (req, res) => {
+    try {
+        const clinicId = req.user.id;
+        const pharmacy = await Pharmacy.findOne({ clinicId, isClinic: true })
+            .select('name is24x7 openingTime closeTime holiday');
+
+        if (!pharmacy) {
+            return res.status(404).json({ success: false, message: "No pharmacy registered under this clinic." });
+        }
+
+        // Fetch Availability Slots Configuration
+        const config = await Availability.findOne({ vendorId: pharmacy._id });
+
+        let generatedSlots = [];
+        if (config && !pharmacy.is24x7) {
+            generatedSlots = generateTimeSlots(config);
+        }
+
+        res.json({
+            success: true,
+            data: {
+                pharmacyId: pharmacy._id,
+                name: pharmacy.name,
+                is24x7: Boolean(pharmacy.is24x7),
+                openingTime: pharmacy.openingTime || "09:00 AM",
+                closeTime: pharmacy.closeTime || "09:00 PM",
+                holiday: pharmacy.holiday || "Sunday",
+                displayTiming: pharmacy.is24x7 ? "Open 24x7" : `${pharmacy.openingTime} - ${pharmacy.closeTime}`,
+                config: config || null,
+                totalSlotsCount: generatedSlots.length,
+                generatedSlots
+            }
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// ==========================================
+// 2. SET / UPDATE CLINIC PHARMACY TIMINGS & SLOTS
+// Endpoint: PUT /api/clinic/timings/pharmacy
+// ==========================================
+const updateClinicPharmacyTiming = async (req, res) => {
+    try {
+        const clinicId = req.user.id;
+        const {
+            is24x7,
+            openingTime,
+            closeTime,
+            holiday,
+            slotDuration = 30,
+            maxClientsPerSlot = 0,
+            morningSlots = true,
+            afternoonSlots = true,
+            eveningSlots = true,
+            offDays,
+            blockedDates,
+            premiumSlots
+        } = req.body;
+
+        const pharmacy = await Pharmacy.findOne({ clinicId, isClinic: true });
+        if (!pharmacy) {
+            return res.status(404).json({ success: false, message: "No pharmacy registered under this clinic." });
+        }
+
+        const is24x7Bool = is24x7 === true || is24x7 === 'true';
+
+        // 1. Update Pharmacy Document
+        pharmacy.is24x7 = is24x7Bool;
+        pharmacy.openingTime = is24x7Bool ? "12:00 AM" : (openingTime || pharmacy.openingTime || "09:00 AM");
+        pharmacy.closeTime = is24x7Bool ? "11:59 PM" : (closeTime || pharmacy.closeTime || "09:00 PM");
+        pharmacy.holiday = is24x7Bool ? "None" : (holiday || pharmacy.holiday || "Sunday");
+        await pharmacy.save();
+
+        // 2. Sync / Upsert Availability Slots Engine
+        const availabilityPayload = {
+            vendorId: pharmacy._id,
+            vendorType: 'clinic-pharmacy',
+            clinicId: clinicId,
+            startTime: is24x7Bool ? "00:00" : (req.body.startTime || "09:00"),
+            endTime: is24x7Bool ? "23:59" : (req.body.endTime || "21:00"),
+            slotDuration: Number(slotDuration),
+            maxClientsPerSlot: Number(maxClientsPerSlot),
+            morningSlots: Boolean(morningSlots),
+            afternoonSlots: Boolean(afternoonSlots),
+            eveningSlots: Boolean(eveningSlots),
+            offDays: is24x7Bool ? [] : (offDays || [pharmacy.holiday]),
+            blockedDates: blockedDates || [],
+            premiumSlots: premiumSlots || []
+        };
+
+        const updatedConfig = await Availability.findOneAndUpdate(
+            { vendorId: pharmacy._id },
+            { $set: availabilityPayload },
+            { upsert: true, new: true }
+        );
+
+        let generatedSlots = [];
+        if (!is24x7Bool && updatedConfig) {
+            generatedSlots = generateTimeSlots(updatedConfig);
+        }
+
+        res.json({
+            success: true,
+            message: "Clinic Pharmacy timings and time slots updated successfully.",
+            data: {
+                pharmacyId: pharmacy._id,
+                name: pharmacy.name,
+                is24x7: pharmacy.is24x7,
+                openingTime: pharmacy.openingTime,
+                closeTime: pharmacy.closeTime,
+                holiday: pharmacy.holiday,
+                config: updatedConfig,
+                totalSlotsCount: generatedSlots.length,
+                generatedSlots
+            }
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+// ==========================================
+// 1. GET CLINIC LAB TIMINGS & GENERATED SLOTS
+// Endpoint: GET /api/clinic/timings/lab
+// ==========================================
+const getClinicLabTiming = async (req, res) => {
+    try {
+        const clinicId = req.user.id;
+        const lab = await Lab.findOne({ clinicId, isClinic: true })
+            .select('name is24x7 openingTime closeTime holiday');
+
+        if (!lab) {
+            return res.status(404).json({ success: false, message: "No diagnostic lab registered under this clinic." });
+        }
+
+        // Fetch Availability Slots Configuration
+        const config = await Availability.findOne({ vendorId: lab._id });
+
+        let generatedSlots = [];
+        if (config && !lab.is24x7) {
+            generatedSlots = generateTimeSlots(config);
+        }
+
+        res.json({
+            success: true,
+            data: {
+                labId: lab._id,
+                name: lab.name,
+                is24x7: Boolean(lab.is24x7),
+                openingTime: lab.openingTime || "08:00 AM",
+                closeTime: lab.closeTime || "08:00 PM",
+                holiday: lab.holiday || "Sunday",
+                displayTiming: lab.is24x7 ? "Open 24x7" : `${lab.openingTime} - ${lab.closeTime}`,
+                config: config || null,
+                totalSlotsCount: generatedSlots.length,
+                generatedSlots
+            }
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// ==========================================
+// 2. SET / UPDATE CLINIC LAB TIMINGS & SLOTS
+// Endpoint: PUT /api/clinic/timings/lab
+// ==========================================
+const updateClinicLabTiming = async (req, res) => {
+    try {
+        const clinicId = req.user.id;
+        const {
+            is24x7,
+            openingTime,
+            closeTime,
+            holiday,
+            slotDuration = 30,
+            maxClientsPerSlot = 2,
+            morningSlots = true,
+            afternoonSlots = true,
+            eveningSlots = false,
+            offDays,
+            blockedDates,
+            premiumSlots
+        } = req.body;
+
+        const lab = await Lab.findOne({ clinicId, isClinic: true });
+        if (!lab) {
+            return res.status(404).json({ success: false, message: "No diagnostic lab registered under this clinic." });
+        }
+
+        const is24x7Bool = is24x7 === true || is24x7 === 'true';
+
+        // 1. Update Lab Document
+        lab.is24x7 = is24x7Bool;
+        lab.openingTime = is24x7Bool ? "12:00 AM" : (openingTime || lab.openingTime || "08:00 AM");
+        lab.closeTime = is24x7Bool ? "11:59 PM" : (closeTime || lab.closeTime || "08:00 PM");
+        lab.holiday = is24x7Bool ? "None" : (holiday || lab.holiday || "Sunday");
+        await lab.save();
+
+        // 2. Sync / Upsert Availability Slots Engine
+        const availabilityPayload = {
+            vendorId: lab._id,
+            vendorType: 'clinic-lab',
+            clinicId: clinicId,
+            startTime: is24x7Bool ? "00:00" : (req.body.startTime || "08:00"),
+            endTime: is24x7Bool ? "23:59" : (req.body.endTime || "20:00"),
+            slotDuration: Number(slotDuration),
+            maxClientsPerSlot: Number(maxClientsPerSlot),
+            morningSlots: Boolean(morningSlots),
+            afternoonSlots: Boolean(afternoonSlots),
+            eveningSlots: Boolean(eveningSlots),
+            offDays: is24x7Bool ? [] : (offDays || [lab.holiday]),
+            blockedDates: blockedDates || [],
+            premiumSlots: premiumSlots || []
+        };
+
+        const updatedConfig = await Availability.findOneAndUpdate(
+            { vendorId: lab._id },
+            { $set: availabilityPayload },
+            { upsert: true, new: true }
+        );
+
+        let generatedSlots = [];
+        if (!is24x7Bool && updatedConfig) {
+            generatedSlots = generateTimeSlots(updatedConfig);
+        }
+
+        res.json({
+            success: true,
+            message: "Clinic Lab timings and test time slots updated successfully.",
+            data: {
+                labId: lab._id,
+                name: lab.name,
+                is24x7: lab.is24x7,
+                openingTime: lab.openingTime,
+                closeTime: lab.closeTime,
+                holiday: lab.holiday,
+                config: updatedConfig,
+                totalSlotsCount: generatedSlots.length,
+                generatedSlots
+            }
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+// ==========================================
+// 3. BLOCK / HIDE CLINIC LAB TIME SLOT
+// Endpoint: POST /api/clinic/timings/lab/block-slot
+// ==========================================
+const blockClinicLabSlot = async (req, res) => {
+    try {
+        const clinicId = req.user.id;
+        const { time } = req.body;
+
+        if (!time) {
+            return res.status(400).json({ success: false, message: "Time slot is required (e.g. '10:30')" });
+        }
+
+        const lab = await Lab.findOne({ clinicId, isClinic: true });
+        if (!lab) {
+            return res.status(404).json({ success: false, message: "No diagnostic lab registered under this clinic." });
+        }
+
+        await Availability.findOneAndUpdate(
+            { vendorId: lab._id },
+            { 
+                $set: { vendorType: 'clinic-lab', clinicId },
+                $addToSet: { unavailableSlots: time } 
+            },
+            { upsert: true, new: true }
+        );
+
+        res.json({
+            success: true,
+            message: `Time slot '${time}' hidden successfully for Clinic Lab.`
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// ==========================================
+// 4. UNBLOCK / SHOW CLINIC LAB TIME SLOT
+// Endpoint: POST /api/clinic/timings/lab/unblock-slot
+// ==========================================
+const unblockClinicLabSlot = async (req, res) => {
+    try {
+        const clinicId = req.user.id;
+        const { time } = req.body;
+
+        if (!time) {
+            return res.status(400).json({ success: false, message: "Time slot is required (e.g. '10:30')" });
+        }
+
+        const lab = await Lab.findOne({ clinicId, isClinic: true });
+        if (!lab) {
+            return res.status(404).json({ success: false, message: "No diagnostic lab registered under this clinic." });
+        }
+
+        await Availability.findOneAndUpdate(
+            { vendorId: lab._id },
+            { $pull: { unavailableSlots: time } }
+        );
+
+        res.json({
+            success: true,
+            message: `Time slot '${time}' is now visible and bookable again for Clinic Lab.`
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// ==========================================
+// 5. BLOCK / HIDE CLINIC PHARMACY TIME SLOT
+// Endpoint: POST /api/clinic/timings/pharmacy/block-slot
+// ==========================================
+const blockClinicPharmacySlot = async (req, res) => {
+    try {
+        const clinicId = req.user.id;
+        const { time } = req.body;
+
+        if (!time) {
+            return res.status(400).json({ success: false, message: "Time slot is required (e.g. '14:00')" });
+        }
+
+        const pharmacy = await Pharmacy.findOne({ clinicId, isClinic: true });
+        if (!pharmacy) {
+            return res.status(404).json({ success: false, message: "No pharmacy registered under this clinic." });
+        }
+
+        await Availability.findOneAndUpdate(
+            { vendorId: pharmacy._id },
+            { 
+                $set: { vendorType: 'clinic-pharmacy', clinicId },
+                $addToSet: { unavailableSlots: time } 
+            },
+            { upsert: true, new: true }
+        );
+
+        res.json({
+            success: true,
+            message: `Time slot '${time}' hidden successfully for Clinic Pharmacy.`
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// ==========================================
+// 6. UNBLOCK / SHOW CLINIC PHARMACY TIME SLOT
+// Endpoint: POST /api/clinic/timings/pharmacy/unblock-slot
+// ==========================================
+const unblockClinicPharmacySlot = async (req, res) => {
+    try {
+        const clinicId = req.user.id;
+        const { time } = req.body;
+
+        if (!time) {
+            return res.status(400).json({ success: false, message: "Time slot is required (e.g. '14:00')" });
+        }
+
+        const pharmacy = await Pharmacy.findOne({ clinicId, isClinic: true });
+        if (!pharmacy) {
+            return res.status(404).json({ success: false, message: "No pharmacy registered under this clinic." });
+        }
+
+        await Availability.findOneAndUpdate(
+            { vendorId: pharmacy._id },
+            { $pull: { unavailableSlots: time } }
+        );
+
+        res.json({
+            success: true,
+            message: `Time slot '${time}' is now visible and active again for Clinic Pharmacy.`
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
 module.exports = {
     getClinicTimings,
     updateClinicTimings,
     resetClinicTimings,
-    getAvailableBookingSlots
+    getAvailableBookingSlots,
+    getClinicPharmacyTiming,
+    updateClinicPharmacyTiming,
+    getClinicLabTiming,
+    updateClinicLabTiming,
+    blockClinicLabSlot,
+    unblockClinicLabSlot,
+    blockClinicPharmacySlot,
+    unblockClinicPharmacySlot
+    
 };

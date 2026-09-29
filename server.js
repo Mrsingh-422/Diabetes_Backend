@@ -210,9 +210,6 @@ app.use('/admin/food/healthy-plans', require('./routes/admin/Food/FoodHealthyPla
 app.use('/admin/food/vendor-orders', require('./routes/admin/Food/AdminFoodVendorOrdersRoute'));
 app.use('/admin/food/drinks', require('./routes/admin/Food/SmoothieDrinkAdminRoute'));
 
-
-
-
 // =========================== Admin Food Routes End =============================================
 
 // --- Admin Doctor Routes ---
@@ -307,7 +304,7 @@ app.use('/api/food/checkout', require('./routes/user/Food/FoodCheckoutRoute'));
 app.use('/api/auth/provider', require('./routes/provider/authProvider'));
 // app.use('/provider/wallet', require('./routes/provider/Common/WalletRoute')); // Wallet Management Route (Withdrawals)
 app.use('/provider/coupons', require('./routes/provider/Common/CouponRoute')); // Promotions & Coupon Management Route
-// app.use('/provider/availability', require('./routes/provider/Common/AvailabilityRoute')); // Availability Management Route (Doctors, Labs, Ambulances)
+app.use('/provider/availability', require('./routes/provider/Common/AvailabilityRoute')); // Availability Management Route (Doctors, Labs, Ambulances)
 app.use('/provider/driver', require('./routes/provider/Common/DriverRoute')); // Availability Management Route (Doctors, Labs, Ambulances)
 app.use('/provider/delivery-charges', require('./routes/provider/Common/DeliveryRoute')); // Delivery Charges Management Route
 

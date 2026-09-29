@@ -9,8 +9,15 @@ const availabilitySchema = new mongoose.Schema({
     },
     vendorType: { 
         type: String, 
-        enum: ['Lab', 'Pharmacy', 'Food', 'Doctor', 'Clinic'], 
+        enum: ['Lab', 'Pharmacy', 'Food', 'Doctor', 'Clinic', 'clinic-lab', 'clinic-pharmacy'], //  Added clinic-lab & clinic-pharmacy
         required: true 
+    },
+
+    // 🏥 CLINIC ATTACHMENT FIELD (Safe Addition)
+    clinicId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Clinic',
+        default: null
     },
 
     // Global Settings
