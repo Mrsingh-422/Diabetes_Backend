@@ -48,17 +48,18 @@ const ambulanceSchema = new mongoose.Schema({
     isActive: { type: Boolean, default: true },
     isOnline: { type: Boolean, default: true },
 
-    //  Support Staff (Nurse & Doctor in Ambulance)
-    supportStaff: {
-        nurse: {
-            available: { type: Boolean, default: false },
-            price: { type: Number, default: 0 }
+    // models/Ambulance.js ke andar supportStaff ko array me update karein:
+
+    supportStaff: [{
+        facilityId: { 
+            type: mongoose.Schema.Types.ObjectId, 
+            ref: 'AmbulanceFacility',
+            default: null 
         },
-        doctor: {
-            available: { type: Boolean, default: false },
-            price: { type: Number, default: 0 }
-        }
-    },
+        name: { type: String, required: true }, // e.g., "Nurse", "Doctor", "Oxygen Cylinder"
+        available: { type: Boolean, default: false },
+        price: { type: Number, default: 0 }
+    }],
 
     //  Clinic Private Ride & Fixed Pricing Structure
     pricing: {

@@ -1,6 +1,10 @@
 // utils/timeSlotHelper.js
 const moment = require('moment');
 const FoodBooking = require('../models/FoodBooking');
+
+// ==========================================
+// 1. COMMON TIME SLOTS GENERATOR (Lab / Pharmacy)
+// ==========================================
 const generateTimeSlots = (config) => {
     const { startTime, endTime, slotDuration, unavailableSlots, morningSlots, afternoonSlots, eveningSlots, premiumSlots } = config;
     
@@ -42,6 +46,9 @@ const generateTimeSlots = (config) => {
     return slots;
 };
 
+// ==========================================
+// 2. FOOD AVAILABILITY CHECKER
+// ==========================================
 const isFoodAvailable = async (FoodId, payload, FoodBooking, Availability) => {
     const { selectedType, startDate, endDate, startTime, endTime } = payload;
 
@@ -56,21 +63,16 @@ const isFoodAvailable = async (FoodId, payload, FoodBooking, Availability) => {
     });
 
     if (overlaps.length > 0) {
-        // CASE: User is asking for MULTIPLE DAYS
         if (selectedType === 'For Multiple Days') {
-            // Range ke beech mein agar 1 bhi booking mili toh Food unavailable hai
             return false;
         }
 
-        // CASE: User is asking for ONE DAY but Food is booked for MULTIPLE DAYS
         for (const b of overlaps) {
             if (b.schedule.duration === 'For Multiple Days') {
-                return false; // Poora din/range block hai
+                return false;
             }
-            
-            // Same day time-slot overlap check (baaki same rahega)
             if (moment(startDate).isSame(b.schedule.startDate, 'day')) {
-                // ... (existing hourly/slot overlap logic)
+                // ... hourly/slot overlap logic
             }
         }
     }
@@ -81,13 +83,14 @@ const isFoodAvailable = async (FoodId, payload, FoodBooking, Availability) => {
     return overlaps.length < maxCapacity;
 };
 
-
+// ==========================================
+// 3. FOOD HOURLY SLOTS GENERATOR
+// ==========================================
 const generateFoodSlots = (config, baseHourlyFinal) => {
     const { startTime, endTime, slotDuration, unavailableSlots, morningSlots, afternoonSlots, eveningSlots, premiumSlots } = config;
     if (!startTime || !endTime) return [];
 
     let slots = [];
-    // Hourly booking pattern: 60 mins interval
     let interval = 60; 
     
     let start = moment(startTime, "HH:mm");
@@ -112,7 +115,6 @@ const generateFoodSlots = (config, baseHourlyFinal) => {
                     time: timeString,
                     displayTime: start.format("hh:mm A"),
                     category,
-                    // 💰 HOURLY PRICE LOGIC
                     hourlyBasePrice: baseHourlyFinal,
                     slotPremiumFee: extra,
                     totalHourlyPrice: Math.round(baseHourlyFinal + extra) 
@@ -124,8 +126,124 @@ const generateFoodSlots = (config, baseHourlyFinal) => {
     return slots;
 };
 
+// ==========================================
+// 🚑 4. AMBULANCE SLOTS GENERATOR (With Real-Time Double Booking Collision Check)
+// ==========================================
+const generateAmbulanceSlots = (availabilityConfig, bookedTrips = [], selectedDate) => {
+    const startTime = availabilityConfig?.startTime || "00:00";
+    const endTime = availabilityConfig?.endTime || "23:59";
+    const slotDuration = availabilityConfig?.slotDuration || 120; // 120 mins (2 Hours trip buffer)
+    const unavailableSlots = availabilityConfig?.unavailableSlots || [];
+    const offDays = availabilityConfig?.offDays || [];
 
+    const dayName = moment(selectedDate).format('dddd');
+    if (offDays.includes(dayName)) {
+        return { isClosed: true, reason: `Ambulance is off on ${dayName}s.`, slots: [] };
+    }
 
+    const slots = [];
+    const [startHour, startMin] = startTime.split(':').map(Number);
+    const [endHour, endMin] = endTime.split(':').map(Number);
 
+    const startTotalMinutes = startHour * 60 + startMin;
+    const endTotalMinutes = endHour * 60 + endMin;
 
-module.exports = { generateTimeSlots, generateFoodSlots, isFoodAvailable };
+    const isToday = moment().format('YYYY-MM-DD') === selectedDate;
+    const currentMoment = moment();
+
+    for (let minutes = startTotalMinutes; minutes + slotDuration <= endTotalMinutes; minutes += slotDuration) {
+        const startH = Math.floor(minutes / 60);
+        const startM = minutes % 60;
+        const endMinutes = minutes + slotDuration;
+        const endH = Math.floor(endMinutes / 60);
+        const endM = endMinutes % 60;
+
+        const timeString24 = `${startH.toString().padStart(2, '0')}:${startM.toString().padStart(2, '0')}`;
+        const slotStartMoment = moment(`${selectedDate} ${timeString24}`, 'YYYY-MM-DD HH:mm');
+        const slotEndMoment = slotStartMoment.clone().add(slotDuration, 'minutes');
+
+        const displayTime = `${slotStartMoment.format('hh:mm A')} - ${slotEndMoment.format('hh:mm A')}`;
+
+        // 1. Time Categorization
+        let category = "Morning";
+        if (startH >= 12 && startH < 17) category = "Afternoon";
+        else if (startH >= 17 && startH <= 23) category = "Evening / Night";
+        else if (startH < 5) category = "Late Night";
+
+        // 2. Past Time Check (For Today)
+        const isPast = isToday && slotStartMoment.isBefore(currentMoment);
+
+        // 3. Driver Blocked Check
+        const isManuallyBlocked = unavailableSlots.includes(timeString24);
+
+        // 4. 🛡️ COLLISION CHECK: Check against Confirmed / Ongoing Trips
+        const hasBookingConflict = bookedTrips.some(trip => {
+            const tripTime = trip.scheduledAt || trip.appointmentDate || trip.createdAt;
+            const tripStartTime = moment(tripTime);
+            const tripEndTime = tripStartTime.clone().add(slotDuration, 'minutes');
+
+            // Overlap: (SlotStart < TripEnd) AND (SlotEnd > TripStart)
+            return slotStartMoment.isBefore(tripEndTime) && slotEndMoment.isAfter(tripStartTime);
+        });
+
+        const isAvailable = !isPast && !isManuallyBlocked && !hasBookingConflict;
+
+        let statusText = "Available";
+        if (isPast) statusText = "Past";
+        else if (isManuallyBlocked) statusText = "Unavailable";
+        else if (hasBookingConflict) statusText = "Booked"; // 👈 Marked as Booked so others cannot select
+
+        slots.push({
+            slotTime: timeString24,
+            displayTime,
+            startTimeFormatted: slotStartMoment.format('hh:mm A'),
+            endTimeFormatted: slotEndMoment.format('hh:mm A'),
+            category,
+            isAvailable,
+            status: statusText
+        });
+    }
+
+    return { isClosed: false, slots };
+};
+
+// ==========================================
+// 🚑 5. REAL-TIME AMBULANCE AVAILABILITY CHECKER (For Booking Creation)
+// ==========================================
+const isAmbulanceAvailable = async (ambulanceId, targetDateTime, AmbulanceBookingModel, bufferMinutes = 120) => {
+    try {
+        const requestedStart = moment(targetDateTime);
+        const requestedEnd = requestedStart.clone().add(bufferMinutes, 'minutes');
+
+        // Active booking statuses jo trip block rakhti hain
+        const activeStatuses = ['Confirmed', 'Arrived', 'Picked-Up', 'En-Route', 'Searching'];
+
+        // Overlap query check in database
+        const conflictTrip = await AmbulanceBookingModel.findOne({
+            ambulanceId,
+            status: { $in: activeStatuses },
+            $or: [
+                {
+                    createdAt: {
+                        $gte: requestedStart.clone().subtract(bufferMinutes, 'minutes').toDate(),
+                        $lte: requestedEnd.toDate()
+                    }
+                }
+            ]
+        });
+
+        // Agar conflict mil gaya toh Ambulance unavailable hai
+        return !conflictTrip;
+    } catch (error) {
+        console.error("isAmbulanceAvailable error:", error);
+        return false;
+    }
+};
+
+module.exports = { 
+    generateTimeSlots, 
+    generateFoodSlots, 
+    isFoodAvailable,
+    generateAmbulanceSlots,
+    isAmbulanceAvailable
+};

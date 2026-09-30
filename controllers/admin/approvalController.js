@@ -320,6 +320,190 @@ const rejectClinicAmbulance = async (req, res) => {
     }
 };
 
+// ==========================================
+// 🚑 1. GET INDEPENDENT AMBULANCES LIST (Excludes Clinic Ambulances)
+// Endpoint: GET /api/admin/approval/ambulance
+// ==========================================
+const getAmbulancesList = async (req, res) => {
+    try {
+        const { status, page = 1, limit = 10, search = "", country, state, city } = req.query;
+        const locFilter = getLocationFilter(req);
+
+        // 🛡️ STRICT FILTER: Sirf Independent Ambulances (Clinic Ambulances exclude rahenge)
+        const filter = { 
+            ...locFilter,
+            role: 'ambulance',
+            $or: [
+                { clinicId: null },
+                { clinicId: { $exists: false } }
+            ]
+        };
+
+        if (status) filter.profileStatus = status; // 'Pending' | 'Approved' | 'Rejected' | 'Incomplete'
+        if (country) filter.country = { $regex: country, $options: 'i' };
+        if (state) filter.state = { $regex: state, $options: 'i' };
+        if (city) filter.city = { $regex: city, $options: 'i' };
+
+        if (search && search.trim() !== "") {
+            const searchRegex = new RegExp(search.trim(), 'i');
+            filter.$and = [
+                {
+                    $or: [
+                        { name: searchRegex },
+                        { phone: searchRegex },
+                        { email: searchRegex },
+                        { vehicleNumber: searchRegex },
+                        { drivingLicenseNumber: searchRegex }
+                    ]
+                }
+            ];
+        }
+
+        const skip = (parseInt(page, 10) - 1) * parseInt(limit, 10);
+        const totalDocs = await Ambulance.countDocuments(filter);
+
+        const data = await Ambulance.find(filter)
+            .select('-password -token -fcmToken')
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(parseInt(limit, 10))
+            .lean();
+
+        res.json({
+            success: true,
+            totalDocs,
+            totalPages: Math.ceil(totalDocs / parseInt(limit, 10)) || 1,
+            currentPage: parseInt(page, 10),
+            count: data.length,
+            data
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
+// ==========================================
+// 🚑 2. GET SINGLE AMBULANCE DETAILS BY ID
+// Endpoint: GET /api/admin/approval/ambulance/:id
+// ==========================================
+const getAmbulanceById = async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        const ambulance = await Ambulance.findById(id)
+            .select('-password -token -fcmToken')
+            .populate('clinicId', 'clinicName name email phoneNumber city state address image')
+            .lean();
+
+        if (!ambulance) {
+            return res.status(404).json({ success: false, message: "Ambulance not found." });
+        }
+
+        res.json({
+            success: true,
+            data: ambulance
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// ==========================================
+// 🚑 3. APPROVE AMBULANCE
+// Endpoint: PATCH /api/admin/approval/ambulance/approve/:id
+// ==========================================
+const approveAmbulance = async (req, res) => {
+    try {
+        const ambulance = await Ambulance.findByIdAndUpdate(
+            req.params.id,
+            {
+                $set: {
+                    profileStatus: 'Approved',
+                    rejectionReason: null,
+                    isActive: true,
+                    availableForEmergency: true
+                }
+            },
+            { new: true }
+        ).select('-password -token');
+
+        if (!ambulance) {
+            return res.status(404).json({ success: false, message: "Ambulance not found." });
+        }
+
+        // 🔄 Sync Admin ProfileUpdateRequest queue
+        await ProfileUpdateRequest.updateMany(
+            { vendorId: ambulance._id, vendorModel: 'Ambulance', status: 'Pending' },
+            { 
+                $set: { 
+                    status: 'Approved', 
+                    rejectionReason: '', 
+                    adminId: req.user ? req.user.id : null 
+                } 
+            }
+        );
+
+        res.json({
+            success: true,
+            message: `Ambulance '${ambulance.vehicleNumber || ambulance.name}' approved successfully.`,
+            data: ambulance
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// ==========================================
+// 🚑 4. REJECT AMBULANCE (With Reason)
+// Endpoint: PATCH /api/admin/approval/ambulance/reject/:id
+// ==========================================
+const rejectAmbulance = async (req, res) => {
+    try {
+        const { reason } = req.body;
+        if (!reason || reason.trim() === "") {
+            return res.status(400).json({ success: false, message: "Rejection reason is required." });
+        }
+
+        const ambulance = await Ambulance.findByIdAndUpdate(
+            req.params.id,
+            {
+                $set: {
+                    profileStatus: 'Rejected',
+                    rejectionReason: reason.trim(),
+                    availableForEmergency: false,
+                    isOnline: false
+                }
+            },
+            { new: true }
+        ).select('-password -token');
+
+        if (!ambulance) {
+            return res.status(404).json({ success: false, message: "Ambulance not found." });
+        }
+
+        // 🔄 Sync Admin ProfileUpdateRequest queue
+        await ProfileUpdateRequest.updateMany(
+            { vendorId: ambulance._id, vendorModel: 'Ambulance', status: 'Pending' },
+            { 
+                $set: { 
+                    status: 'Rejected', 
+                    rejectionReason: reason.trim(), 
+                    adminId: req.user ? req.user.id : null 
+                } 
+            }
+        );
+
+        res.json({
+            success: true,
+            message: `Ambulance '${ambulance.vehicleNumber || ambulance.name}' rejected.`,
+            data: ambulance
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 
 module.exports = {
     getDoctorsList, 
@@ -327,5 +511,6 @@ module.exports = {
     
     getLabsList, approveLab, rejectLab,
     getPharmaciesList, approvePharmacy, rejectPharmacy,
-    getFoodsList, approveFood, rejectFood,getClinicAmbulancesList, approveClinicAmbulance, rejectClinicAmbulance
+    getFoodsList, approveFood, rejectFood,getClinicAmbulancesList, approveClinicAmbulance, rejectClinicAmbulance,
+    getAmbulancesList, getAmbulanceById, approveAmbulance, rejectAmbulance
 };
