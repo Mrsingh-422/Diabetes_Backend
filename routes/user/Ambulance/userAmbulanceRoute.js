@@ -1,11 +1,13 @@
 // routes/user/Ambulance/userAmbulanceRoute.js
 const express = require('express');
 const router = express.Router();
+const { protect } = require('../../../middleware/authMiddleware');
 
 const {
     getNearbyAmbulances,
     getAmbulanceDetailsForUser,
-    getClinicAmbulanceSlotsForUser
+    getClinicAmbulanceSlotsForUser,
+    getAmbulanceCouponsForUser
 } = require('../../../controllers/user/Ambulance/userAmbulanceController');
 
 // Base Route: /api/user/ambulance
@@ -18,5 +20,8 @@ router.get('/details/:id', getAmbulanceDetailsForUser);
 
 //  3. Get Time Slots for Clinic-Ambulance (Returns notice if Independent)
 router.get('/slots/:ambulanceId', getClinicAmbulanceSlotsForUser);
+
+router.get('/coupons/:ambulanceId',protect('user'),getAmbulanceCouponsForUser);
+
 
 module.exports = router;

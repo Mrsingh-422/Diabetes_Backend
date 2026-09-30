@@ -5,6 +5,7 @@ const { calculateHaversine } = require('../../../utils/helpers');
 const Availability = require('../../../models/Availability');
 const AmbulanceBooking = require('../../../models/AmbulanceBooking');
 const { generateAmbulanceSlots } = require('../../../utils/timeSlotHelper');
+const Coupon = require('../../../models/Coupon');
 const mongoose = require('mongoose');
 
 // Default Fallback Location (Mohali Center)
@@ -423,8 +424,89 @@ const getClinicAmbulanceSlotsForUser = async (req, res) => {
     }
 };
 
+// ==========================================
+// 🎟️ GET APPLICABLE COUPONS FOR AMBULANCE (User App)
+// Endpoint: GET /api/user/ambulance/coupons/:ambulanceId
+// ==========================================
+const getAmbulanceCouponsForUser = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const { ambulanceId } = req.params;
+
+        if (!mongoose.Types.ObjectId.isValid(ambulanceId)) {
+            return res.status(400).json({ success: false, message: "Invalid Ambulance ID format." });
+        }
+
+        // 1. Fetch Ambulance
+        const ambulance = await Ambulance.findById(ambulanceId).select('role clinicId').lean();
+        if (!ambulance) {
+            return res.status(404).json({ success: false, message: "Ambulance not found." });
+        }
+
+        const now = new Date();
+
+        // 2. Base Date & User Specific Filter
+        let couponFilter = {
+            isActive: true,
+            startDate: { $lte: now },
+            expiryDate: { $gt: now },
+            $and: [
+                {
+                    $or: [
+                        { isUserSpecific: false },
+                        { isUserSpecific: true, assignedUserId: userId }
+                    ]
+                }
+            ]
+        };
+
+        // 🎯 3. ZERO-CONFLICT AMBULANCE FILTER:
+        if (ambulance.role === 'clinic-ambulance' && ambulance.clinicId) {
+            // Clinic-Ambulance: Admin ke Ambulance coupons + Us Clinic ke banaye Ambulance coupons
+            couponFilter.$or = [
+                { isAdminCreated: true, vendorType: { $in: ['Ambulance', 'All'] } },
+                { vendorId: ambulance.clinicId, vendorType: 'Ambulance', isAdminCreated: false }
+            ];
+        } else {
+            // Independent Ambulance: Admin ke Ambulance coupons + Us Ambulance ke banaye coupons
+            couponFilter.$or = [
+                { isAdminCreated: true, vendorType: { $in: ['Ambulance', 'All'] } },
+                { vendorId: ambulance._id, vendorType: 'Ambulance', isAdminCreated: false }
+            ];
+        }
+
+        // 4. Fetch Coupons
+        const coupons = await Coupon.find(couponFilter)
+            .select('couponName discountPercentage maxDiscount minOrderAmount maxUsagePerUser startDate expiryDate vendorType isAdminCreated usedBy')
+            .sort({ discountPercentage: -1 })
+            .lean();
+
+        // 5. Filter out exhausted usage limit for this user
+        const availableCoupons = coupons.filter(c => {
+            const userUsage = c.usedBy?.find(u => u.userId?.toString() === userId.toString());
+            const usedCount = userUsage ? userUsage.usageCount : 0;
+            const maxLimit = c.maxUsagePerUser || 1;
+            return usedCount < maxLimit;
+        }).map(c => {
+            delete c.usedBy;
+            return c;
+        });
+
+        res.json({
+            success: true,
+            ambulanceRole: ambulance.role,
+            ambulanceType: ambulance.role === 'clinic-ambulance' ? "Clinic Ambulance" : "Independent Ambulance",
+            count: availableCoupons.length,
+            data: availableCoupons
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
 module.exports = {
     getNearbyAmbulances,
     getAmbulanceDetailsForUser,
-    getClinicAmbulanceSlotsForUser
+    getClinicAmbulanceSlotsForUser,
+    getAmbulanceCouponsForUser
 };
