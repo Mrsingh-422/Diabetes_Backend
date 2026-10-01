@@ -1,4 +1,5 @@
 // controllers/user/Ambulance/userAmbulanceController.js
+
 const Ambulance = require('../../../models/Ambulance');
 const VendorKMLimit = require('../../../models/VendorKMLimit');
 const { calculateHaversine } = require('../../../utils/helpers');
@@ -246,7 +247,7 @@ const getNearbyAmbulances = async (req, res) => {
 };
 
 // ==========================================
-// 🔍 2. GET SINGLE AMBULANCE DETAILS BY ID
+// 🔍 2. GET SINGLE AMBULANCE DETAILS BY ID (With Dynamic Support Staff Array)
 // Endpoint: GET /api/user/ambulance/details/:id
 // ==========================================
 const getAmbulanceDetailsForUser = async (req, res) => {
@@ -306,16 +307,8 @@ const getAmbulanceDetailsForUser = async (req, res) => {
                     image: ambulance.clinicId.image
                 } : null,
 
-                supportStaff: {
-                    nurse: {
-                        available: Boolean(ambulance.supportStaff?.nurse?.available),
-                        price: ambulance.supportStaff?.nurse?.price || 0
-                    },
-                    doctor: {
-                        available: Boolean(ambulance.supportStaff?.doctor?.available),
-                        price: ambulance.supportStaff?.doctor?.price || 0
-                    }
-                },
+                // 👨‍⚕️ FIX: Return the exact supportStaff array from database
+                supportStaff: ambulance.supportStaff || [],
 
                 pricing: {
                     singleRidePrice: ambulance.pricing?.singleRidePrice || 400,
@@ -504,9 +497,67 @@ const getAmbulanceCouponsForUser = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
+// ==========================================
+// 🕒 GET AMBULANCE TIME SLOTS (Only ID & Slots)
+// Endpoint: GET /api/user/ambulance/slots/:ambulanceId?date=YYYY-MM-DD
+// ==========================================
+const getAmbulanceSlotsForUser = async (req, res) => {
+    try {
+        const { ambulanceId } = req.params;
+        const { date } = req.query;
+
+        if (!mongoose.Types.ObjectId.isValid(ambulanceId)) {
+            return res.status(400).json({ success: false, message: "Invalid Ambulance ID format." });
+        }
+
+        const ambulance = await Ambulance.findById(ambulanceId).select('_id').lean();
+        if (!ambulance) {
+            return res.status(404).json({ success: false, message: "Ambulance not found." });
+        }
+
+        const selectedDate = date || new Date().toISOString().split('T')[0];
+
+        // 1. Fetch Availability Config
+        const config = await Availability.findOne({ vendorId: ambulance._id });
+        const effectiveConfig = config || {
+            startTime: "08:00",
+            endTime: "20:00",
+            slotDuration: 120,
+            offDays: ["Sunday"],
+            unavailableSlots: []
+        };
+
+        // 2. Fetch Active Bookings for Collision Check
+        const startOfDay = new Date(selectedDate);
+        startOfDay.setHours(0, 0, 0, 0);
+        const endOfDay = new Date(selectedDate);
+        endOfDay.setHours(23, 59, 59, 999);
+
+        const activeBookings = await AmbulanceBooking.find({
+            ambulanceId: ambulance._id,
+            status: { $in: ['Searching', 'Confirmed', 'Arrived', 'Picked-Up', 'En-Route'] },
+            createdAt: { $gte: startOfDay, $lte: endOfDay }
+        }).select('createdAt scheduledAt status').lean();
+
+        // 3. Generate Slots
+        const slotResult = generateAmbulanceSlots(effectiveConfig, activeBookings, selectedDate);
+
+        // 🎯 Minimal Clean Response (Only ambulanceId & slots)
+        res.json({
+            success: true,
+            ambulanceId: ambulance._id,
+            slots: slotResult.slots || []
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
 module.exports = {
     getNearbyAmbulances,
     getAmbulanceDetailsForUser,
     getClinicAmbulanceSlotsForUser,
-    getAmbulanceCouponsForUser
+    getAmbulanceCouponsForUser,
+    getAmbulanceSlotsForUser
 };

@@ -192,17 +192,46 @@ const completeAmbulanceProfile = async (req, res) => {
             }
         });
 
-        // Parse Support Staff (Nurse / Doctor)
-        const supportStaffData = {
-            nurse: {
-                available: updates.hasNurse === 'true' || updates.hasNurse === true,
-                price: Number(updates.nursePrice || 0)
-            },
-            doctor: {
-                available: updates.hasDoctor === 'true' || updates.hasDoctor === true,
-                price: Number(doctorPrice = updates.doctorPrice || 0)
+        // 👨‍⚕️ Parse Dynamic Support Staff Array (Handles FormData JSON string & Direct Array)
+        let supportStaffData = existingAmb.supportStaff || [];
+
+        if (updates.supportStaff) {
+            try {
+                const parsed = typeof updates.supportStaff === 'string' 
+                    ? JSON.parse(updates.supportStaff) 
+                    : updates.supportStaff;
+
+                if (Array.isArray(parsed)) {
+                    supportStaffData = parsed.map(item => ({
+                        facilityId: item.facilityId || null,
+                        name: item.name ? String(item.name).trim() : "Staff",
+                        available: item.available === true || item.available === 'true',
+                        price: Number(item.price) || 0
+                    }));
+                }
+            } catch (e) {
+                // Keep existing on parse error
             }
-        };
+        } else if (updates.hasNurse !== undefined || updates.hasDoctor !== undefined) {
+            // Backward fallback if single boolean flags were sent
+            supportStaffData = [];
+            if (updates.hasNurse !== undefined) {
+                supportStaffData.push({
+                    facilityId: null,
+                    name: "Nurse",
+                    available: updates.hasNurse === 'true' || updates.hasNurse === true,
+                    price: Number(updates.nursePrice || 0)
+                });
+            }
+            if (updates.hasDoctor !== undefined) {
+                supportStaffData.push({
+                    facilityId: null,
+                    name: "Doctor",
+                    available: updates.hasDoctor === 'true' || updates.hasDoctor === true,
+                    price: Number(updates.doctorPrice || 0)
+                });
+            }
+        }
 
         // Parse Pricing
         const pricingData = {
@@ -235,7 +264,7 @@ const completeAmbulanceProfile = async (req, res) => {
         existingAmb.city = updates.city || existingAmb.city;
         existingAmb.state = updates.state || existingAmb.state;
         existingAmb.documents = documentPaths;
-        existingAmb.supportStaff = supportStaffData;
+        existingAmb.supportStaff = supportStaffData; // 👈 Dynamic Array
         existingAmb.pricing = pricingData;
         existingAmb.location = locationData;
         existingAmb.profileStatus = nextStatus;
@@ -299,7 +328,6 @@ const completeAmbulanceProfile = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
-
 // ==========================================
 // 4. TOGGLE DRIVER AVAILABILITY (Online / Offline)
 // Endpoint: PATCH /api/auth/ambulance/status/toggle

@@ -7,7 +7,8 @@ const {
     getNearbyAmbulances,
     getAmbulanceDetailsForUser,
     getClinicAmbulanceSlotsForUser,
-    getAmbulanceCouponsForUser
+    getAmbulanceCouponsForUser,
+    getAmbulanceSlotsForUser
 } = require('../../../controllers/user/Ambulance/userAmbulanceController');
 
 // Base Route: /api/user/ambulance
@@ -20,6 +21,9 @@ router.get('/details/:id', getAmbulanceDetailsForUser);
 
 //  3. Get Time Slots for Clinic-Ambulance (Returns notice if Independent)
 router.get('/slots/:ambulanceId', getClinicAmbulanceSlotsForUser);
+
+//  Get Slots for Referral Booking (Works for both Clinic & Independent Ambulance)
+router.get('/slots/ambu/:ambulanceId', getAmbulanceSlotsForUser);
 
 router.get('/coupons/:ambulanceId',protect('user'),getAmbulanceCouponsForUser);
 

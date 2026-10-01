@@ -14,7 +14,7 @@ const generateToken = (id, role) => {
 };
 
 // ==========================================
-// 1. ADD AMBULANCE (With isAmbulanceAvailable & Support Staff check)
+// 1. ADD AMBULANCE (With isAmbulanceAvailable & Dynamic Support Staff)
 // Endpoint: POST /api/clinic/ambulance/add
 // ==========================================
 const addClinicAmbulance = async (req, res) => {
@@ -58,12 +58,13 @@ const addClinicAmbulance = async (req, res) => {
             latitude = 0,
             longitude = 0,
 
-            // 👇 Support Staff Fields
-            hasNurse = false,
-            nursePrice = 0,
-            hasDoctor = false,
-            doctorPrice = 0,
-            supportStaff
+            // Dynamic Support Staff
+            supportStaff,
+            // Fallback parameters (for backward compatibility)
+            hasNurse,
+            nursePrice,
+            hasDoctor,
+            doctorPrice
         } = req.body;
 
         // Validations
@@ -106,19 +107,44 @@ const addClinicAmbulance = async (req, res) => {
             ambulancePermit: getPath('ambulancePermit')
         };
 
-        // Support Staff Structure Builder
-        const supportStaffData = {
-            nurse: {
-                available: hasNurse === 'true' || hasNurse === true || Boolean(supportStaff?.nurse?.available),
-                price: Number(nursePrice ?? supportStaff?.nurse?.price ?? 0)
-            },
-            doctor: {
-                available: hasDoctor === 'true' || hasDoctor === true || Boolean(supportStaff?.doctor?.available),
-                price: Number(doctorPrice ?? supportStaff?.doctor?.price ?? 0)
-            }
-        };
+        // 👨‍⚕️ 2. Dynamic Support Staff Array Parser (Handles JSON String from FormData & Direct Array)
+        let supportStaffData = [];
 
-        // 2. Create Ambulance with 'Pending' Status
+        if (supportStaff) {
+            try {
+                const parsed = typeof supportStaff === 'string' ? JSON.parse(supportStaff) : supportStaff;
+                if (Array.isArray(parsed)) {
+                    supportStaffData = parsed.map(item => ({
+                        facilityId: item.facilityId || null,
+                        name: item.name ? String(item.name).trim() : "Staff",
+                        available: item.available === true || item.available === 'true',
+                        price: Number(item.price) || 0
+                    }));
+                }
+            } catch (e) {
+                supportStaffData = [];
+            }
+        } else {
+            // Backward fallback if single fields were sent
+            if (hasNurse !== undefined) {
+                supportStaffData.push({
+                    facilityId: null,
+                    name: "Nurse",
+                    available: hasNurse === 'true' || hasNurse === true,
+                    price: Number(nursePrice) || 0
+                });
+            }
+            if (hasDoctor !== undefined) {
+                supportStaffData.push({
+                    facilityId: null,
+                    name: "Doctor",
+                    available: hasDoctor === 'true' || hasDoctor === true,
+                    price: Number(doctorPrice) || 0
+                });
+            }
+        }
+
+        // 3. Create Ambulance with 'Pending' Status
         const newAmbulance = await Ambulance.create({
             clinicId,
             name,
@@ -143,7 +169,7 @@ const addClinicAmbulance = async (req, res) => {
             isOnline: false,
             profileStatus: 'Pending',
 
-            supportStaff: supportStaffData,
+            supportStaff: supportStaffData, // 👈 Saved as dynamic Array
 
             pricing: {
                 singleRidePrice: Number(singleRidePrice),
@@ -162,7 +188,7 @@ const addClinicAmbulance = async (req, res) => {
 
         const clinicName = clinic.clinicName || clinic.name || "Clinic";
 
-        // 3. 🚀 Create Admin Approval Request
+        // 4. 🚀 Create Admin Approval Request
         await ProfileUpdateRequest.create({
             vendorId: newAmbulance._id,
             vendorModel: 'Ambulance',
@@ -182,7 +208,7 @@ const addClinicAmbulance = async (req, res) => {
             status: 'Pending'
         });
 
-        // 4. 🔔 Notify Admin
+        // 5. 🔔 Notify Admin
         try {
             await notifyAdminsAndVendor(
                 newAmbulance._id,
@@ -212,7 +238,7 @@ const addClinicAmbulance = async (req, res) => {
 };
 
 // ==========================================
-// 3. UPDATE AMBULANCE (With Support Staff)
+// 2. UPDATE AMBULANCE (With Dynamic Support Staff Array Support)
 // Endpoint: PUT /api/clinic/ambulance/update/:id
 // ==========================================
 const updateClinicAmbulance = async (req, res) => {
@@ -240,30 +266,72 @@ const updateClinicAmbulance = async (req, res) => {
         if (updates.bloodGroup !== undefined) ambulance.bloodGroup = updates.bloodGroup;
         if (updates.experienceYears !== undefined) ambulance.experienceYears = updates.experienceYears;
         if (updates.serviceRadius !== undefined) ambulance.serviceRadius = updates.serviceRadius;
-        if (updates.availableForEmergency !== undefined) ambulance.availableForEmergency = updates.availableForEmergency === 'true' || updates.availableForEmergency === true;
+        if (updates.availableForEmergency !== undefined) {
+            ambulance.availableForEmergency = updates.availableForEmergency === 'true' || updates.availableForEmergency === true;
+        }
 
-        // Support Staff Update
-        if (updates.hasNurse !== undefined || updates.nursePrice !== undefined || updates.hasDoctor !== undefined || updates.doctorPrice !== undefined) {
-            if (!ambulance.supportStaff) {
-                ambulance.supportStaff = { nurse: { available: false, price: 0 }, doctor: { available: false, price: 0 } };
+        // 👨‍⚕️ 1. Dynamic Support Staff Array Handling
+        if (updates.supportStaff) {
+            try {
+                const parsed = typeof updates.supportStaff === 'string' 
+                    ? JSON.parse(updates.supportStaff) 
+                    : updates.supportStaff;
+
+                if (Array.isArray(parsed)) {
+                    ambulance.supportStaff = parsed.map(s => ({
+                        facilityId: s.facilityId || null,
+                        name: s.name ? String(s.name).trim() : "Staff",
+                        available: s.available === true || s.available === 'true',
+                        price: Number(s.price) || 0
+                    }));
+                }
+            } catch (e) {
+                // Ignore parse errors
             }
-            if (updates.hasNurse !== undefined) ambulance.supportStaff.nurse.available = updates.hasNurse === 'true' || updates.hasNurse === true;
-            if (updates.nursePrice !== undefined) ambulance.supportStaff.nurse.price = Number(updates.nursePrice);
-            if (updates.hasDoctor !== undefined) ambulance.supportStaff.doctor.available = updates.hasDoctor === 'true' || updates.hasDoctor === true;
-            if (updates.doctorPrice !== undefined) ambulance.supportStaff.doctor.price = Number(updates.doctorPrice);
+        } else if (updates.hasNurse !== undefined || updates.hasDoctor !== undefined) {
+            // Backward fallback if single boolean flags are sent from older forms
+            let staffArr = Array.isArray(ambulance.supportStaff) ? [...ambulance.supportStaff] : [];
+
+            if (updates.hasNurse !== undefined) {
+                const isAvail = updates.hasNurse === 'true' || updates.hasNurse === true;
+                const nurseIdx = staffArr.findIndex(s => s.name.toLowerCase() === 'nurse');
+                const priceVal = updates.nursePrice !== undefined ? Number(updates.nursePrice) : (nurseIdx !== -1 ? staffArr[nurseIdx].price : 0);
+                
+                if (nurseIdx !== -1) {
+                    staffArr[nurseIdx].available = isAvail;
+                    staffArr[nurseIdx].price = priceVal;
+                } else {
+                    staffArr.push({ facilityId: null, name: "Nurse", available: isAvail, price: priceVal });
+                }
+            }
+
+            if (updates.hasDoctor !== undefined) {
+                const isAvail = updates.hasDoctor === 'true' || updates.hasDoctor === true;
+                const docIdx = staffArr.findIndex(s => s.name.toLowerCase() === 'doctor');
+                const priceVal = updates.doctorPrice !== undefined ? Number(updates.doctorPrice) : (docIdx !== -1 ? staffArr[docIdx].price : 0);
+                
+                if (docIdx !== -1) {
+                    staffArr[docIdx].available = isAvail;
+                    staffArr[docIdx].price = priceVal;
+                } else {
+                    staffArr.push({ facilityId: null, name: "Doctor", available: isAvail, price: priceVal });
+                }
+            }
+
+            ambulance.supportStaff = staffArr;
         }
 
         // Pricing Updates
         if (updates.singleRidePrice !== undefined || updates.doubleRidePrice !== undefined || updates.baseDistance !== undefined || updates.pricePerKM !== undefined) {
             ambulance.pricing = {
-                singleRidePrice: updates.singleRidePrice !== undefined ? Number(updates.singleRidePrice) : ambulance.pricing.singleRidePrice,
-                doubleRidePrice: updates.doubleRidePrice !== undefined ? Number(updates.doubleRidePrice) : ambulance.pricing.doubleRidePrice,
-                baseDistance: updates.baseDistance !== undefined ? Number(updates.baseDistance) : ambulance.pricing.baseDistance,
-                pricePerKM: updates.pricePerKM !== undefined ? Number(updates.pricePerKM) : ambulance.pricing.pricePerKM
+                singleRidePrice: updates.singleRidePrice !== undefined ? Number(updates.singleRidePrice) : (ambulance.pricing?.singleRidePrice || 400),
+                doubleRidePrice: updates.doubleRidePrice !== undefined ? Number(updates.doubleRidePrice) : (ambulance.pricing?.doubleRidePrice || 700),
+                baseDistance: updates.baseDistance !== undefined ? Number(updates.baseDistance) : (ambulance.pricing?.baseDistance || 5),
+                pricePerKM: updates.pricePerKM !== undefined ? Number(updates.pricePerKM) : (ambulance.pricing?.pricePerKM || 12)
             };
         }
 
-        // File Updates
+        // File Updates (Safe replace with deleteFile)
         const docKeys = ['drivingLicenseFile', 'rcFile', 'insuranceFile', 'fitnessCertificate', 'ambulancePermit'];
         docKeys.forEach(key => {
             if (files[key] && files[key][0]) {
@@ -294,25 +362,26 @@ const updateClinicAmbulance = async (req, res) => {
 };
 
 // ==========================================
-// 3. GET ALL AMBULANCES OF LOGGED-IN CLINIC
+// 3. GET ALL AMBULANCES OF LOGGED-IN CLINIC (With Support Staff)
 // Endpoint: GET /api/clinic/ambulance/my-ambulances
 // ==========================================
 const getMyClinicAmbulances = async (req, res) => {
     try {
         const clinicId = req.user.id;
         const ambulances = await Ambulance.find({ clinicId })
-            .select(' -password') // 👈 hospitalId exclude
-            .sort({ createdAt: -1 });
+            .select('-password -token -fcmToken')
+            .sort({ createdAt: -1 })
+            .lean();
 
         res.json({
             success: true,
             count: ambulances.length,
-            data: ambulances
+            data: ambulances // 👈 isme supportStaff array automatically aayega
         });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
-};
+};;
 
 
 // ==========================================

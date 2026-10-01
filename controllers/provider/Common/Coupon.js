@@ -68,7 +68,7 @@ const createCoupon = async (req, res) => {
 
 // ==========================================
 // 2. LIST MY COUPONS (Clinic's Own + Admin Global Coupons)
-// Endpoint: GET /provider/coupons/list OR /api/clinic/coupons/list
+// Endpoint: GET list OR /api/clinic/coupons/list
 // ==========================================
 const getMyCoupons = async (req, res) => {
     try {

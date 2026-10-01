@@ -254,7 +254,9 @@ app.use('/user/medicine', require('./routes/user/Pharmacy/MedicineInventoryUserR
 // ============================ user Ambulance start ===============================================
 // app.use('/user/ambulance', require('./routes/user/Ambulance/AmbulanceBookRoute'));
 
-app.use('/api/user/ambulance', require('./routes/user/Ambulance/userAmbulanceRoute')); 
+app.use('/api/user/ambulance', require('./routes/user/Ambulance/userAmbulanceRoute'));
+app.use('/api/user/ambulance/booking', require('./routes/user/Ambulance/ambulanceBookingRoute'));
+
 // ============================ user Ambulance End ===================================================
 
 //========================== Food Routes User ================================================================
@@ -349,6 +351,8 @@ app.use('/driver/lab', require('./routes/driver/driverLab/driverLabOrdersRoute')
 
 //////////////// Ambulance Routes /////////////////////
 app.use('/api/auth/ambulance', require('./routes/ambulance/authAmbulanceRoute'));
+app.use('/api/ambulance/staff', require('./routes/ambulance/ambulanceStaffRoute'));
+
 
 //////////////// others Routes or public routes  /////////////////////
 app.use('/api/public', require('./routes/others/locationRoutes'));
