@@ -1,4 +1,4 @@
-// controllers/admin/Food/AdminFoodVendorOrdersController.js
+// controllers/admin/Food/AdminFoodVendorOrders.js
 
 const Food = require('../../../models/Food');
 const FoodBooking = require('../../../models/FoodBooking');
@@ -7,23 +7,27 @@ const { refundRazorpayPayment } = require('../../../utils/razorpay');
 const mongoose = require('mongoose');
 
 // ==========================================
-// 🏪 1. GET APPROVED FOOD OUTLETS LIST (SCREEN 1)
+// 🏪 1. GET APPROVED FOOD OUTLETS LIST (Sorted by Highest Orders First)
 // Full Path: GET /admin/food/vendor-orders/outlets
 // ==========================================
 const getApprovedFoodOutletsList = async (req, res) => {
     try {
         const { search, city, page = 1, limit = 10 } = req.query;
 
-        // Query only Approved Food Outlets
-        const query = { profileStatus: 'Approved' };
+        const pageNum = parseInt(page, 10) || 1;
+        const limitNum = parseInt(limit, 10) || 10;
+        const skip = (pageNum - 1) * limitNum;
 
-        if (city) {
-            query.city = { $regex: city.trim(), $options: 'i' };
+        // 1. Build Base Match Query (Only Approved Outlets)
+        let matchQuery = { profileStatus: 'Approved' };
+
+        if (city && city.trim() !== '') {
+            matchQuery.city = { $regex: city.trim(), $options: 'i' };
         }
 
-        if (search) {
+        if (search && search.trim() !== '') {
             const regex = new RegExp(search.trim(), 'i');
-            query.$or = [
+            matchQuery.$or = [
                 { name: regex },
                 { email: regex },
                 { phone: regex },
@@ -31,62 +35,91 @@ const getApprovedFoodOutletsList = async (req, res) => {
             ];
         }
 
-        const skip = (parseInt(page, 10) - 1) * parseInt(limit, 10);
-        const totalDocs = await Food.countDocuments(query);
+        // 🎯 2. AGGREGATION PIPELINE: Count Orders & Sort Descending
+        const pipeline = [
+            { $match: matchQuery },
 
-        // 1. Fetch Outlets
-        const outlets = await Food.find(query)
-            .select('_id name email phone city state address profileImage profileStatus isActive isOnline rating totalReviews createdAt')
-            .sort({ createdAt: -1 })
-            .skip(skip)
-            .limit(parseInt(limit, 10))
-            .lean();
-
-        // 2. 🧮 Fast Aggregation: Count Total Orders for each Outlet
-        const orderCounts = await FoodBooking.aggregate([
-            { $match: { foodId: { $in: outlets.map(o => o._id) } } },
+            // Join with FoodBookings collection
             {
-                $group: {
-                    _id: '$foodId',
-                    totalOrdersCount: { $sum: 1 },
+                $lookup: {
+                    from: 'foodbookings',
+                    localField: '_id',
+                    foreignField: 'foodId',
+                    as: 'allOrders'
+                }
+            },
+
+            // Count Total & Active Orders
+            {
+                $addFields: {
+                    totalOrdersCount: { $size: '$allOrders' },
                     activeOrdersCount: {
-                        $sum: { $cond: [{ $in: ['$status', ['New', 'Preparing', 'Ready', 'Picked Up', 'Active']] }, 1, 0] }
+                        $size: {
+                            $filter: {
+                                input: '$allOrders',
+                                as: 'o',
+                                cond: {
+                                    $in: ['$$o.status', ['New', 'Preparing', 'Ready', 'Picked Up', 'Active']]
+                                }
+                            }
+                        }
                     }
                 }
+            },
+
+            // 🚀 3. SORT BY HIGHEST ORDERS FIRST
+            {
+                $sort: {
+                    totalOrdersCount: -1, // Most orders on TOP
+                    createdAt: -1
+                }
+            },
+
+            // Pagination
+            { $skip: skip },
+            { $limit: limitNum },
+
+            // Clean temporary heavy arrays & sensitive fields
+            {
+                $project: {
+                    allOrders: 0,
+                    password: 0,
+                    token: 0,
+                    fcmToken: 0
+                }
             }
-        ]);
+        ];
 
-        const orderCountMap = new Map();
-        orderCounts.forEach(c => orderCountMap.set(c._id.toString(), c));
+        // 3. Count Total Matching Outlets
+        const totalDocs = await Food.countDocuments(matchQuery);
 
-        // 3. Format Response strictly matching Screen 1 Table
-        const formattedOutlets = outlets.map(outlet => {
-            const countInfo = orderCountMap.get(outlet._id.toString()) || { totalOrdersCount: 0, activeOrdersCount: 0 };
+        // 4. Execute Pipeline
+        const outlets = await Food.aggregate(pipeline);
 
-            return {
-                _id: outlet._id,
-                outletName: outlet.name,
-                email: outlet.email || "N/A",
-                phone: outlet.phone || "N/A",
-                city: outlet.city || "Mohali",
-                state: outlet.state || "",
-                address: outlet.address || "",
-                profileImage: outlet.profileImage || null,
-                verification: outlet.profileStatus.toUpperCase(), // "APPROVED"
-                isActive: outlet.isActive,
-                isOnline: outlet.isOnline,
-                rating: outlet.rating || 0,
-                totalOrders: countInfo.totalOrdersCount,
-                activeOrders: countInfo.activeOrdersCount
-            };
-        });
+        // 5. Format Response strictly matching Screen 1 Table
+        const formattedOutlets = outlets.map(outlet => ({
+            _id: outlet._id,
+            outletName: outlet.name,
+            email: outlet.email || "N/A",
+            phone: outlet.phone || "N/A",
+            city: outlet.city || "Mohali",
+            state: outlet.state || "",
+            address: outlet.address || "",
+            profileImage: outlet.profileImage || null,
+            verification: (outlet.profileStatus || "APPROVED").toUpperCase(),
+            isActive: outlet.isActive !== undefined ? outlet.isActive : true,
+            isOnline: outlet.isOnline !== undefined ? outlet.isOnline : true,
+            rating: outlet.rating || 0,
+            totalOrders: outlet.totalOrdersCount || 0,
+            activeOrders: outlet.activeOrdersCount || 0
+        }));
 
         res.json({
             success: true,
             totalActiveOutlets: totalDocs,
-            totalPages: Math.ceil(totalDocs / parseInt(limit, 10)) || 1,
-            currentPage: parseInt(page, 10),
-            limit: parseInt(limit, 10),
+            totalPages: Math.ceil(totalDocs / limitNum) || 1,
+            currentPage: pageNum,
+            limit: limitNum,
             count: formattedOutlets.length,
             data: formattedOutlets
         });

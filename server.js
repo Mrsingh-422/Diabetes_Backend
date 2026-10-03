@@ -251,13 +251,13 @@ app.use('/user/cart', require('./routes/user/Lab/CartRoute'));
 app.use('/user/pharmacy', require('./routes/user/Pharmacy/BookPharmacyRoute'));
 app.use('/user/medicine', require('./routes/user/Pharmacy/MedicineInventoryUserRoute'));
 
-// ============================ user Ambulance start ===============================================
+// ============================  Ambulance start ===============================================
 // app.use('/user/ambulance', require('./routes/user/Ambulance/AmbulanceBookRoute'));
-
+app.use('/admin/ambulances', require('./routes/admin/Ambulance/adminAmbulanceRoute'));
 app.use('/api/user/ambulance', require('./routes/user/Ambulance/userAmbulanceRoute'));
 app.use('/api/user/ambulance/booking', require('./routes/user/Ambulance/ambulanceBookingRoute'));
 
-// ============================ user Ambulance End ===================================================
+// ============================  Ambulance End ===================================================
 
 //========================== Food Routes User ================================================================
 app.use('/api/foodpage', require('./routes/user/Food/FoodPageRoute')); // Food Page Management Route

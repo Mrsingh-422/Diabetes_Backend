@@ -20,6 +20,12 @@ const ambulanceBookingSchema = new mongoose.Schema({
     // 🕒 Scheduled Ride Details (For Referral Flow)
     scheduledDate: { type: String, default: null }, // e.g. "2026-10-02"
     scheduledTime: { type: String, default: null }, // e.g. "10:00 AM - 12:00 PM"
+    
+       // ⏱ NEW: User Estimated Travel / Ride Duration
+       estimateTime: { 
+        type: String, 
+        default: null 
+    },
 
     rideType: { 
         type: String, 

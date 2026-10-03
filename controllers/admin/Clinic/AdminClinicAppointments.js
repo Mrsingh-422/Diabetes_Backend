@@ -4,27 +4,32 @@ const Appointment = require('../../../models/Appointment');
 const mongoose = require('mongoose');
 
 // ==========================================
-// 🏥 1. GET APPROVED CLINICS LIST (SCREEN 1 - With Appointment Counts)
+// 🏥 1. GET APPROVED CLINICS LIST (Sorted by Highest Appointments First)
 // Full Path: GET /api/admin/clinic-appointments/clinics
 // ==========================================
 const getApprovedClinicsList = async (req, res) => {
     try {
         const { search, city, page = 1, limit = 10 } = req.query;
 
-        const query = {
+        const pageNum = parseInt(page, 10) || 1;
+        const limitNum = parseInt(limit, 10) || 10;
+        const skip = (pageNum - 1) * limitNum;
+
+        // 1. Build Base Match Query
+        let matchQuery = {
             $or: [
                 { Accountverify: 'Approved' },
                 { profileStatus: 'Approved' }
             ]
         };
 
-        if (city) {
-            query.city = { $regex: city.trim(), $options: 'i' };
+        if (city && city.trim() !== '') {
+            matchQuery.city = { $regex: city.trim(), $options: 'i' };
         }
 
-        if (search) {
+        if (search && search.trim() !== '') {
             const regex = new RegExp(search.trim(), 'i');
-            query.$or = [
+            matchQuery.$or = [
                 { clinicName: regex },
                 { name: regex },
                 { email: regex },
@@ -33,68 +38,94 @@ const getApprovedClinicsList = async (req, res) => {
             ];
         }
 
-        const skip = (parseInt(page, 10) - 1) * parseInt(limit, 10);
-        const totalDocs = await Clinic.countDocuments(query);
+        // 🎯 2. AGGREGATION PIPELINE: Calculate Appointments & Sort Descending
+        const pipeline = [
+            { $match: matchQuery },
 
-        // 1. Fetch Clinics
-        const clinics = await Clinic.find(query)
-            .select('_id name clinicName email phoneNumber city state address image posterimage Accountverify profileStatus isActive isOnline createdAt')
-            .sort({ createdAt: -1 })
-            .skip(skip)
-            .limit(parseInt(limit, 10))
-            .lean();
-
-        // 2. 🧮 Fast Aggregation: Count Total & Active Appointments for each Clinic
-        const appointmentCounts = await Appointment.aggregate([
-            { $match: { clinicId: { $in: clinics.map(c => c._id) } } },
+            // Join with Appointments collection
             {
-                $group: {
-                    _id: '$clinicId',
-                    totalAppointmentsCount: { $sum: 1 },
+                $lookup: {
+                    from: 'appointments',
+                    localField: '_id',
+                    foreignField: 'clinicId',
+                    as: 'allAppointments'
+                }
+            },
+
+            // Count Total & Active Appointments
+            {
+                $addFields: {
+                    totalAppointmentsCount: { $size: '$allAppointments' },
                     activeAppointmentsCount: {
-                        $sum: {
-                            $cond: [
-                                { $in: ['$status', ['Confirmed', 'In-Progress', 'Clinic-Pending', 'Discharge-Pending', 'Rescheduled']] },
-                                1,
-                                0
-                            ]
+                        $size: {
+                            $filter: {
+                                input: '$allAppointments',
+                                as: 'a',
+                                cond: {
+                                    $in: [
+                                        '$$a.status',
+                                        ['Confirmed', 'In-Progress', 'Clinic-Pending', 'Discharge-Pending', 'Rescheduled']
+                                    ]
+                                }
+                            }
                         }
                     }
                 }
+            },
+
+            // 🚀 SORT BY HIGHEST APPOINTMENTS FIRST
+            {
+                $sort: {
+                    totalAppointmentsCount: -1, // Most appointments on TOP
+                    createdAt: -1
+                }
+            },
+
+            // Pagination
+            { $skip: skip },
+            { $limit: limitNum },
+
+            // Clean temporary heavy arrays
+            {
+                $project: {
+                    allAppointments: 0,
+                    password: 0,
+                    token: 0,
+                    phnOtp: 0
+                }
             }
-        ]);
+        ];
 
-        const countMap = new Map();
-        appointmentCounts.forEach(c => countMap.set(c._id.toString(), c));
+        // 3. Count Total Matching Clinics
+        const totalDocs = await Clinic.countDocuments(matchQuery);
 
-        // 3. Format Response strictly matching Screen 1 Table
-        const formattedClinics = clinics.map(clinic => {
-            const countInfo = countMap.get(clinic._id.toString()) || { totalAppointmentsCount: 0, activeAppointmentsCount: 0 };
+        // 4. Execute Pipeline
+        const clinics = await Clinic.aggregate(pipeline);
 
-            return {
-                _id: clinic._id,
-                clinicName: clinic.clinicName || clinic.name,
-                doctorIncharge: clinic.name,
-                email: clinic.email || "N/A",
-                phone: clinic.phoneNumber || "N/A",
-                city: clinic.city || "Mohali",
-                state: clinic.state || "",
-                address: clinic.address || "",
-                image: clinic.image || clinic.posterimage || null,
-                verification: (clinic.Accountverify || clinic.profileStatus || "APPROVED").toUpperCase(),
-                isActive: clinic.isActive,
-                isOnline: clinic.isOnline,
-                totalAppointments: countInfo.totalAppointmentsCount,
-                activeAppointments: countInfo.activeAppointmentsCount
-            };
-        });
+        // 5. Format Response strictly matching Admin Screen Table
+        const formattedClinics = clinics.map(clinic => ({
+            _id: clinic._id,
+            clinicName: clinic.clinicName || clinic.name,
+            doctorIncharge: clinic.name,
+            email: clinic.email || "N/A",
+            phone: clinic.phoneNumber || "N/A",
+            city: clinic.city || "Mohali",
+            state: clinic.state || "",
+            address: clinic.address || "",
+            image: clinic.image || clinic.posterimage || null,
+            verification: (clinic.Accountverify || clinic.profileStatus || "APPROVED").toUpperCase(),
+            isActive: clinic.isActive !== undefined ? clinic.isActive : true,
+            isOnline: clinic.isOnline !== undefined ? clinic.isOnline : true,
+            totalAppointments: clinic.totalAppointmentsCount || 0,
+            activeAppointments: clinic.activeAppointmentsCount || 0
+        }));
 
         res.json({
             success: true,
             totalActiveClinics: totalDocs,
-            totalPages: Math.ceil(totalDocs / parseInt(limit, 10)) || 1,
-            currentPage: parseInt(page, 10),
-            limit: parseInt(limit, 10),
+            totalPages: Math.ceil(totalDocs / limitNum) || 1,
+            currentPage: pageNum,
+            limit: limitNum,
             count: formattedClinics.length,
             data: formattedClinics
         });

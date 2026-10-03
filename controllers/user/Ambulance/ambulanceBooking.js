@@ -349,6 +349,8 @@ const bookEmergencyAmbulance = async (req, res) => {
                 condition: patientDetails?.condition || "Critical",
                 emergencyDescription: patientDetails?.emergencyDescription || purpose
             },
+            estimateTime: body.estimateTime || "Immediate (30 mins)",
+
             pricing: {
                 baseRideCharge: baseRate,
                 distanceCharge: extraKmCharge,
@@ -412,10 +414,13 @@ const acceptEmergencyBooking = async (req, res) => {
             return res.status(404).json({ success: false, message: "Driver profile not found." });
         }
 
-        // Atomic Lock Check
+        // 🛡️ ATOMIC LOCK: Only accept if status is still 'Searching'
         const updatedBooking = await AmbulanceBooking.findOneAndUpdate(
             { 
-                $or: [{ bookingId }, ...(mongoose.Types.ObjectId.isValid(bookingId) ? [{ _id: bookingId }] : [])],
+                $or: [
+                    { bookingId: bookingId },
+                    ...(mongoose.Types.ObjectId.isValid(bookingId) ? [{ _id: bookingId }] : [])
+                ],
                 status: 'Searching'
             },
             {
@@ -433,7 +438,9 @@ const acceptEmergencyBooking = async (req, res) => {
                 }
             },
             { new: true }
-        ).populate('userId', 'name phone');
+        )
+        .populate('userId', 'name phone')
+        .populate('ambulanceId', 'name vehicleNumber vehicleType phone');
 
         if (!updatedBooking) {
             return res.status(400).json({
@@ -470,6 +477,7 @@ const bookReferralAmbulance = async (req, res) => {
         const purpose = body.purpose || "Hospital Transfer / Referral";
         const scheduledDate = body.scheduledDate;
         const scheduledTime = body.scheduledTime;
+        const estimateTime = body.estimateTime || null; // 👈 Estimated duration (e.g. "1 hr 30 mins")
         const supportStaff = parseField(body.supportStaff) || [];
         const couponCode = body.couponCode;
         const paymentMethod = body.paymentMethod || 'COD';
@@ -481,7 +489,7 @@ const bookReferralAmbulance = async (req, res) => {
             });
         }
 
-        // 1. Calculate Exact Bill
+        // 1. Calculate Exact Bill using Unified Engine
         const bill = await calculateAmbulanceBillHelper({
             ambulanceId,
             rideType,
@@ -505,7 +513,7 @@ const bookReferralAmbulance = async (req, res) => {
         const caseRef = `CAS-REF-${Math.floor(1000 + Math.random() * 9000)}`;
         const otp = Math.floor(1000 + Math.random() * 9000).toString();
 
-        // 2. Razorpay Order Generation
+        // 2. Razorpay Order Generation for Online Payment
         let rzpOrder = null;
         if (paymentMethod === 'Online' && finalTotal > 0) {
             rzpOrder = await createRazorpayOrder(finalTotal, `rec_${tempBookingId}`);
@@ -523,6 +531,7 @@ const bookReferralAmbulance = async (req, res) => {
             bookingCategory: 'Referral',
             scheduledDate: scheduledDate || null,
             scheduledTime: scheduledTime || null,
+            estimateTime: estimateTime, // 👈 Saved in DB
             rideType: bill.routeDetails.rideType,
             pickupLocation: {
                 address: pickupLocation.address,
@@ -567,12 +576,12 @@ const bookReferralAmbulance = async (req, res) => {
             }]
         });
 
-        // Increment coupon usage count if confirmed right away (COD / Free)
+        // 4. Increment Coupon Usage if Auto-Confirmed
         if (isAutoConfirmed && bill.appliedCoupon?.couponId) {
             await recordCouponUsage(bill.appliedCoupon.couponId, userId);
         }
 
-        // Notify Driver
+        // 5. Notify Driver
         await DriverNotification.create({
             driverId: bill.ambulanceDetails._id,
             title: "📋 New Referral Booking",
@@ -580,6 +589,7 @@ const bookReferralAmbulance = async (req, res) => {
             type: 'Referral Received'
         });
 
+        // Response for Online Payment
         if (paymentMethod === 'Online' && rzpOrder) {
             return res.status(201).json({
                 success: true,
@@ -596,6 +606,7 @@ const bookReferralAmbulance = async (req, res) => {
             });
         }
 
+        // Response for COD / ₹0 Free
         res.status(201).json({
             success: true,
             isOnlinePayment: false,
@@ -701,21 +712,103 @@ const verifyAmbulancePayment = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
-
 // ==========================================
-// 🔍 3. GET USER'S AMBULANCE BOOKINGS
-// Endpoint: GET /api/user/ambulance/booking/my-rides
+// 📋 6. GET ALL USER BOOKING ORDERS (Lightweight Summary List)
+// Endpoint: GET /api/user/ambulance/booking/my-orders
 // ==========================================
-const getMyAmbulanceRides = async (req, res) => {
+const getUserAmbulanceBookings = async (req, res) => {
     try {
         const userId = req.user.id;
-        const rides = await AmbulanceBooking.find({ userId })
-            .populate('ambulanceId', 'name vehicleNumber vehicleType phone driverName')
-            .populate('clinicId', 'name clinicName phoneNumber address')
+        const { status, bookingCategory } = req.query;
+
+        let query = { userId };
+        if (status) query.status = status;
+        if (bookingCategory) query.bookingCategory = bookingCategory;
+
+        const bookings = await AmbulanceBooking.find(query)
+            .select('bookingId caseReference bookingCategory rideType status paymentStatus paymentMethod pricing.total scheduledDate scheduledTime estimateTime pickupLocation.address dropoffLocation.address ambulanceId clinicId createdAt')
+            .populate('ambulanceId', 'name vehicleNumber vehicleType phone')
+            .populate('clinicId', 'name clinicName phoneNumber')
             .sort({ createdAt: -1 })
             .lean();
 
-        res.json({ success: true, count: rides.length, data: rides });
+        // 🎯 Lightweight Summary Mapping (Only Essential Fields)
+        const summaryList = bookings.map(b => ({
+            _id: b._id,
+            bookingId: b.bookingId,
+            caseReference: b.caseReference,
+            bookingCategory: b.bookingCategory || 'Emergency',
+            rideType: b.rideType || 'Single Ride',
+            status: b.status,
+            paymentStatus: b.paymentStatus,
+            paymentMethod: b.paymentMethod,
+            totalAmount: b.pricing?.total || 0,
+            scheduledDate: b.scheduledDate || null,
+            scheduledTime: b.scheduledTime || null,
+            estimateTime: b.estimateTime || null,
+            pickupAddress: b.pickupLocation?.address || "",
+            dropoffAddress: b.dropoffLocation?.address || "",
+            ambulance: b.ambulanceId ? {
+                _id: b.ambulanceId._id,
+                name: b.ambulanceId.name,
+                vehicleNumber: b.ambulanceId.vehicleNumber,
+                vehicleType: b.ambulanceId.vehicleType,
+                phone: b.ambulanceId.phone
+            } : null,
+            clinic: b.clinicId ? {
+                _id: b.clinicId._id,
+                name: b.clinicId.clinicName || b.clinicId.name,
+                phone: b.clinicId.phoneNumber
+            } : null,
+            createdAt: b.createdAt
+        }));
+
+        res.json({
+            success: true,
+            count: summaryList.length,
+            data: summaryList
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// ==========================================
+// 🔍 7. GET SINGLE BOOKING ORDER FULL DETAILS BY ID
+// Endpoint: GET /api/user/ambulance/booking/order/:id
+// ==========================================
+const getUserAmbulanceBookingById = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const { id } = req.params;
+
+        // Find by MongoDB _id, bookingId, or caseReference
+        const booking = await AmbulanceBooking.findOne({
+            $or: [
+                ...(mongoose.Types.ObjectId.isValid(id) ? [{ _id: id }] : []),
+                { bookingId: id },
+                { caseReference: id }
+            ],
+            userId
+        })
+        .populate('ambulanceId', 'name vehicleNumber vehicleType phone bloodGroup experienceYears location pricing')
+        .populate('clinicId', 'name clinicName phoneNumber address image')
+        .populate('userId', 'name phone email')
+        .lean();
+
+        if (!booking) {
+            return res.status(404).json({
+                success: false,
+                message: "Ambulance booking order not found."
+            });
+        }
+
+        res.json({
+            success: true,
+            data: booking // 👈 Returns 100% full detailed object
+        });
+
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
@@ -726,5 +819,6 @@ module.exports = {
     acceptEmergencyBooking,
     bookReferralAmbulance,
     verifyAmbulancePayment,
-    getMyAmbulanceRides
+    getUserAmbulanceBookings,
+    getUserAmbulanceBookingById
 };

@@ -4,15 +4,19 @@ const Appointment = require('../../../models/Appointment');
 const mongoose = require('mongoose');
 
 // ==========================================
-// 👨‍⚕️ 1. GET APPROVED INDEPENDENT DOCTORS LIST (SCREEN 1 - With Appointment Counts)
+// 👨‍⚕️ 1. GET APPROVED INDEPENDENT DOCTORS LIST (Sorted by Highest Appointments First)
 // Full Path: GET /api/admin/doctor-appointments/doctors
 // ==========================================
 const getApprovedIndependentDoctorsList = async (req, res) => {
     try {
         const { search, speciality, city, page = 1, limit = 10 } = req.query;
 
-        // Query only Approved Independent Doctors (clinicId is null/does not exist)
-        const query = {
+        const pageNum = parseInt(page, 10) || 1;
+        const limitNum = parseInt(limit, 10) || 10;
+        const skip = (pageNum - 1) * limitNum;
+
+        // 1. Build Base Match Query (Only Approved Independent Doctors)
+        let matchQuery = {
             profileStatus: 'Approved',
             role: 'doctor',
             $or: [
@@ -21,17 +25,17 @@ const getApprovedIndependentDoctorsList = async (req, res) => {
             ]
         };
 
-        if (speciality) {
-            query.speciality = { $regex: speciality.trim(), $options: 'i' };
+        if (speciality && speciality.trim() !== '') {
+            matchQuery.speciality = { $regex: speciality.trim(), $options: 'i' };
         }
 
-        if (city) {
-            query.city = { $regex: city.trim(), $options: 'i' };
+        if (city && city.trim() !== '') {
+            matchQuery.city = { $regex: city.trim(), $options: 'i' };
         }
 
-        if (search) {
+        if (search && search.trim() !== '') {
             const regex = new RegExp(search.trim(), 'i');
-            query.$or = [
+            matchQuery.$or = [
                 { name: regex },
                 { email: regex },
                 { phone: regex },
@@ -39,71 +43,95 @@ const getApprovedIndependentDoctorsList = async (req, res) => {
             ];
         }
 
-        const skip = (parseInt(page, 10) - 1) * parseInt(limit, 10);
-        const totalDocs = await Doctor.countDocuments(query);
+        // 🎯 2. AGGREGATION PIPELINE: Count Appointments & Sort Descending
+        const pipeline = [
+            { $match: matchQuery },
 
-        // 1. Fetch Doctors
-        const doctors = await Doctor.find(query)
-            .select('_id name email phone speciality qualification experienceYears city state profileImage fees averageRating totalReviews profileStatus isActive isOnline createdAt')
-            .sort({ createdAt: -1 })
-            .skip(skip)
-            .limit(parseInt(limit, 10))
-            .lean();
-
-        // 2. 🧮 Fast Aggregation: Count Total & Active Appointments for each Doctor
-        const appointmentCounts = await Appointment.aggregate([
-            { $match: { doctorId: { $in: doctors.map(d => d._id) }, clinicId: null } },
+            // Join with Appointments collection
             {
-                $group: {
-                    _id: '$doctorId',
-                    totalAppointmentsCount: { $sum: 1 },
+                $lookup: {
+                    from: 'appointments',
+                    localField: '_id',
+                    foreignField: 'doctorId',
+                    as: 'allAppointments'
+                }
+            },
+
+            // Count Total & Active Appointments
+            {
+                $addFields: {
+                    totalAppointmentsCount: { $size: '$allAppointments' },
                     activeAppointmentsCount: {
-                        $sum: {
-                            $cond: [
-                                { $in: ['$status', ['Confirmed', 'In-Progress', 'Rescheduled']] },
-                                1,
-                                0
-                            ]
+                        $size: {
+                            $filter: {
+                                input: '$allAppointments',
+                                as: 'a',
+                                cond: {
+                                    $in: ['$$a.status', ['Confirmed', 'In-Progress', 'Rescheduled']]
+                                }
+                            }
                         }
                     }
                 }
+            },
+
+            // 🚀 3. SORT BY HIGHEST APPOINTMENTS FIRST
+            {
+                $sort: {
+                    totalAppointmentsCount: -1, // Most appointments on TOP
+                    createdAt: -1
+                }
+            },
+
+            // Pagination
+            { $skip: skip },
+            { $limit: limitNum },
+
+            // Clean temporary heavy arrays & sensitive fields
+            {
+                $project: {
+                    allAppointments: 0,
+                    password: 0,
+                    token: 0,
+                    fcmToken: 0,
+                    resetOTP: 0
+                }
             }
-        ]);
+        ];
 
-        const countMap = new Map();
-        appointmentCounts.forEach(c => countMap.set(c._id.toString(), c));
+        // 3. Count Total Matching Doctors
+        const totalDocs = await Doctor.countDocuments(matchQuery);
 
-        // 3. Format Response strictly matching Screen 1 Table
-        const formattedDoctors = doctors.map(doc => {
-            const countInfo = countMap.get(doc._id.toString()) || { totalAppointmentsCount: 0, activeAppointmentsCount: 0 };
+        // 4. Execute Pipeline
+        const doctors = await Doctor.aggregate(pipeline);
 
-            return {
-                _id: doc._id,
-                doctorName: doc.name,
-                email: doc.email || "N/A",
-                phone: doc.phone || "N/A",
-                speciality: doc.speciality || "General Physician",
-                qualification: doc.qualification || "MBBS",
-                experienceYears: doc.experienceYears || 0,
-                city: doc.city || "Mohali",
-                state: doc.state || "",
-                fees: doc.fees || {},
-                profileImage: doc.profileImage || null,
-                verification: (doc.profileStatus || "APPROVED").toUpperCase(),
-                isActive: doc.isActive,
-                isOnline: doc.isOnline,
-                rating: doc.averageRating || 0,
-                totalAppointments: countInfo.totalAppointmentsCount,
-                activeAppointments: countInfo.activeAppointmentsCount
-            };
-        });
+        // 5. Format Response strictly matching Admin Screen 1 Table
+        const formattedDoctors = doctors.map(doc => ({
+            _id: doc._id,
+            doctorName: doc.name,
+            email: doc.email || "N/A",
+            phone: doc.phone || "N/A",
+            speciality: doc.speciality || "General Physician",
+            qualification: doc.qualification || "MBBS",
+            experienceYears: doc.experienceYears || 0,
+            city: doc.city || "Mohali",
+            state: doc.state || "",
+            fees: doc.fees || {},
+            profileImage: doc.profileImage || null,
+            verification: (doc.profileStatus || "APPROVED").toUpperCase(),
+            isActive: doc.isActive !== undefined ? doc.isActive : true,
+            isOnline: doc.isOnline !== undefined ? doc.isOnline : true,
+            rating: doc.averageRating || 0,
+            totalAppointments: doc.totalAppointmentsCount || 0,
+            activeAppointments: doc.activeAppointmentsCount || 0
+        }));
 
         res.json({
             success: true,
             totalActiveDoctors: totalDocs,
-            totalPages: Math.ceil(totalDocs / parseInt(limit, 10)) || 1,
-            currentPage: parseInt(page, 10),
-            limit: parseInt(limit, 10),
+            totalPages: Math.ceil(totalDocs / limitNum) || 1,
+            currentPage: pageNum,
+            limit: limitNum,
             count: formattedDoctors.length,
             data: formattedDoctors
         });
