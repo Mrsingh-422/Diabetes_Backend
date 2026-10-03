@@ -13,7 +13,7 @@ const glucoseDeviceSchema = new mongoose.Schema({
     brand: { 
         type: String, 
         required: true, 
-        default: "BeatO", 
+        default: "DiabetecWala", 
         trim: true 
     },
     deviceModel: { 
