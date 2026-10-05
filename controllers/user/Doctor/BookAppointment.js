@@ -34,25 +34,41 @@ const getSpecializations = async (req, res) => {
 
 
 // ==========================================
-// 🔍 SEARCH & FILTER INDEPENDENT DOCTORS
+// 🔍 SEARCH & FILTER INDEPENDENT DOCTORS (Search by Name & Speciality)
 // Endpoint: POST /user/doctors/list
 // ==========================================
 const searchDoctors = async (req, res) => {
     try {
         const { speciality, city, search, consultationType, userLat, userLng } = req.body;
-
+        
         // 🎯 STRICT FILTER: Only Independent Doctors (No Clinic Doctors)
-        let query = {
-            role: 'doctor',
-            clinicId: null,
-            profileStatus: 'Approved',
-            isActive: true
+        let query = { 
+            role: 'doctor', 
+            clinicId: null, 
+            profileStatus: 'Approved', 
+            isActive: true 
         };
 
-        if (speciality) query.speciality = new RegExp(speciality.trim(), 'i');
-        if (city) query.city = { $regex: city.trim(), $options: 'i' };
-        if (search) query.name = { $regex: search.trim(), $options: 'i' };
+        // Dedicated Filters
+        if (speciality && speciality.trim() !== '') {
+            query.speciality = new RegExp(speciality.trim(), 'i');
+        }
+        
+        if (city && city.trim() !== '') {
+            query.city = { $regex: city.trim(), $options: 'i' };
+        }
 
+        // 🎯 KEYWORD SEARCH: Searches across Doctor Name, Speciality & Qualification
+        if (search && search.trim() !== '') {
+            const searchRegex = new RegExp(search.trim(), 'i');
+            query.$or = [
+                { name: searchRegex },
+                { speciality: searchRegex },
+                { qualification: searchRegex }
+            ];
+        }
+
+        // Consultation Mode Filters
         if (consultationType === 'Video Consult') {
             query['consultationStatus.online'] = true;
         } else if (consultationType === 'Clinic Visit') {
@@ -63,22 +79,21 @@ const searchDoctors = async (req, res) => {
 
         // Fetch Doctors
         let doctors = await Doctor.find(query)
-            .select('name email phone countryCode role speciality  experienceYears consultationStatus averageRating totalReviews profileImage address location')
+            .select('name email phone countryCode role speciality qualification experienceYears about languages licenseNumber councilNumber councilName dutyStatus consultationStatus averageRating totalReviews profileImage address location')
             .lean();
 
         const doctorsWithDistance = await Promise.all(doctors.map(async (doc) => {
             let distance = 0;
-
+            
             if (userLat && userLng && doc.location?.lat && doc.location?.lng) {
                 distance = await getDistance(
-                    parseFloat(userLat),
-                    parseFloat(userLng),
-                    doc.location.lat,
+                    parseFloat(userLat), 
+                    parseFloat(userLng), 
+                    doc.location.lat, 
                     doc.location.lng
                 );
             }
 
-            // 🎯 EXACT REQUESTED CLEAN RESPONSE (With 'profileImage')
             return {
                 _id: doc._id,
                 name: doc.name,
@@ -101,7 +116,7 @@ const searchDoctors = async (req, res) => {
                     rating: doc.averageRating || 0,
                     totalReviews: doc.totalReviews || 0
                 },
-                profileImage: doc.profileImage || null, // 👈 Exact 'profileImage' Key
+                profileImage: doc.profileImage || null,
                 address: doc.address || `${doc.city || ''}, ${doc.state || ''}`.trim(),
                 location: doc.location || { lat: 0, lng: 0 },
                 distance: Number(distance.toFixed(2))
@@ -111,10 +126,10 @@ const searchDoctors = async (req, res) => {
         // Sort by nearest distance ascending
         doctorsWithDistance.sort((a, b) => a.distance - b.distance);
 
-        res.status(200).json({
-            success: true,
-            count: doctorsWithDistance.length,
-            data: doctorsWithDistance
+        res.status(200).json({ 
+            success: true, 
+            count: doctorsWithDistance.length, 
+            data: doctorsWithDistance 
         });
 
     } catch (error) {
