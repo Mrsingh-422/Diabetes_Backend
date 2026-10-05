@@ -1224,6 +1224,28 @@ const smoothieDrinkUploads = multer({
 }).fields([
     { name: 'images', maxCount: 10 } // 👈 Multiple images upload (up to 10 files)
 ]);
+
+// ==========================================
+// 54. CGM & GLUCOMETER DEVICES UPLOADS
+// ==========================================
+const cgmDeviceDir = 'public/uploads/cgm_devices';
+ensureDir(cgmDeviceDir);
+
+const cgmDeviceUploads = multer({
+    storage: multer.diskStorage({
+        destination: (req, file, cb) => cb(null, cgmDeviceDir),
+        filename: (req, file, cb) => {
+            const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
+            cb(null, `device-${uniqueSuffix}${path.extname(file.originalname)}`);
+        }
+    }),
+    fileFilter: docFileFilter,
+    limits: { fileSize: 5 * 1024 * 1024 } // 5MB limit
+}).fields([
+    { name: 'mainImage', maxCount: 1 }, // Single Main Thumbnail Image
+    { name: 'images', maxCount: 10 }     // Gallery / Showcase Images
+]);
+
 module.exports = {
     clinicUploads,
     contentUploads,
@@ -1274,6 +1296,6 @@ module.exports = {
     docPrescriptionUpload, hospitalPrescriptionUploads, hospitalDischargeFieldsUpload, blogUploads,
     videoUploads, videoUpdateUploads, footerUploads, aboutUsUploads,
     foodDocUploads, foodServiceImageUpload, bannerUploadParser, foodAddonImageUpload, clinicDoctorUploads,doctorApptReportUpload,
-    foodHealthyPlanUploads,smoothieDrinkUploads
+    foodHealthyPlanUploads,smoothieDrinkUploads,cgmDeviceUploads
 
 };  

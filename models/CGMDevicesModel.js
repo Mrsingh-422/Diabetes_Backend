@@ -1,104 +1,105 @@
-// models/GlucoseDevice.js
+// models/CGMDevicesModel.js
 const mongoose = require('mongoose');
 
-const glucoseDeviceSchema = new mongoose.Schema({
+const cgmDeviceSchema = new mongoose.Schema({
     // ==========================================
-    // 1. BASIC PRODUCT INFORMATION
+    // 1. COMMON PRODUCT INFORMATION (Har item ke liye)
     // ==========================================
+    categoryId: { 
+        type: mongoose.Schema.Types.ObjectId, 
+        ref: 'DeviceCategory', 
+        required: [true, "Category selection is required"],
+        index: true
+    },
+    // Product Type frontend ko batayega ki konsa UI format dikhana hai
+    productType: {
+        type: String,
+        enum: ['Glucometer', 'CGM', 'Supplement', 'Accessory'],
+        default: 'Glucometer',
+        required: true,
+        index: true
+    },
     title: { 
         type: String, 
-        required: [true, "Device title is required"], 
+        required: [true, "Product title is required"], 
         trim: true 
-    }, // e.g. "New BeatO AI-Powered Glucometer | Auto Saves Readings"
+    },
     brand: { 
         type: String, 
         required: true, 
-        default: "DiabetecWala", 
+        default: "BeatO", 
         trim: true 
     },
     deviceModel: { 
         type: String, 
-        enum: ['Curv', 'Smart', 'CGM Sensor', 'Traditional'], 
-        default: 'Curv' 
-    },
-    deviceCategory: {
-        type: String,
-        enum: ['CGM Device', 'Smartphone Glucometer', 'Standard Glucometer', 'Test Strips & Lancets'],
-        default: 'Smartphone Glucometer'
-    },
+        default: "Standard" 
+    }, // 'Curv', 'Smart', 'CGM Sensor', 'Ayurvedic', 'Nutrition'
     tagline: { 
         type: String, 
-        default: "CDSCO Approved Lab-Grade Accuracy | ISO Certified | Lifetime Warranty" 
+        default: "" 
     },
     badge: { 
         type: String, 
-        default: "AI-Powered" 
-    }, // e.g. "AI-Powered", "Bestseller", "Clinically Proven"
+        default: "" 
+    }, // 'AI-Powered', '100% Organic', 'Bestseller', 'Deal of the Day'
 
-    // ==========================================
-    // 2. MEDIA & GALLERY
-    // ==========================================
+    // Media
     mainImage: { 
         type: String, 
-        required: true 
+        required: [true, "Main showcase image is required"] 
     },
     images: [{ 
         type: String, 
-        required: true 
-    }], // Multiple showcase images
+        default: [] 
+    }],
     demoVideoUrl: { 
         type: String, 
         default: null 
     },
 
-    // ==========================================
-    // 3. PRICING & DISCOUNTS (Base / Default)
-    // ==========================================
+    // Pricing
     mrp: { 
         type: Number, 
         required: true, 
         min: 0 
-    }, // e.g. 1047
+    },
     sellingPrice: { 
         type: Number, 
         required: true, 
         min: 0 
-    }, // e.g. 499
+    },
     prepaidDiscountPrice: { 
         type: Number, 
         default: 0 
-    }, // e.g. 474 (Prepaid special price)
+    },
     savingsAmount: { 
         type: Number, 
         default: 0 
-    }, // e.g. 548
+    },
 
     // ==========================================
-    // 4. COMPATIBILITY & HARDWARE PORTS (From UI)
+    // 2. GLUCOMETER SPECIFIC FIELDS (Sirf Glucometer ke liye)
     // ==========================================
     compatibility: {
         type: String,
-        enum: ['Android Only', 'Android & iOS', 'iOS Only'],
-        default: 'Android Only'
+        enum: ['Android Only', 'Android & iOS', 'iOS Only', 'Universal / Not Applicable'],
+        default: 'Universal / Not Applicable'
     },
     connectorType: {
         type: String,
-        enum: ['Type-C', 'Micro-USB', 'Lightning (iPhone)', '3.5mm Audio Jack', 'Bluetooth / Wireless', 'NFC'],
-        default: 'Type-C'
+        enum: ['Type-C', 'Micro-USB', 'Lightning (iPhone)', '3.5mm Audio Jack', 'Bluetooth / Wireless', 'None'],
+        default: 'None'
     },
 
     // ==========================================
-    // 5. STRIP & LANCET BUNDLE VARIANTS (Dropdown Options)
+    // 3. GENERIC VARIANTS (Glucometer, CGM & Supplement sabhi ke liye)
     // ==========================================
     variants: [{
-        variantName: { type: String, required: true }, // e.g., "25 Strips & 25 Lancets", "50 Strips & 50 Lancets", "100 Strips"
-        stripsCount: { type: Number, default: 25 },
-        lancetsCount: { type: Number, default: 25 },
-        compatibility: { 
-            type: String, 
-            enum: ['Android Only', 'Android & iOS'], 
-            default: 'Android Only' 
-        },
+        variantName: { type: String, required: true }, // e.g. "25 Strips & 25 Lancets" OR "60 Veg Capsules" OR "Pack of 2"
+        packSize: { type: String, default: "" },       // e.g. "60 Capsules", "100g", "1 Unit"
+        stripsCount: { type: Number, default: 0 },
+        lancetsCount: { type: Number, default: 0 },
+        compatibility: { type: String, default: 'Universal / Not Applicable' },
         mrp: { type: Number, required: true },
         sellingPrice: { type: Number, required: true },
         stockQuantity: { type: Number, default: 100 },
@@ -106,35 +107,60 @@ const glucoseDeviceSchema = new mongoose.Schema({
     }],
 
     // ==========================================
-    // 6. CLINICAL & TECHNICAL SPECIFICATIONS
+    // 4. CATEGORY SPECIFIC SPECIFICATIONS
     // ==========================================
+    
+    // A. Technical / Device Specs (For Glucometers & Hardware)
     specifications: {
-        coefficientOfVariation: { type: String, default: "CV < 2%" }, // High precision benchmark
-        accuracyTesting: { type: String, default: "NIB Tested & CDSCO Approved" }, // National Institute of Biologicals
-        certifications: [{ type: String }], // e.g. ["ISO 15197:2013", "CDSCO", "CE", "GMP"]
-        bloodSampleSize: { type: String, default: "0.5 µL" }, // Tiny blood droplet requirement
-        testDurationSeconds: { type: Number, default: 5 }, // 5 seconds fast result
-        measuringRange: { type: String, default: "20 - 600 mg/dL" },
-        sensorWarmupTime: { type: String, default: "60 mins" }, // For CGM Continuous monitoring
-        sensorLifeSpanDays: { type: Number, default: 14 },     // For CGM patches (e.g. 14 days continuous)
-        batteryRequired: { type: Boolean, default: false },    // Battery-free smartphone plug-in
+        coefficientOfVariation: { type: String, default: "" }, // "CV < 2%"
+        accuracyTesting: { type: String, default: "" },        // "NIB Tested & CDSCO Approved"
+        certifications: [{ type: String }],
+        bloodSampleSize: { type: String, default: "" },        // "0.5 µL"
+        testDurationSeconds: { type: Number, default: 5 },
+        measuringRange: { type: String, default: "" },
+        batteryRequired: { type: Boolean, default: false },
         autoSaveReadings: { type: Boolean, default: true },
-        hba1cEstimationCapable: { type: Boolean, default: true }, // Estimated HbA1c generation
-        warranty: { type: String, default: "Lifetime Warranty" }
+        hba1cEstimationCapable: { type: Boolean, default: false },
+        warranty: { type: String, default: "" }
+    },
+
+    // B. CGM Sensor Specifics (For Continuous Monitoring)
+    cgmDetails: {
+        sensorLifeSpanDays: { type: Number, default: 14 },     // 14 or 15 days
+        sensorWarmupTime: { type: String, default: "60 mins" },
+        waterResistance: { type: String, default: "IP28 Water Resistant" },
+        isDoctorConsultationIncluded: { type: Boolean, default: false },
+        consultationTitle: { type: String, default: "Free Weight & Diabetes Coach Consultation" }
+    },
+
+    // C. Supplement Specifics (For Moringa, Cinnamon, Shilajit, Juices, Tumblers)
+    supplementDetails: {
+        form: { 
+            type: String, 
+            enum: ['Capsules', 'Powder', 'Liquid / Juice', 'Tablet', 'Resin', 'Herbal Wood / Tumbler', 'N/A'],
+            default: 'N/A'
+        },
+        dietaryPreference: { 
+            type: String, 
+            enum: ['100% Vegetarian', 'Vegan', 'Organic', 'Sugar-Free', 'N/A'],
+            default: '100% Vegetarian'
+        },
+        dosage: { type: String, default: "" },              // e.g. "2 capsules twice daily with water"
+        netQuantity: { type: String, default: "" },         // e.g. "60 Capsules" or "100 grams"
+        keyIngredients: [{ type: String }],                // e.g. ["Organic Moringa Leaf Powder", "Cinnamon Extract"]
+        shelfLife: { type: String, default: "24 Months" },  // e.g. "24 Months from MFG"
+        ayushCertified: { type: Boolean, default: true }
     },
 
     // ==========================================
-    // 7. KEY HIGHLIGHTS & BENEFIT BADGES (UI Bullets)
+    // 5. COMMON ACCORDIONS & UI SECTIONS
     // ==========================================
     highlights: [{
-        icon: { type: String, default: "" }, // Icon URL or identifier
-        title: { type: String, required: true }, // e.g. "Lab-Grade Accuracy", "Auto-Saves Readings"
+        icon: { type: String, default: "" },
+        title: { type: String, required: true },
         description: { type: String, default: "" }
     }],
 
-    // ==========================================
-    // 8. PRODUCT DETAILS, HOW-TO-USE & ACCORDIONS
-    // ==========================================
     description: { 
         type: String, 
         required: true 
@@ -147,44 +173,22 @@ const glucoseDeviceSchema = new mongoose.Schema({
     }],
     boxContents: [{ 
         type: String 
-    }], // e.g. ["1 BeatO Curv Glucometer", "25 Strips", "25 Lancets", "1 Lancing Pen", "Travel Pouch"]
-
-    // FAQs Accordion (From Screenshot)
+    }],
     faqs: [{
         question: { type: String, required: true },
         answer: { type: String, required: true }
     }],
 
-    // ==========================================
-    // 9. DIABETES HEALTH PLATFORM INTEGRATION
-    // ==========================================
-    // Automatic sync with user's diabetes journal (HealthData.js)
-    isAppSyncSupported: { 
-        type: Boolean, 
-        default: true 
-    },
-    // Bonus benefit (e.g. 1 Free Doctor / Diabetes Educator consultation on purchase)
-    freeConsultationIncluded: {
-        isIncluded: { type: Boolean, default: true },
-        consultationType: { type: String, default: "Diabetes Care Expert" }
-    },
-
-    // "Frequently Bought Together" linked items (e.g., Karela Jamun Juice, Diabetic Snacks)
+    // Frequently Bought Together Cross-Selling (As seen in Screenshot)
     frequentlyBoughtTogether: [{
-        productType: {
-            type: String,
-            enum: ['FoodService', 'smoothiDrinks', 'Medicine', 'GlucoseDevice'],
-            default: 'FoodService'
+        productId: { 
+            type: mongoose.Schema.Types.ObjectId, 
+            ref: 'CGMDevices' 
         },
-        productId: {
-            type: mongoose.Schema.Types.ObjectId,
-            refPath: 'frequentlyBoughtTogether.productType'
-        }
+        customPrice: { type: Number, default: 0 }
     }],
 
-    // ==========================================
-    // 10. INVENTORY & STATUS
-    // ==========================================
+    // Inventory & Status
     stockQuantity: { 
         type: Number, 
         default: 100, 
@@ -207,7 +211,6 @@ const glucoseDeviceSchema = new mongoose.Schema({
         default: true 
     },
 
-    // Ratings & Reviews counter
     averageRating: { 
         type: Number, 
         default: 4.8 
@@ -219,11 +222,9 @@ const glucoseDeviceSchema = new mongoose.Schema({
     totalUsersCountDisplay: { 
         type: String, 
         default: "8 Lakh+ Users" 
-    } // "Trusted by 8 Lakh+ Users" section from screenshot
-
+    }
 }, { timestamps: true });
 
-// Text indexing for fast search by device name, model and brand
-glucoseDeviceSchema.index({ title: 'text', brand: 'text', deviceModel: 'text' });
+cgmDeviceSchema.index({ title: 'text', brand: 'text', productType: 'text' });
 
-module.exports = mongoose.model('CGMDevices', glucoseDeviceSchema);
+module.exports = mongoose.model('CGMDevices', cgmDeviceSchema);

@@ -257,21 +257,36 @@ const loginDoctor = async (req, res) => {
     }
 };
 
-// 2. NEW DOCTOR STATUS TOGGLE API
+// ==========================================
+// 🔄 TOGGLE DOCTOR ONLINE & DUTY STATUS (Synchronized)
+// Endpoint: PATCH /api/auth/doctor/status/toggle
+// ==========================================
 const toggleDoctorOnlineStatus = async (req, res) => {
     try {
         const { isOnline } = req.body;
         const doctorId = req.user.id;
 
         if (isOnline === undefined) {
-            return res.status(400).json({ success: false, message: "isOnline status value is required." });
+            return res.status(400).json({ 
+                success: false, 
+                message: "isOnline status value (true or false) is required." 
+            });
         }
+
+        const isOnlineBool = Boolean(isOnline);
+        // 🎯 Auto-sync dutyStatus based on isOnline
+        const dutyStatus = isOnlineBool ? 'On Duty' : 'Off Duty';
 
         const updatedDoctor = await Doctor.findByIdAndUpdate(
             doctorId,
-            { $set: { isOnline: Boolean(isOnline) } },
+            { 
+                $set: { 
+                    isOnline: isOnlineBool,
+                    dutyStatus: dutyStatus // 👈 isOnline true par 'On Duty', false par 'Off Duty'
+                } 
+            },
             { new: true }
-        ).select('-password');
+        ).select('-password -token -resetOTP');
 
         if (!updatedDoctor) {
             return res.status(404).json({ success: false, message: "Doctor profile not found." });
@@ -279,10 +294,14 @@ const toggleDoctorOnlineStatus = async (req, res) => {
 
         res.json({
             success: true,
-            message: `Your status has been updated to ${isOnline ? 'Online' : 'Offline'}.`,
-            isOnline: updatedDoctor.isOnline
+            message: `Your status has been updated to ${isOnlineBool ? 'Online (On Duty)' : 'Offline (Off Duty)'}.`,
+            isOnline: updatedDoctor.isOnline,
+            dutyStatus: updatedDoctor.dutyStatus,
+            data: updatedDoctor
         });
+
     } catch (error) {
+        console.error("Toggle Doctor Online Status Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };

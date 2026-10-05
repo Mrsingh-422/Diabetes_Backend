@@ -358,6 +358,10 @@ app.use('/api/ambulance/staff', require('./routes/ambulance/ambulanceStaffRoute'
 app.use('/api/public', require('./routes/others/locationRoutes'));
 app.use('/api/password', require('./routes/others/forgotPassword'));
 
+// =========================== CGM & Glucometer Devices Routes ===========================
+app.use('/admin/cgm/category', require('./routes/admin/CGM/DeviceCategoryRoute'));
+app.use('/admin/cgm/devices', require('./routes/admin/CGM/CGMDeviceAdminRoute'));
+
 
 
 

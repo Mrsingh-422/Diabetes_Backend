@@ -17,7 +17,7 @@ const doctorSchema = new mongoose.Schema({
     pincode: { type: String, default: null }, //  UI Form Sync
     address: { type: String, default: null },
 
-    dutyStatus: { type: String, enum: ['On Duty', 'Off Duty', 'On Leave', 'Busy'], default: 'Off Duty' },
+    dutyStatus: { type: String, enum: ['On Duty', 'Off Duty', 'On Leave', 'Busy'], default: '' },
     isPhoneVerified: { type: Boolean, default: false },
     resetOTP: { type: String, default: null },
     token: { type: String, default: null },
