@@ -32,7 +32,7 @@ const createCGMDevice = async (req, res) => {
     try {
         const body = req.body;
 
-        // Image validation
+        // 1. Image validation
         if (!req.files || !req.files['mainImage'] || req.files['mainImage'].length === 0) {
             return res.status(400).json({ success: false, message: "Main product image is required." });
         }
@@ -42,12 +42,17 @@ const createCGMDevice = async (req, res) => {
             ? req.files['images'].map(file => `/uploads/cgm_devices/${file.filename}`)
             : [];
 
+        // 📄 2. Optional User Manual PDF
+        const userManualPdfPath = (req.files && req.files['userManualPdf'] && req.files['userManualPdf'].length > 0)
+            ? `/uploads/cgm_devices/${req.files['userManualPdf'][0].filename}`
+            : null;
+
         // Base Pricing
         const mrp = Number(body.mrp) || 0;
         const sellingPrice = Number(body.sellingPrice) || 0;
         const savingsAmount = mrp > sellingPrice ? mrp - sellingPrice : 0;
 
-        // 1. Parse Glucometer Config
+        // Glucometer Config Parsing
         let glucometerConfig = safeJsonParse(body.glucometerConfig, {});
         if (glucometerConfig.stripLancetVariants && Array.isArray(glucometerConfig.stripLancetVariants)) {
             glucometerConfig.stripLancetVariants = glucometerConfig.stripLancetVariants.map(v => ({
@@ -58,7 +63,7 @@ const createCGMDevice = async (req, res) => {
             }));
         }
 
-        // 2. Parse CGM Config (Packs with separate pricing)
+        // CGM Config Parsing
         let cgmConfig = safeJsonParse(body.cgmConfig, {});
         if (cgmConfig.cgmPacks && Array.isArray(cgmConfig.cgmPacks)) {
             cgmConfig.cgmPacks = cgmConfig.cgmPacks.map(p => ({
@@ -69,7 +74,6 @@ const createCGMDevice = async (req, res) => {
             }));
         }
 
-        // 3. Parse Common Sections
         const highlights = safeJsonParse(body.highlights, []);
         const howToUseSteps = safeJsonParse(body.howToUseSteps, []);
         const boxContents = safeJsonParse(body.boxContents, []);
@@ -88,6 +92,7 @@ const createCGMDevice = async (req, res) => {
             mainImage: mainImagePath,
             images: galleryImagePaths,
             demoVideoUrl: body.demoVideoUrl || null,
+            userManualPdf: userManualPdfPath, // 👈 Saved PDF path
 
             mrp,
             sellingPrice,
@@ -183,7 +188,7 @@ const getCGMDeviceById = async (req, res) => {
 };
 
 // ==========================================
-// 4. UPDATE DEVICE DETAILS (WITH AUTO OLD IMAGES CLEANUP)
+// 4. UPDATE DEVICE DETAILS (WITH AUTO PDF & MEDIA CLEANUP)
 // ==========================================
 const updateCGMDevice = async (req, res) => {
     try {
@@ -197,15 +202,13 @@ const updateCGMDevice = async (req, res) => {
 
         const updateData = { ...body };
 
-        // 🗑️ Handle Main Image Replacement & Delete Old File
+        // 🗑️ Handle Main Image Replacement
         if (req.files && req.files['mainImage'] && req.files['mainImage'].length > 0) {
-            if (device.mainImage) {
-                removeOldFile(device.mainImage);
-            }
+            if (device.mainImage) removeOldFile(device.mainImage);
             updateData.mainImage = `/uploads/cgm_devices/${req.files['mainImage'][0].filename}`;
         }
 
-        // 🗑️ Handle Gallery Images Replacement & Delete Old Files
+        // 🗑️ Handle Gallery Images Replacement
         if (req.files && req.files['images'] && req.files['images'].length > 0) {
             if (device.images && device.images.length > 0) {
                 device.images.forEach(oldImg => removeOldFile(oldImg));
@@ -213,7 +216,15 @@ const updateCGMDevice = async (req, res) => {
             updateData.images = req.files['images'].map(file => `/uploads/cgm_devices/${file.filename}`);
         }
 
-        // Update Glucometer Config if sent
+        // 📄 🗑️ Handle User Manual PDF Replacement (Auto-delete old PDF)
+        if (req.files && req.files['userManualPdf'] && req.files['userManualPdf'].length > 0) {
+            if (device.userManualPdf) {
+                removeOldFile(device.userManualPdf); // Purani PDF disk se delete
+            }
+            updateData.userManualPdf = `/uploads/cgm_devices/${req.files['userManualPdf'][0].filename}`;
+        }
+
+        // Glucometer Config Updates
         if (body.glucometerConfig) {
             let glucometerConfig = safeJsonParse(body.glucometerConfig, device.glucometerConfig);
             if (glucometerConfig.stripLancetVariants && Array.isArray(glucometerConfig.stripLancetVariants)) {
@@ -227,7 +238,7 @@ const updateCGMDevice = async (req, res) => {
             updateData.glucometerConfig = glucometerConfig;
         }
 
-        // Update CGM Config if sent
+        // CGM Config Updates
         if (body.cgmConfig) {
             let cgmConfig = safeJsonParse(body.cgmConfig, device.cgmConfig);
             if (cgmConfig.cgmPacks && Array.isArray(cgmConfig.cgmPacks)) {
@@ -260,7 +271,7 @@ const updateCGMDevice = async (req, res) => {
 
         res.json({
             success: true,
-            message: "Device details updated successfully!",
+            message: "Device details updated successfully (Old media/PDF cleaned)!",
             data: updated
         });
     } catch (error) {
@@ -269,7 +280,7 @@ const updateCGMDevice = async (req, res) => {
 };
 
 // ==========================================
-// 5. DELETE DEVICE (WITH PERMANENT FILE CLEANUP)
+// 5. DELETE DEVICE (WITH PDF & ALL MEDIA CLEANUP)
 // ==========================================
 const deleteCGMDevice = async (req, res) => {
     try {
@@ -280,16 +291,18 @@ const deleteCGMDevice = async (req, res) => {
             return res.status(404).json({ success: false, message: "Device not found." });
         }
 
+        // Delete main image, gallery images & PDF from disk
         if (device.mainImage) removeOldFile(device.mainImage);
         if (device.images && Array.isArray(device.images)) {
             device.images.forEach(img => removeOldFile(img));
         }
+        if (device.userManualPdf) removeOldFile(device.userManualPdf); // 👈 Delete PDF
 
         await CGMDevices.findByIdAndDelete(id);
 
         res.json({
             success: true,
-            message: "Device and its media files permanently deleted from server."
+            message: "Device, its images, and user manual PDF permanently deleted from server."
         });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
@@ -391,6 +404,7 @@ const importCGMDevicesCSV = async (req, res) => {
                 badge: row.badge || "AI-Powered",
                 mainImage: row.mainImage || "/uploads/cgm_devices/default_device.png",
                 images: row.images ? row.images.split(',').map(s => s.trim()) : [],
+                userManualPdf: row.userManualPdf || null,
                 mrp,
                 sellingPrice,
                 savingsAmount,

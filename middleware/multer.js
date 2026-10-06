@@ -1239,13 +1239,31 @@ const cgmDeviceUploads = multer({
             cb(null, `device-${uniqueSuffix}${path.extname(file.originalname)}`);
         }
     }),
-    fileFilter: docFileFilter,
-    limits: { fileSize: 5 * 1024 * 1024 } // 5MB limit
+    fileFilter: docFileFilter, // Allows both Images and PDF files!
+    limits: { fileSize: 10 * 1024 * 1024 } // 10MB limit (PDF friendly)
 }).fields([
-    { name: 'mainImage', maxCount: 1 }, // Single Main Thumbnail Image
-    { name: 'images', maxCount: 10 }     // Gallery / Showcase Images
+    { name: 'mainImage', maxCount: 1 },       // Primary Thumbnail Photo
+    { name: 'images', maxCount: 10 },          // Gallery Images
+    { name: 'userManualPdf', maxCount: 1 }    // 📄 User Instruction Manual PDF
 ]);
 
+// ==========================================
+// 55. CGM ADDONS & COACH CHARGES IMAGE UPLOADS
+// ==========================================
+const cgmAddonDir = 'public/uploads/cgm_addons';
+ensureDir(cgmAddonDir);
+
+const cgmAddonImageUpload = multer({
+    storage: multer.diskStorage({
+        destination: (req, file, cb) => cb(null, cgmAddonDir),
+        filename: (req, file, cb) => {
+            const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
+            cb(null, `cgm-addon-${uniqueSuffix}${path.extname(file.originalname)}`);
+        }
+    }),
+    fileFilter: docFileFilter,
+    limits: { fileSize: 5 * 1024 * 1024 } // 5MB Limit
+}).single('imageUrl'); // Key: 'imageUrl'
 module.exports = {
     clinicUploads,
     contentUploads,
@@ -1296,6 +1314,6 @@ module.exports = {
     docPrescriptionUpload, hospitalPrescriptionUploads, hospitalDischargeFieldsUpload, blogUploads,
     videoUploads, videoUpdateUploads, footerUploads, aboutUsUploads,
     foodDocUploads, foodServiceImageUpload, bannerUploadParser, foodAddonImageUpload, clinicDoctorUploads,doctorApptReportUpload,
-    foodHealthyPlanUploads,smoothieDrinkUploads,cgmDeviceUploads
+    foodHealthyPlanUploads,smoothieDrinkUploads,cgmDeviceUploads,cgmAddonImageUpload
 
 };  

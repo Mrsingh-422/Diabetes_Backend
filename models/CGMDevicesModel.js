@@ -196,7 +196,11 @@ const cgmDeviceSchema = new mongoose.Schema({
         type: Boolean, 
         default: true 
     },
-
+  // 📄 NEW: User Instruction / Manual PDF (Optional)
+  userManualPdf: { 
+    type: String, 
+    default: null 
+},
     averageRating: { 
         type: Number, 
         default: 4.8 

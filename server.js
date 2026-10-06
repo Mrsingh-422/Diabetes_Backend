@@ -361,6 +361,9 @@ app.use('/api/password', require('./routes/others/forgotPassword'));
 // =========================== CGM & Glucometer Devices Routes ===========================
 app.use('/admin/cgm/category', require('./routes/admin/CGM/DeviceCategoryRoute'));
 app.use('/admin/cgm/devices', require('./routes/admin/CGM/CGMDeviceAdminRoute'));
+app.use('/admin/cgm/addons', require('./routes/admin/CGM/CGMAddonAdminRoute'));
+app.use('/admin/cgm/coach-charge', require('./routes/admin/CGM/CGMCoachChargeRoute'));
+
 
 // =========================== User CGM & Diabetes Store Routes ===========================
 app.use('/user/cgm/devices', require('./routes/user/CGMDevice/UserCGMDeviceRoute'));
