@@ -362,6 +362,9 @@ app.use('/api/password', require('./routes/others/forgotPassword'));
 app.use('/admin/cgm/category', require('./routes/admin/CGM/DeviceCategoryRoute'));
 app.use('/admin/cgm/devices', require('./routes/admin/CGM/CGMDeviceAdminRoute'));
 
+// =========================== User CGM & Diabetes Store Routes ===========================
+app.use('/user/cgm/devices', require('./routes/user/CGMDevice/UserCGMDeviceRoute'));
+
 
 
 

@@ -1,16 +1,14 @@
+// controllers/admin/CGM/CGMDeviceAdminController.js
+
 const CGMDevices = require('../../../models/CGMDevicesModel');
 const DeviceCategory = require('../../../models/DeviceCategory');
 const { deleteFile } = require('../../../utils/fileHandler');
 const mongoose = require('mongoose');
-const path = require('path');
-const fs = require('fs');
-const xlsx = require('xlsx'); // For CSV / Excel Parsing
+const xlsx = require('xlsx');
 
 // Helper to safely delete file from 'public/uploads/...'
 const removeOldFile = (filePath) => {
     if (!filePath) return;
-    // Database path: "/uploads/cgm_devices/xyz.jpg"
-    // fileHandler ko chahiye: "public/uploads/cgm_devices/xyz.jpg"
     const cleanPath = filePath.startsWith('/') ? filePath.substring(1) : filePath;
     const publicPath = cleanPath.startsWith('public') ? cleanPath : `public/${cleanPath}`;
     deleteFile(publicPath);
@@ -44,25 +42,48 @@ const createCGMDevice = async (req, res) => {
             ? req.files['images'].map(file => `/uploads/cgm_devices/${file.filename}`)
             : [];
 
-        const variants = safeJsonParse(body.variants, []);
-        const specifications = safeJsonParse(body.specifications, {});
+        // Base Pricing
+        const mrp = Number(body.mrp) || 0;
+        const sellingPrice = Number(body.sellingPrice) || 0;
+        const savingsAmount = mrp > sellingPrice ? mrp - sellingPrice : 0;
+
+        // 1. Parse Glucometer Config
+        let glucometerConfig = safeJsonParse(body.glucometerConfig, {});
+        if (glucometerConfig.stripLancetVariants && Array.isArray(glucometerConfig.stripLancetVariants)) {
+            glucometerConfig.stripLancetVariants = glucometerConfig.stripLancetVariants.map(v => ({
+                ...v,
+                mrp: Number(v.mrp) || 0,
+                sellingPrice: Number(v.sellingPrice) || 0,
+                savingsAmount: (Number(v.mrp) > Number(v.sellingPrice)) ? Number(v.mrp) - Number(v.sellingPrice) : 0
+            }));
+        }
+
+        // 2. Parse CGM Config (Packs with separate pricing)
+        let cgmConfig = safeJsonParse(body.cgmConfig, {});
+        if (cgmConfig.cgmPacks && Array.isArray(cgmConfig.cgmPacks)) {
+            cgmConfig.cgmPacks = cgmConfig.cgmPacks.map(p => ({
+                ...p,
+                mrp: Number(p.mrp) || 0,
+                sellingPrice: Number(p.sellingPrice) || 0,
+                savingsAmount: (Number(p.mrp) > Number(p.sellingPrice)) ? Number(p.mrp) - Number(p.sellingPrice) : 0
+            }));
+        }
+
+        // 3. Parse Common Sections
         const highlights = safeJsonParse(body.highlights, []);
         const howToUseSteps = safeJsonParse(body.howToUseSteps, []);
         const boxContents = safeJsonParse(body.boxContents, []);
         const faqs = safeJsonParse(body.faqs, []);
-
-        const mrp = Number(body.mrp);
-        const sellingPrice = Number(body.sellingPrice);
-        const prepaidDiscountPrice = body.prepaidDiscountPrice ? Number(body.prepaidDiscountPrice) : sellingPrice;
-        const savingsAmount = mrp > sellingPrice ? mrp - sellingPrice : 0;
+        const frequentlyBoughtTogether = safeJsonParse(body.frequentlyBoughtTogether, []);
 
         const newDevice = await CGMDevices.create({
             categoryId: body.categoryId,
+            productType: body.productType || 'Glucometer',
             title: body.title,
-            brand: body.brand || "BeatO",
+            brand: body.brand || "DiabetesWala",
             deviceModel: body.deviceModel || "Curv",
             tagline: body.tagline || "",
-            badge: body.badge || "AI-Powered",
+            badge: body.badge || "",
 
             mainImage: mainImagePath,
             images: galleryImagePaths,
@@ -70,20 +91,17 @@ const createCGMDevice = async (req, res) => {
 
             mrp,
             sellingPrice,
-            prepaidDiscountPrice,
             savingsAmount,
 
-            compatibility: body.compatibility || 'Android Only',
-            connectorType: body.connectorType || 'Type-C',
+            glucometerConfig,
+            cgmConfig,
 
-            variants,
-            specifications,
             highlights,
-
             description: body.description,
             howToUseSteps,
             boxContents,
             faqs,
+            frequentlyBoughtTogether,
 
             stockQuantity: body.stockQuantity ? Number(body.stockQuantity) : 100,
             isAvailable: body.isAvailable !== 'false',
@@ -95,7 +113,7 @@ const createCGMDevice = async (req, res) => {
 
         res.status(201).json({
             success: true,
-            message: "CGM Device / Product created successfully!",
+            message: `${newDevice.productType} product created successfully!`,
             data: newDevice
         });
     } catch (error) {
@@ -108,11 +126,12 @@ const createCGMDevice = async (req, res) => {
 // ==========================================
 const getAllCGMDevices = async (req, res) => {
     try {
-        const { page = 1, limit = 10, search = "", categoryId, activeOnly } = req.query;
+        const { page = 1, limit = 10, search = "", categoryId, productType, activeOnly } = req.query;
 
         const query = {};
         if (activeOnly === 'true') query.isActive = true;
         if (categoryId && mongoose.Types.ObjectId.isValid(categoryId)) query.categoryId = categoryId;
+        if (productType) query.productType = productType;
 
         if (search) {
             const regex = new RegExp(search.trim(), 'i');
@@ -181,7 +200,7 @@ const updateCGMDevice = async (req, res) => {
         // 🗑️ Handle Main Image Replacement & Delete Old File
         if (req.files && req.files['mainImage'] && req.files['mainImage'].length > 0) {
             if (device.mainImage) {
-                removeOldFile(device.mainImage); // Purani main photo disk se delete
+                removeOldFile(device.mainImage);
             }
             updateData.mainImage = `/uploads/cgm_devices/${req.files['mainImage'][0].filename}`;
         }
@@ -189,14 +208,39 @@ const updateCGMDevice = async (req, res) => {
         // 🗑️ Handle Gallery Images Replacement & Delete Old Files
         if (req.files && req.files['images'] && req.files['images'].length > 0) {
             if (device.images && device.images.length > 0) {
-                device.images.forEach(oldImg => removeOldFile(oldImg)); // Purani gallery photos disk se delete
+                device.images.forEach(oldImg => removeOldFile(oldImg));
             }
             updateData.images = req.files['images'].map(file => `/uploads/cgm_devices/${file.filename}`);
         }
 
-        // Parse nested JSON structures safely
-        if (body.variants) updateData.variants = safeJsonParse(body.variants, device.variants);
-        if (body.specifications) updateData.specifications = safeJsonParse(body.specifications, device.specifications);
+        // Update Glucometer Config if sent
+        if (body.glucometerConfig) {
+            let glucometerConfig = safeJsonParse(body.glucometerConfig, device.glucometerConfig);
+            if (glucometerConfig.stripLancetVariants && Array.isArray(glucometerConfig.stripLancetVariants)) {
+                glucometerConfig.stripLancetVariants = glucometerConfig.stripLancetVariants.map(v => ({
+                    ...v,
+                    mrp: Number(v.mrp) || 0,
+                    sellingPrice: Number(v.sellingPrice) || 0,
+                    savingsAmount: (Number(v.mrp) > Number(v.sellingPrice)) ? Number(v.mrp) - Number(v.sellingPrice) : 0
+                }));
+            }
+            updateData.glucometerConfig = glucometerConfig;
+        }
+
+        // Update CGM Config if sent
+        if (body.cgmConfig) {
+            let cgmConfig = safeJsonParse(body.cgmConfig, device.cgmConfig);
+            if (cgmConfig.cgmPacks && Array.isArray(cgmConfig.cgmPacks)) {
+                cgmConfig.cgmPacks = cgmConfig.cgmPacks.map(p => ({
+                    ...p,
+                    mrp: Number(p.mrp) || 0,
+                    sellingPrice: Number(p.sellingPrice) || 0,
+                    savingsAmount: (Number(p.mrp) > Number(p.sellingPrice)) ? Number(p.mrp) - Number(p.sellingPrice) : 0
+                }));
+            }
+            updateData.cgmConfig = cgmConfig;
+        }
+
         if (body.highlights) updateData.highlights = safeJsonParse(body.highlights, device.highlights);
         if (body.howToUseSteps) updateData.howToUseSteps = safeJsonParse(body.howToUseSteps, device.howToUseSteps);
         if (body.boxContents) updateData.boxContents = safeJsonParse(body.boxContents, device.boxContents);
@@ -216,7 +260,7 @@ const updateCGMDevice = async (req, res) => {
 
         res.json({
             success: true,
-            message: "CGM Device details updated successfully (Old media cleaned)!",
+            message: "Device details updated successfully!",
             data: updated
         });
     } catch (error) {
@@ -225,7 +269,7 @@ const updateCGMDevice = async (req, res) => {
 };
 
 // ==========================================
-// 5. DELETE DEVICE (WITH ALL MEDIA FILES CLEANUP)
+// 5. DELETE DEVICE (WITH PERMANENT FILE CLEANUP)
 // ==========================================
 const deleteCGMDevice = async (req, res) => {
     try {
@@ -236,10 +280,7 @@ const deleteCGMDevice = async (req, res) => {
             return res.status(404).json({ success: false, message: "Device not found." });
         }
 
-        // 🗑️ Delete all associated files from server disk
-        if (device.mainImage) {
-            removeOldFile(device.mainImage);
-        }
+        if (device.mainImage) removeOldFile(device.mainImage);
         if (device.images && Array.isArray(device.images)) {
             device.images.forEach(img => removeOldFile(img));
         }
@@ -282,8 +323,7 @@ const toggleCGMDeviceActive = async (req, res) => {
 };
 
 // ==========================================
-// 7. 🚀 BULK IMPORT CGM DEVICES VIA CSV / EXCEL
-// Full Path: POST /admin/cgm/devices/bulk-import-csv
+// 7. BULK IMPORT VIA CSV / EXCEL
 // ==========================================
 const importCGMDevicesCSV = async (req, res) => {
     try {
@@ -298,28 +338,25 @@ const importCGMDevicesCSV = async (req, res) => {
 
         if (!rows || rows.length === 0) {
             removeOldFile(filePath);
-            return res.status(400).json({ success: false, message: "The uploaded CSV/Excel file is empty." });
+            return res.status(400).json({ success: false, message: "Uploaded CSV/Excel file is empty." });
         }
 
         const categoriesMap = new Map();
         const allCategories = await DeviceCategory.find();
-        allCategories.forEach(cat => {
-            categoriesMap.set(cat.name.toLowerCase().trim(), cat._id);
-        });
+        allCategories.forEach(cat => categoriesMap.set(cat.name.toLowerCase().trim(), cat._id));
 
         const devicesToInsert = [];
         const errors = [];
 
         for (let i = 0; i < rows.length; i++) {
             const row = rows[i];
-            const rowNum = i + 2; // Excel row number (1-based + 1 for header)
+            const rowNum = i + 2;
 
             if (!row.title || !row.mrp || !row.sellingPrice) {
                 errors.push(`Row ${rowNum}: Title, MRP, and Selling Price are required.`);
                 continue;
             }
 
-            // Find or Auto-Map Category
             let categoryId = null;
             if (row.categoryId && mongoose.Types.ObjectId.isValid(row.categoryId)) {
                 categoryId = row.categoryId;
@@ -328,7 +365,6 @@ const importCGMDevicesCSV = async (req, res) => {
                 if (categoriesMap.has(catKey)) {
                     categoryId = categoriesMap.get(catKey);
                 } else {
-                    // Create Category automatically if doesn't exist
                     const newCat = await DeviceCategory.create({ name: row.categoryName.trim() });
                     categoryId = newCat._id;
                     categoriesMap.set(catKey, newCat._id);
@@ -336,7 +372,6 @@ const importCGMDevicesCSV = async (req, res) => {
             }
 
             if (!categoryId) {
-                // Fallback to first existing category
                 const defaultCat = allCategories[0] || (await DeviceCategory.create({ name: "Glucometers" }));
                 categoryId = defaultCat._id;
             }
@@ -344,26 +379,21 @@ const importCGMDevicesCSV = async (req, res) => {
             const mrp = Number(row.mrp) || 0;
             const sellingPrice = Number(row.sellingPrice) || 0;
             const savingsAmount = mrp > sellingPrice ? mrp - sellingPrice : 0;
+            const productType = (row.productType && ['CGM', 'Glucometer'].includes(row.productType)) ? row.productType : 'Glucometer';
 
             devicesToInsert.push({
                 categoryId,
+                productType,
                 title: String(row.title).trim(),
-                brand: row.brand ? String(row.brand).trim() : "BeatO",
+                brand: row.brand ? String(row.brand).trim() : "DiabetesWala",
                 deviceModel: row.deviceModel || "Curv",
                 tagline: row.tagline || "CDSCO Approved Lab-Grade Accuracy | ISO Certified",
                 badge: row.badge || "AI-Powered",
                 mainImage: row.mainImage || "/uploads/cgm_devices/default_device.png",
                 images: row.images ? row.images.split(',').map(s => s.trim()) : [],
-                demoVideoUrl: row.demoVideoUrl || null,
-
                 mrp,
                 sellingPrice,
-                prepaidDiscountPrice: row.prepaidDiscountPrice ? Number(row.prepaidDiscountPrice) : sellingPrice,
                 savingsAmount,
-
-                compatibility: row.compatibility || 'Android Only',
-                connectorType: row.connectorType || 'Type-C',
-
                 description: row.description || String(row.title).trim(),
                 stockQuantity: row.stockQuantity ? Number(row.stockQuantity) : 100,
                 totalUsersCountDisplay: row.totalUsersCountDisplay || "8 Lakh+ Users",
@@ -377,7 +407,6 @@ const importCGMDevicesCSV = async (req, res) => {
             insertedDocs = await CGMDevices.insertMany(devicesToInsert);
         }
 
-        // Delete uploaded temp CSV file
         removeOldFile(filePath);
 
         res.status(201).json({
@@ -389,7 +418,6 @@ const importCGMDevicesCSV = async (req, res) => {
             errors: errors.length > 0 ? errors : undefined,
             data: insertedDocs
         });
-
     } catch (error) {
         if (req.file) removeOldFile(req.file.path);
         res.status(500).json({ success: false, message: error.message });
@@ -403,5 +431,5 @@ module.exports = {
     updateCGMDevice,
     deleteCGMDevice,
     toggleCGMDeviceActive,
-    importCGMDevicesCSV // 👈 Export Added
+    importCGMDevicesCSV
 };
