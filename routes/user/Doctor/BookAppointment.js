@@ -15,7 +15,7 @@ const {
     userCancelAppointment, rescheduleAppointment,
     trackAppointment, getMyPrescriptions, getAvailableSlots, getTrackingStatus, getShareableTrackingLink,
     rateDoctorAppointment,getUserVideoConsults,
-    getUserAppointmentById
+    getUserAppointmentById, getDoctorSearchSuggestions
 } = require('../../../controllers/user/Doctor/BookAppointment');
 
 // Base URL: /user/doctors
@@ -27,6 +27,8 @@ router.get('/visit-charges/:doctorId', getDoctorVisitConfig);
 router.get('/coupons/:doctorId', protect('user'), getAvailableCoupons);
 router.post('/validate-coupon', protect('user'), validateCoupon);
 router.post('/checkout-summary', protect('user'), getCheckoutSummary);
+
+router.post('/search-suggestions', getDoctorSearchSuggestions);  // only for search suggestions, no auth required for doctor search suggestions
 
 // 1. Step 1: Create Order & Book
 router.post('/book', protect('user'), doctorApptReportUpload, bookAppointment);

@@ -1622,6 +1622,101 @@ const getUserAppointmentById = async (req, res) => {
     }
 };
 
+// ==========================================
+// 🔍 LIVE DOCTOR & SPECIALITY SEARCH SUGGESTIONS (2-Letter Auto-Suggest)
+// Endpoint: POST /user/doctors/search-suggestions
+// ==========================================
+const getDoctorSearchSuggestions = async (req, res) => {
+    try {
+        const { query, q, search, limit = 10 } = req.body || {};
+        const queryTerm = (query || q || search || req.query.q || '').trim();
+
+        // 🛡️ 2 characters se kam hone par empty array return karein
+        if (!queryTerm || queryTerm.length < 2) {
+            return res.json({
+                success: true,
+                query: queryTerm,
+                count: 0,
+                data: []
+            });
+        }
+
+        const searchRegex = new RegExp(queryTerm, 'i');
+        const limitNum = parseInt(limit, 10) || 10;
+
+        // 1. Search in Approved & Active Doctors (Matches Name, Speciality, Qualification, Conditions)
+        const doctors = await Doctor.find({
+            profileStatus: 'Approved',
+            isActive: true,
+            $or: [
+                { name: searchRegex },
+                { speciality: searchRegex },
+                { qualification: searchRegex },
+                { treatedConditions: searchRegex },
+                { competencies: searchRegex },
+                { about: searchRegex }
+            ]
+        })
+        .select('name speciality qualification experienceYears fees averageRating totalReviews profileImage treatedConditions')
+        .limit(limitNum)
+        .lean();
+
+        const formattedDoctors = doctors.map(doc => ({
+            id: doc._id,
+            _id: doc._id,
+            name: doc.name,
+            description: `${doc.speciality || 'General Physician'} (${doc.qualification || 'MBBS'}) • ${doc.experienceYears || 0} Years Exp`,
+            speciality: doc.speciality || "",
+            qualification: doc.qualification || "",
+            price: doc.fees?.clinic || doc.fees?.online || 0,
+            imageUrl: doc.profileImage || null,
+            rating: doc.averageRating || 4.8,
+            reviewsCount: doc.totalReviews || 0,
+            itemType: "Doctor",
+            redirectPath: `/user/doctors/details/${doc._id}` // 👈 Direct doctor profile click URL
+        }));
+
+        // 2. Search in Master Specializations (e.g. Cardiology, Diabetology)
+        const specializations = await Specialization.find({
+            isActive: true,
+            name: searchRegex
+        })
+        .limit(5)
+        .lean();
+
+        const formattedSpecializations = specializations.map(spec => ({
+            id: spec._id,
+            _id: spec._id,
+            name: spec.name,
+            description: "Medical Speciality",
+            speciality: spec.name,
+            qualification: null,
+            price: null,
+            imageUrl: null,
+            rating: null,
+            reviewsCount: 0,
+            itemType: "Speciality",
+            redirectPath: `/doctors?speciality=${encodeURIComponent(spec.name)}` // 👈 Speciality filter URL
+        }));
+
+        // 3. Combine Results (Top 15 suggestions)
+        const allSuggestions = [
+            ...formattedDoctors,
+            ...formattedSpecializations
+        ];
+
+        res.json({
+            success: true,
+            query: queryTerm,
+            count: allSuggestions.length,
+            data: allSuggestions.slice(0, 15)
+        });
+
+    } catch (error) {
+        console.error("Doctor Search Suggestions Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
 
 module.exports = {
     getSpecializations,
@@ -1637,5 +1732,5 @@ module.exports = {
     trackAppointment,
     getMyPrescriptions,
     getAvailableSlots, getTrackingStatus, getShareableTrackingLink,
-    getUserVideoConsults, rateDoctorAppointment,getUserAppointmentById
+    getUserVideoConsults, rateDoctorAppointment,getUserAppointmentById,getDoctorSearchSuggestions
 };
