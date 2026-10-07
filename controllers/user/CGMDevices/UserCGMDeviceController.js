@@ -2,6 +2,8 @@
 
 const CGMDevices = require('../../../models/CGMDevicesModel');
 const DeviceCategory = require('../../../models/DeviceCategory');
+const CGMAddon = require('../../../models/CGMAddon');
+
 const mongoose = require('mongoose');
 
 // =========================================================================
@@ -136,8 +138,50 @@ const getUserActiveCategories = async (req, res) => {
     }
 };
 
+// =========================================================================
+// 🧩 4. GET ACTIVE CGM ADDONS FOR USER CHECKOUT SCREEN
+// Endpoint: GET /user/cgm/devices/addons
+// =========================================================================
+const getUserCGMAddons = async (req, res) => {
+    try {
+        const addons = await CGMAddon.find({ isActive: true, coachCharge: 0 })
+            .select('_id name price description imageUrl')
+            .sort({ createdAt: -1 })
+            .lean();
+
+        res.json({
+            success: true,
+            count: addons.length,
+            data: addons
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// =========================================================================
+// 👨‍⚕️ 5. GET ACTIVE COACH CHARGE FOR USER CHECKOUT SCREEN
+// Endpoint: GET /user/cgm/devices/coach-charge
+// =========================================================================
+const getUserCoachCharge = async (req, res) => {
+    try {
+        const coachCharge = await CGMAddon.findOne({ isActive: true, coachCharge: { $gt: 0 } })
+            .select('_id coachCharge description isActive')
+            .sort({ createdAt: -1 })
+            .lean();
+
+        res.json({
+            success: true,
+            data: coachCharge || null
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
 module.exports = {
     getUserCGMDevices,
     getUserCGMDeviceById,
-    getUserActiveCategories
+    getUserActiveCategories,
+    getUserCGMAddons,
+    getUserCoachCharge
 };

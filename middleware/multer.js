@@ -1248,7 +1248,7 @@ const cgmDeviceUploads = multer({
 ]);
 
 // ==========================================
-// 55. CGM ADDONS & COACH CHARGES IMAGE UPLOADS
+// 55. CGM ADDONS  IMAGE UPLOADS
 // ==========================================
 const cgmAddonDir = 'public/uploads/cgm_addons';
 ensureDir(cgmAddonDir);
@@ -1264,6 +1264,7 @@ const cgmAddonImageUpload = multer({
     fileFilter: docFileFilter,
     limits: { fileSize: 5 * 1024 * 1024 } // 5MB Limit
 }).single('imageUrl'); // Key: 'imageUrl'
+
 module.exports = {
     clinicUploads,
     contentUploads,

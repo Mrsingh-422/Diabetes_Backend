@@ -366,7 +366,8 @@ app.use('/admin/cgm/coach-charge', require('./routes/admin/CGM/CGMCoachChargeRou
 
 
 // =========================== User CGM & Diabetes Store Routes ===========================
-app.use('/user/cgm/devices', require('./routes/user/CGMDevice/UserCGMDeviceRoute'));
+app.use('/user/cgm/devices', require('./routes/user/CGMDevices/UserCGMDeviceRoute'));
+app.use('/api/user/cgm/checkout', require('./routes/user/CGMDevices/CGMCheckoutRoute'));
 
 
 
