@@ -363,6 +363,7 @@ app.use('/admin/cgm/category', require('./routes/admin/CGM/DeviceCategoryRoute')
 app.use('/admin/cgm/devices', require('./routes/admin/CGM/CGMDeviceAdminRoute'));
 app.use('/admin/cgm/addons', require('./routes/admin/CGM/CGMAddonAdminRoute'));
 app.use('/admin/cgm/coach-charge', require('./routes/admin/CGM/CGMCoachChargeRoute'));
+app.use('/admin/cgm/orders', require('./routes/admin/CGM/CGMOrderAdminRoute'));
 
 
 // =========================== User CGM & Diabetes Store Routes ===========================
