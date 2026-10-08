@@ -8,6 +8,7 @@ const Lab = require('../models/Lab');
 const Pharmacy = require('../models/Pharmacy');
 const Food = require('../models/Food');
 const Driver = require('../models/Driver');
+const DiabetesCoach = require('../models/DiabetesCoach');
 const Tab = require('../models/Tab'); // Tab model for global tab status check
 
 
@@ -71,6 +72,10 @@ const protect = (modelType) => async (req, res, next) => {
                     user = await Lab.findById(decoded.id) ||
                         await Pharmacy.findById(decoded.id) ||
                         await Food.findById(decoded.id);
+                    break;
+                case 'coach':
+                case 'diabetes-coach':
+                    user = await DiabetesCoach.findById(decoded.id);
                     break;
 
                 default:

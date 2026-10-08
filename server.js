@@ -364,11 +364,20 @@ app.use('/admin/cgm/devices', require('./routes/admin/CGM/CGMDeviceAdminRoute'))
 app.use('/admin/cgm/addons', require('./routes/admin/CGM/CGMAddonAdminRoute'));
 app.use('/admin/cgm/coach-charge', require('./routes/admin/CGM/CGMCoachChargeRoute'));
 app.use('/admin/cgm/orders', require('./routes/admin/CGM/CGMOrderAdminRoute'));
+app.use('/admin/cgm/coaches', require('./routes/admin/CGM/DiabetesCoachAdminRoute'));
+
+
+//=============== Diabetic Coach Routes ===========================
+app.use('/api/auth/coach', require('./routes/coach/authCoachRoute'));
+app.use('/api/coach/slots', require('./routes/coach/coachSlotRoute'));
+
 
 
 // =========================== User CGM & Diabetes Store Routes ===========================
 app.use('/user/cgm/devices', require('./routes/user/CGMDevices/UserCGMDeviceRoute'));
 app.use('/api/user/cgm/checkout', require('./routes/user/CGMDevices/CGMCheckoutRoute'));
+app.use('/user/cgm/coaches', require('./routes/user/CGMDevices/UserDiabetesCoachRoute'));
+
 
 
 

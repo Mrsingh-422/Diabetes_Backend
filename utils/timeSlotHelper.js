@@ -240,6 +240,7 @@ const isAmbulanceAvailable = async (ambulanceId, targetDateTime, AmbulanceBookin
     }
 };
 
+
 module.exports = { 
     generateTimeSlots, 
     generateFoodSlots, 

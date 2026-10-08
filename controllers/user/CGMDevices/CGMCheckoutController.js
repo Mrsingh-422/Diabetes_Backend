@@ -4,19 +4,19 @@ const CGMOrder = require('../../../models/CGMOrder');
 const CGMDevices = require('../../../models/CGMDevicesModel');
 const CGMAddon = require('../../../models/CGMAddon');
 const CodConfig = require('../../../models/CodConfig');
+const DiabetesCoach = require('../../../models/DiabetesCoach');
 const { createRazorpayOrder, verifyRazorpaySignature } = require('../../../utils/razorpay');
 const mongoose = require('mongoose');
 
 // =========================================================================
-// 🧮 REUSABLE BILLING CALCULATION ENGINE (Device + Addons + Coach Charge)
+// 🧮 REUSABLE BILLING CALCULATION ENGINE (Device + Addons + Coach's Price)
 // =========================================================================
 const calculateCGMBillHelper = async ({
     deviceId,
     variantId = null,
     quantity = 1,
     addons = [],
-    includeCoachCharge = false,
-    coachChargeId = null
+    coachId = null
 }) => {
     // 1. Fetch & Verify Device
     const device = await CGMDevices.findOne({ _id: deviceId, isActive: true }).lean();
@@ -77,37 +77,31 @@ const calculateCGMBillHelper = async ({
         }
     }
 
-    // 3. Verify & Calculate Coach Charge
+    // 3. 👨‍⚕️ Coach Consultation Calculation (Direct from DiabetesCoach.price)
     let coachInfo = {
         isIncluded: false,
-        coachChargeId: null,
-        charge: 0,
-        description: ""
+        coachId: null,
+        coachName: "",
+        charge: 0
     };
 
-    if (includeCoachCharge === true || includeCoachCharge === 'true') {
-        let coachDoc = null;
-        if (coachChargeId && mongoose.Types.ObjectId.isValid(coachChargeId)) {
-            coachDoc = await CGMAddon.findOne({ _id: coachChargeId, isActive: true, coachCharge: { $gt: 0 } }).lean();
-        } else {
-            coachDoc = await CGMAddon.findOne({ coachCharge: { $gt: 0 }, isActive: true }).sort({ createdAt: -1 }).lean();
-        }
-
+    if (coachId && mongoose.Types.ObjectId.isValid(coachId)) {
+        const coachDoc = await DiabetesCoach.findOne({ _id: coachId, isActive: true }).lean();
         if (coachDoc) {
             coachInfo = {
                 isIncluded: true,
-                coachChargeId: coachDoc._id,
-                charge: Number(coachDoc.coachCharge),
-                description: coachDoc.description || "1-on-1 Certified Diabetes Coach Onboarding"
+                coachId: coachDoc._id,
+                coachName: coachDoc.name,
+                charge: Number(coachDoc.price) || 0 // Coach ka direct fee price
             };
         }
     }
 
-    // 4. Net Subtotal & Payable (Direct calculation without coupons)
+    // 4. Net Subtotal & Payable
     const subtotal = itemTotal + addonsTotal + coachInfo.charge;
     const totalPayable = subtotal;
 
-    // 5. COD Availability Check
+    // 5. COD Policy Check
     const codConfig = await CodConfig.findOne({ vendorType: { $in: ['Pharmacy', 'All'] } });
     const isCodAvailable = codConfig ? Boolean(codConfig.isCodAvailable) : true;
 
@@ -142,7 +136,7 @@ const calculateCGMBillHelper = async ({
             couponDiscount: 0,
             totalPayable
         },
-        appliedCoupon: null, // Scalable placeholder for future
+        appliedCoupon: null,
         orderPolicies: {
             isCodAvailable
         }
@@ -150,7 +144,7 @@ const calculateCGMBillHelper = async ({
 };
 
 // =========================================================================
-// 🧮 1. CHECKOUT PREVIEW & BILL CALCULATION API
+// 🧮 1. CHECKOUT PREVIEW API
 // Endpoint: POST /api/user/cgm/checkout/calculate-bill
 // =========================================================================
 const calculateCGMBill = async (req, res) => {
@@ -160,8 +154,7 @@ const calculateCGMBill = async (req, res) => {
             variantId,
             quantity = 1,
             addons = [],
-            includeCoachCharge = false,
-            coachChargeId = null
+            coachId = null // 👈 Direct Coach ID
         } = req.body;
 
         if (!deviceId) {
@@ -173,8 +166,7 @@ const calculateCGMBill = async (req, res) => {
             variantId,
             quantity,
             addons,
-            includeCoachCharge,
-            coachChargeId
+            coachId
         });
 
         res.json({
@@ -199,8 +191,7 @@ const placeCGMOrder = async (req, res) => {
             variantId,
             quantity = 1,
             addons = [],
-            includeCoachCharge = false,
-            coachChargeId = null,
+            coachId = null, // 👈 Direct Coach ID
             deliveryAddress,
             diabetesProfile,
             paymentMethod = 'COD'
@@ -213,14 +204,13 @@ const placeCGMOrder = async (req, res) => {
             });
         }
 
-        // 1. Recalculate Bill securely on Backend
+        // 1. Recalculate Bill securely on Backend (Using Coach's Price)
         const bill = await calculateCGMBillHelper({
             deviceId,
             variantId,
             quantity,
             addons,
-            includeCoachCharge,
-            coachChargeId
+            coachId
         });
 
         // COD Policy check
@@ -275,7 +265,7 @@ const placeCGMOrder = async (req, res) => {
                 addressType: deliveryAddress.addressType || "Home"
             },
             addons: bill.addonsSelected,
-            coachConsultation: bill.coachConsultation,
+            coachConsultation: bill.coachConsultation, // 👈 Automatically stores coachId, coachName & coach.price
             billSummary: bill.pricingBreakdown,
             appliedCoupon: null,
             paymentMethod,

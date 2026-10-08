@@ -1265,6 +1265,24 @@ const cgmAddonImageUpload = multer({
     limits: { fileSize: 5 * 1024 * 1024 } // 5MB Limit
 }).single('imageUrl'); // Key: 'imageUrl'
 
+// ==========================================
+// 56. DIABETES COACH PROFILE IMAGE UPLOAD
+// ==========================================
+const coachDir = 'public/uploads/diabetes_coaches';
+ensureDir(coachDir);
+
+const diabetesCoachUpload = multer({
+    storage: multer.diskStorage({
+        destination: (req, file, cb) => cb(null, coachDir),
+        filename: (req, file, cb) => {
+            const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
+            cb(null, `coach-${uniqueSuffix}${path.extname(file.originalname)}`);
+        }
+    }),
+    fileFilter: docFileFilter,
+    limits: { fileSize: 5 * 1024 * 1024 } // 5MB Limit
+}).single('profileImage'); // Key: 'profileImage'
+
 module.exports = {
     clinicUploads,
     contentUploads,
@@ -1315,6 +1333,6 @@ module.exports = {
     docPrescriptionUpload, hospitalPrescriptionUploads, hospitalDischargeFieldsUpload, blogUploads,
     videoUploads, videoUpdateUploads, footerUploads, aboutUsUploads,
     foodDocUploads, foodServiceImageUpload, bannerUploadParser, foodAddonImageUpload, clinicDoctorUploads,doctorApptReportUpload,
-    foodHealthyPlanUploads,smoothieDrinkUploads,cgmDeviceUploads,cgmAddonImageUpload
+    foodHealthyPlanUploads,smoothieDrinkUploads,cgmDeviceUploads,cgmAddonImageUpload,diabetesCoachUpload
 
 };  

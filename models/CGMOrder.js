@@ -77,12 +77,16 @@ const cgmOrderSchema = new mongoose.Schema({
         totalPrice: { type: Number, required: true }
     }],
 
-    // 5. Coach Charge / Consultation (Optional Selection)
+    // 5. Coach Consultation (Direct link to DiabetesCoach model)
     coachConsultation: {
         isIncluded: { type: Boolean, default: false },
-        coachChargeId: { type: mongoose.Schema.Types.ObjectId, ref: 'CGMAddon', default: null },
-        charge: { type: Number, default: 0 },
-        description: { type: String, default: "" }
+        coachId: { 
+            type: mongoose.Schema.Types.ObjectId, 
+            ref: 'DiabetesCoach', 
+            default: null 
+        },
+        coachName: { type: String, default: "" },
+        charge: { type: Number, default: 0 } // Coach model ka direct price
     },
 
     // 6. Billing Summary
