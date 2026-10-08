@@ -77,7 +77,7 @@ const cgmOrderSchema = new mongoose.Schema({
         totalPrice: { type: Number, required: true }
     }],
 
-    // 5. Coach Consultation (Direct link to DiabetesCoach model)
+    // 5. Coach Consultation (With Slots & Premium Extra Fee)
     coachConsultation: {
         isIncluded: { type: Boolean, default: false },
         coachId: { 
@@ -86,7 +86,12 @@ const cgmOrderSchema = new mongoose.Schema({
             default: null 
         },
         coachName: { type: String, default: "" },
-        charge: { type: Number, default: 0 } // Coach model ka direct price
+        scheduledDate: { type: String, default: null }, // e.g. "2026-10-10"
+        slotTime: { type: String, default: null },      // e.g. "18:00" ya "06:00 PM - 06:30 PM"
+        basePrice: { type: Number, default: 0 },        // Coach ka base charge (e.g. ₹499)
+        isPremiumSlot: { type: Boolean, default: false },// Kya ye premium slot tha?
+        premiumExtraFee: { type: Number, default: 0 },  // Extra fee (e.g. ₹150)
+        charge: { type: Number, default: 0 }            // Total = basePrice + premiumExtraFee (e.g. ₹649)
     },
 
     // 6. Billing Summary

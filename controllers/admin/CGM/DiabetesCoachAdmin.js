@@ -83,15 +83,27 @@ const createCoach = async (req, res) => {
     }
 };
 
-// 2. Get All Coaches (Admin Table + Filters)
+// =========================================================================
+// 📋 2. GET ALL COACHES (ADMIN TABLE LIST WITH SEARCH & FILTERS)
+// Endpoint: GET /admin/cgm/coaches/all
+// =========================================================================
 const getAllCoaches = async (req, res) => {
     try {
-        const { page = 1, limit = 10, search = "", city, activeOnly } = req.query;
+        const { 
+            page = 1, 
+            limit = 10, 
+            search = "", 
+            city, 
+            activeOnly 
+        } = req.query;
 
         const query = {};
         if (activeOnly === 'true') query.isActive = true;
-        if (city) query['location.city'] = { $regex: city.trim(), $options: 'i' };
+        if (city && city.trim() !== '') {
+            query['location.city'] = { $regex: city.trim(), $options: 'i' };
+        }
 
+        // Search by Name, Phone, Email, or City
         if (search && search.trim() !== '') {
             const regex = new RegExp(search.trim(), 'i');
             query.$or = [
@@ -107,36 +119,74 @@ const getAllCoaches = async (req, res) => {
         const skip = (pageNum - 1) * limitNum;
 
         const totalDocs = await DiabetesCoach.countDocuments(query);
+
+        // Sensitive credentials (-password -token -fcmToken) exclude karein
         const coaches = await DiabetesCoach.find(query)
+            .select('-password -token -fcmToken')
             .sort({ createdAt: -1 })
             .skip(skip)
             .limit(limitNum)
             .lean();
+
+        // Admin Table ke liye clean lightweight format
+        const formattedCoaches = coaches.map(coach => ({
+            _id: coach._id,
+            name: coach.name,
+            profileImage: coach.profileImage || null,
+            price: coach.price || 0,
+            phone: coach.phone || "N/A",
+            email: coach.email || "N/A",
+            languages: coach.languages || [],
+            location: {
+                city: coach.location?.city || "N/A",
+                state: coach.location?.state || "N/A"
+            },
+            slotTimings: coach.slotConfig?.startTime && coach.slotConfig?.endTime 
+                ? `${coach.slotConfig.startTime} - ${coach.slotConfig.endTime}` 
+                : "Not Configured",
+            rating: coach.rating || 4.9,
+            totalReviews: coach.totalReviews || 0,
+            isActive: coach.isActive,
+            createdAt: coach.createdAt
+        }));
 
         res.json({
             success: true,
             totalCoaches: totalDocs,
             totalPages: Math.ceil(totalDocs / limitNum) || 1,
             currentPage: pageNum,
-            count: coaches.length,
-            data: coaches
+            limit: limitNum,
+            count: formattedCoaches.length,
+            data: formattedCoaches
         });
+
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
 };
 
-// 3. Get Single Coach By ID
+// =========================================================================
+// 🔍 3. GET SINGLE COACH FULL DETAILS BY ID (VIEW MODAL / DETAIL PAGE)
+// Endpoint: GET /admin/cgm/coaches/detail/:id
+// =========================================================================
 const getCoachById = async (req, res) => {
     try {
         const { id } = req.params;
-        const coach = await DiabetesCoach.findById(id).lean();
+
+        // Valid ID check & Fetch full details (including slotConfig and coordinates)
+        const coach = await DiabetesCoach.findById(id)
+            .select('-password -token -fcmToken') // Password & tokens security hide
+            .lean();
 
         if (!coach) {
             return res.status(404).json({ success: false, message: "Coach not found." });
         }
 
-        res.json({ success: true, data: coach });
+        res.json({
+            success: true,
+            data: coach // 👈 Returns full location (lat, lng, address), slotConfig & premiumSlots
+        });
+
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }

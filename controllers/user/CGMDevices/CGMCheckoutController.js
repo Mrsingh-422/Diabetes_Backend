@@ -5,18 +5,21 @@ const CGMDevices = require('../../../models/CGMDevicesModel');
 const CGMAddon = require('../../../models/CGMAddon');
 const CodConfig = require('../../../models/CodConfig');
 const DiabetesCoach = require('../../../models/DiabetesCoach');
+const { isCoachSlotAvailable } = require('../../../utils/timeSlotHelper');
 const { createRazorpayOrder, verifyRazorpaySignature } = require('../../../utils/razorpay');
 const mongoose = require('mongoose');
 
 // =========================================================================
-// 🧮 REUSABLE BILLING CALCULATION ENGINE (Device + Addons + Coach's Price)
+// 🧮 REUSABLE BILLING CALCULATION ENGINE (Device + Addons + Coach with Premium Slot)
 // =========================================================================
 const calculateCGMBillHelper = async ({
     deviceId,
     variantId = null,
     quantity = 1,
     addons = [],
-    coachId = null
+    coachId = null,
+    scheduledDate = null,
+    slotTime = null
 }) => {
     // 1. Fetch & Verify Device
     const device = await CGMDevices.findOne({ _id: deviceId, isActive: true }).lean();
@@ -77,22 +80,50 @@ const calculateCGMBillHelper = async ({
         }
     }
 
-    // 3. 👨‍⚕️ Coach Consultation Calculation (Direct from DiabetesCoach.price)
+    // 3. 👨‍⚕️ Coach Consultation & Premium Slot Calculation
     let coachInfo = {
         isIncluded: false,
         coachId: null,
         coachName: "",
+        scheduledDate: scheduledDate || null,
+        slotTime: slotTime || null,
+        basePrice: 0,
+        isPremiumSlot: false,
+        premiumExtraFee: 0,
         charge: 0
     };
 
     if (coachId && mongoose.Types.ObjectId.isValid(coachId)) {
         const coachDoc = await DiabetesCoach.findOne({ _id: coachId, isActive: true }).lean();
         if (coachDoc) {
+            const basePrice = Number(coachDoc.price) || 0;
+            let isPremium = false;
+            let extraFee = 0;
+
+            // Check agar user ka chuna hua slot Premium Slot hai
+            if (slotTime && Array.isArray(coachDoc.slotConfig?.premiumSlots)) {
+                const matchedPremium = coachDoc.slotConfig.premiumSlots.find(p => 
+                    p.time === slotTime || (typeof slotTime === 'string' && slotTime.startsWith(p.time))
+                );
+
+                if (matchedPremium && Number(matchedPremium.extraFee) > 0) {
+                    isPremium = true;
+                    extraFee = Number(matchedPremium.extraFee);
+                }
+            }
+
+            const totalCoachCharge = basePrice + extraFee;
+
             coachInfo = {
                 isIncluded: true,
                 coachId: coachDoc._id,
                 coachName: coachDoc.name,
-                charge: Number(coachDoc.price) || 0 // Coach ka direct fee price
+                scheduledDate: scheduledDate || null,
+                slotTime: slotTime || null,
+                basePrice: basePrice,
+                isPremiumSlot: isPremium,
+                premiumExtraFee: extraFee,
+                charge: totalCoachCharge // basePrice + premiumExtraFee
             };
         }
     }
@@ -131,7 +162,9 @@ const calculateCGMBillHelper = async ({
             mrpTotal,
             deviceSavings,
             addonsTotal,
-            coachChargeTotal: coachInfo.charge,
+            coachBaseFee: coachInfo.basePrice,
+            coachPremiumExtraFee: coachInfo.premiumExtraFee,
+            coachChargeTotal: coachInfo.charge, // Total coach fee
             subtotal,
             couponDiscount: 0,
             totalPayable
@@ -154,7 +187,9 @@ const calculateCGMBill = async (req, res) => {
             variantId,
             quantity = 1,
             addons = [],
-            coachId = null // 👈 Direct Coach ID
+            coachId = null,
+            scheduledDate = null,
+            slotTime = null
         } = req.body;
 
         if (!deviceId) {
@@ -166,7 +201,9 @@ const calculateCGMBill = async (req, res) => {
             variantId,
             quantity,
             addons,
-            coachId
+            coachId,
+            scheduledDate,
+            slotTime
         });
 
         res.json({
@@ -191,7 +228,9 @@ const placeCGMOrder = async (req, res) => {
             variantId,
             quantity = 1,
             addons = [],
-            coachId = null, // 👈 Direct Coach ID
+            coachId = null,
+            scheduledDate = null,
+            slotTime = null,
             deliveryAddress,
             diabetesProfile,
             paymentMethod = 'COD'
@@ -204,13 +243,26 @@ const placeCGMOrder = async (req, res) => {
             });
         }
 
-        // 1. Recalculate Bill securely on Backend (Using Coach's Price)
+        // 🛡️ Collision Check: Agar coach aur slot chuna hai toh check karein ki slot already booked toh nahi
+        if (coachId && scheduledDate && slotTime) {
+            const isAvailable = await isCoachSlotAvailable(coachId, scheduledDate, slotTime, CGMOrder);
+            if (!isAvailable) {
+                return res.status(400).json({
+                    success: false,
+                    message: "The selected coach slot is already booked. Please choose another time slot."
+                });
+            }
+        }
+
+        // 1. Recalculate Bill securely on Backend (Including Premium Slot Extra Fee)
         const bill = await calculateCGMBillHelper({
             deviceId,
             variantId,
             quantity,
             addons,
-            coachId
+            coachId,
+            scheduledDate,
+            slotTime
         });
 
         // COD Policy check
@@ -265,7 +317,7 @@ const placeCGMOrder = async (req, res) => {
                 addressType: deliveryAddress.addressType || "Home"
             },
             addons: bill.addonsSelected,
-            coachConsultation: bill.coachConsultation, // 👈 Automatically stores coachId, coachName & coach.price
+            coachConsultation: bill.coachConsultation, // 👈 Saves scheduledDate, slotTime, isPremiumSlot, premiumExtraFee, charge
             billSummary: bill.pricingBreakdown,
             appliedCoupon: null,
             paymentMethod,
