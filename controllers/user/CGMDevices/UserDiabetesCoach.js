@@ -1,5 +1,6 @@
-// controllers/user/CGMDevices/UserDiabetesCoachController.js
-
+// controllers/user/CGMDevices/UserDiabetesCoach.js
+const { generateCoachSlots } = require('../../../utils/timeSlotHelper');
+const CGMOrder = require('../../../models/CGMOrder');
 const DiabetesCoach = require('../../../models/DiabetesCoach');
 const { calculateHaversine } = require('../../../utils/helpers');
 const mongoose = require('mongoose');
@@ -86,26 +87,55 @@ const getNearbyDiabetesCoaches = async (req, res) => {
 };
 
 // =========================================================================
-// 🔍 2. GET API: SINGLE COACH FULL DETAILS BY ID
-// Endpoint: GET /user/cgm/coaches/get/:id
+// 🔍 2. GET SINGLE COACH DETAILS BY ID (WITH OPTIONAL DATE SLOTS PREVIEW)
+// Endpoint: GET /user/cgm/coaches/get/:id?selectedDate=2026-10-10
 // =========================================================================
 const getUserDiabetesCoachById = async (req, res) => {
     try {
         const { id } = req.params;
+        const { selectedDate } = req.query; // Optional e.g. "2026-10-10"
 
         if (!mongoose.Types.ObjectId.isValid(id)) {
             return res.status(400).json({ success: false, message: "Invalid Coach ID format." });
         }
 
-        const coach = await DiabetesCoach.findOne({ _id: id, isActive: true }).lean();
+        // Sensitive credentials (-password -token -fcmToken) exclude karein
+        const coach = await DiabetesCoach.findOne({ _id: id, isActive: true })
+            .select('-password -token -fcmToken')
+            .lean();
 
         if (!coach) {
-            return res.status(404).json({ success: false, message: "Coach profile not found." });
+            return res.status(404).json({ success: false, message: "Coach profile not found or currently inactive." });
+        }
+
+        let generatedSlots = null;
+
+        // Agar frontend ne selectedDate bheji hai, toh us date ke live slots generate karein
+        if (selectedDate) {
+            const bookedOrders = await CGMOrder.find({
+                'coachConsultation.coachId': id,
+                'coachConsultation.scheduledDate': selectedDate,
+                status: { $in: ['Placed', 'Confirmed'] }
+            }).select('coachConsultation.slotTime').lean();
+
+            const bookedAppointments = bookedOrders.map(b => ({
+                slotTime: b.coachConsultation?.slotTime
+            }));
+
+            generatedSlots = generateCoachSlots({
+                config: coach.slotConfig || {},
+                bookedAppointments,
+                selectedDate,
+                coachBasePrice: coach.price
+            });
         }
 
         res.json({
             success: true,
-            data: coach
+            data: {
+                ...coach,
+                availableSlotsPreview: generatedSlots // Returns slots with premium extra fees & availability
+            }
         });
 
     } catch (error) {
@@ -113,7 +143,97 @@ const getUserDiabetesCoachById = async (req, res) => {
     }
 };
 
+// =========================================================================
+// ⏰ 3. GET COACH SLOTS FOR A SPECIFIC DATE (CALENDAR DATE PICKER)
+// Endpoint: GET /user/cgm/coaches/slots/:id?selectedDate=2026-10-10
+// =========================================================================
+const getCoachAvailableSlots = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { selectedDate } = req.query;
+
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({ success: false, message: "Invalid Coach ID format." });
+        }
+
+        if (!selectedDate) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "selectedDate query parameter is required (format: YYYY-MM-DD)." 
+            });
+        }
+
+        const coach = await DiabetesCoach.findById(id)
+            .select('name price slotConfig isActive')
+            .lean();
+
+        if (!coach || coach.isActive === false) {
+            return res.status(404).json({ success: false, message: "Coach not found or currently inactive." });
+        }
+
+        // 🚫 CHECK: Agar DB mein coach ne slots set hi nahi kiye hain, toh Dummy slots mat bhejo
+        if (!coach.slotConfig || !coach.slotConfig.startTime || !coach.slotConfig.endTime) {
+            return res.json({
+                success: true,
+                coach: {
+                    _id: coach._id,
+                    name: coach.name,
+                    basePrice: Number(coach.price) || 0
+                },
+                selectedDate,
+                message: "No consultation slots have been configured by this coach yet.",
+                data: {
+                    isClosed: true,
+                    reason: "Coach has not set up working hours yet.",
+                    slots: [] // 👈 Empty array (No dummy slots)
+                }
+            });
+        }
+
+        // Already booked appointments check
+        let bookedAppointments = [];
+        try {
+            const bookedOrders = await CGMOrder.find({
+                'coachConsultation.coachId': id,
+                'coachConsultation.scheduledDate': selectedDate,
+                status: { $in: ['Placed', 'Confirmed'] }
+            }).select('coachConsultation.slotTime').lean();
+
+            bookedAppointments = (bookedOrders || []).map(b => ({
+                slotTime: b.coachConsultation?.slotTime
+            }));
+        } catch (dbErr) {
+            bookedAppointments = [];
+        }
+
+        // Coach ki actual DB configuration se slots generate karein
+        const slotsData = generateCoachSlots({
+            config: coach.slotConfig,
+            bookedAppointments,
+            selectedDate,
+            coachBasePrice: Number(coach.price) || 0
+        });
+
+        res.json({
+            success: true,
+            coach: {
+                _id: coach._id,
+                name: coach.name,
+                basePrice: Number(coach.price) || 0
+            },
+            selectedDate,
+            data: slotsData
+        });
+
+    } catch (error) {
+        console.error("Error in getCoachAvailableSlots:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
 module.exports = {
     getNearbyDiabetesCoaches,
-    getUserDiabetesCoachById
+    getUserDiabetesCoachById,
+    getCoachAvailableSlots
 };

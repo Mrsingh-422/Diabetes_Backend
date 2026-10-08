@@ -8,7 +8,7 @@ const {
     getUserCGMDeviceById,
     getUserActiveCategories,
     getUserCGMAddons,
-    getUserCoachCharge
+    
 } = require('../../../controllers/user/CGMDevices/UserCGMDeviceController');
 
 // Base URL: /user/cgm/devices
@@ -25,7 +25,6 @@ router.get('/get/:id', getUserCGMDeviceById);
 // 4. Get Active Add-ons for User Checkout Screen
 router.get('/addons', getUserCGMAddons);
 
-// 5. Get Active Coach Charge for User Checkout Screen
-router.get('/coach-charge', getUserCoachCharge);
+
 
 module.exports = router;

@@ -5,7 +5,8 @@ const router = express.Router();
 
 const {
     getNearbyDiabetesCoaches,
-    getUserDiabetesCoachById
+    getUserDiabetesCoachById,
+    getCoachAvailableSlots
 } = require('../../../controllers/user/CGMDevices/UserDiabetesCoach');
 
 // Base URL: /user/cgm/coaches
@@ -15,5 +16,8 @@ router.post('/nearby', getNearbyDiabetesCoaches);
 
 // 2. GET: Get Single Coach Full Details by ID
 router.get('/get/:id', getUserDiabetesCoachById);
+
+// 3. GET: Get Available Slots for a Selected Date (When user changes date in calendar)
+router.get('/slots/:id', getCoachAvailableSlots);
 
 module.exports = router;

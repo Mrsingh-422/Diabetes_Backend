@@ -240,11 +240,119 @@ const isAmbulanceAvailable = async (ambulanceId, targetDateTime, AmbulanceBookin
     }
 };
 
+// ==========================================
+// 👨‍⚕️ 6. DIABETES COACH SLOTS GENERATOR (With Premium Slots & Booking Collision)
+// ==========================================
+const generateCoachSlots = ({
+    config = {},
+    bookedAppointments = [],
+    selectedDate,
+    coachBasePrice = 0
+}) => {
+    const startTime = config.startTime || "09:00";
+    const endTime = config.endTime || "20:00";
+    const slotDuration = Number(config.slotDuration) || 30; // 30 mins default session
+    const unavailableSlots = config.unavailableSlots || [];
+    const offDays = config.offDays || [];
+    const blockedDates = config.blockedDates || [];
+    const premiumSlots = config.premiumSlots || []; // e.g. [{ time: "18:00", extraFee: 150 }]
+
+    const morningSlots = config.morningSlots !== false;
+    const afternoonSlots = config.afternoonSlots !== false;
+    const eveningSlots = config.eveningSlots !== false;
+
+    // 1. Off-Day & Blocked Date Check
+    const dayName = moment(selectedDate).format('dddd');
+    if (offDays.includes(dayName)) {
+        return { isClosed: true, reason: `Coach is off on ${dayName}s.`, slots: [] };
+    }
+    if (blockedDates.includes(selectedDate)) {
+        return { isClosed: true, reason: `Coach is unavailable on ${selectedDate}.`, slots: [] };
+    }
+
+    const slots = [];
+    let [startHour, startMin] = startTime.split(':').map(Number);
+    let [endHour, endMin] = endTime.split(':').map(Number);
+
+    let startTotalMinutes = startHour * 60 + startMin;
+    let endTotalMinutes = endHour * 60 + endMin;
+
+    const isToday = moment().format('YYYY-MM-DD') === selectedDate;
+    const currentMoment = moment();
+
+    for (let minutes = startTotalMinutes; minutes + slotDuration <= endTotalMinutes; minutes += slotDuration) {
+        const startH = Math.floor(minutes / 60);
+        const startM = minutes % 60;
+        const endMinutes = minutes + slotDuration;
+        const endH = Math.floor(endMinutes / 60);
+        const endM = endMinutes % 60;
+
+        const timeString24 = `${startH.toString().padStart(2, '0')}:${startM.toString().padStart(2, '0')}`;
+        const slotStartMoment = moment(`${selectedDate} ${timeString24}`, 'YYYY-MM-DD HH:mm');
+        const slotEndMoment = slotStartMoment.clone().add(slotDuration, 'minutes');
+
+        const displayTime = `${slotStartMoment.format('hh:mm A')} - ${slotEndMoment.format('hh:mm A')}`;
+
+        // Category Breakdown
+        let category = "Morning";
+        if (startH >= 12 && startH < 17) category = "Afternoon";
+        else if (startH >= 17) category = "Evening";
+
+        // Check Category Toggle
+        const isCategoryEnabled = (category === "Morning" && morningSlots) ||
+                                  (category === "Afternoon" && afternoonSlots) ||
+                                  (category === "Evening" && eveningSlots);
+
+        if (!isCategoryEnabled) continue;
+
+        // 2. Past Time Check (If today)
+        const isPast = isToday && slotStartMoment.isBefore(currentMoment);
+
+        // 3. Admin Blocked Slot Check
+        const isManuallyBlocked = unavailableSlots.includes(timeString24);
+
+        // 4. Booking Conflict Check (Against confirmed bookings)
+        const hasBookingConflict = bookedAppointments.some(appt => {
+            const apptTime = appt.appointmentTime || appt.slotTime || appt.scheduledTime;
+            return apptTime === timeString24 || apptTime === displayTime;
+        });
+
+        // 5. 💎 Premium Slot Calculation
+        const premiumInfo = premiumSlots.find(p => p.time === timeString24);
+        const isPremium = Boolean(premiumInfo && premiumInfo.extraFee > 0);
+        const extraFee = isPremium ? Number(premiumInfo.extraFee) : 0;
+        const totalPrice = Math.round(Number(coachBasePrice) + extraFee);
+
+        let statusText = "Available";
+        if (isPast) statusText = "Past";
+        else if (isManuallyBlocked) statusText = "Unavailable";
+        else if (hasBookingConflict) statusText = "Booked";
+
+        const isAvailable = !isPast && !isManuallyBlocked && !hasBookingConflict;
+
+        slots.push({
+            slotTime: timeString24, // e.g. "18:00"
+            displayTime,           // e.g. "06:00 PM - 06:30 PM"
+            category,              // "Morning" | "Afternoon" | "Evening"
+            isPremium,
+            extraFee,              // e.g. 150 (₹)
+            basePrice: Number(coachBasePrice),
+            totalPrice,            // e.g. 499 + 150 = 649 (₹)
+            isAvailable,
+            status: statusText     // "Available" | "Booked" | "Past" | "Unavailable"
+        });
+    }
+
+    return { isClosed: false, slots };
+};
+
 
 module.exports = { 
     generateTimeSlots, 
     generateFoodSlots, 
     isFoodAvailable,
     generateAmbulanceSlots,
-    isAmbulanceAvailable
+    isAmbulanceAvailable,
+    generateCoachSlots,
+    
 };
