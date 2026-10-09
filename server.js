@@ -358,13 +358,15 @@ app.use('/api/ambulance/staff', require('./routes/ambulance/ambulanceStaffRoute'
 app.use('/api/public', require('./routes/others/locationRoutes'));
 app.use('/api/password', require('./routes/others/forgotPassword'));
 
-// =========================== CGM & Glucometer Devices Routes ===========================
+// =========================== CGM & Glucometer Devices ADMIN Routes ===========================
 app.use('/admin/cgm/category', require('./routes/admin/CGM/DeviceCategoryRoute'));
 app.use('/admin/cgm/devices', require('./routes/admin/CGM/CGMDeviceAdminRoute'));
 app.use('/admin/cgm/addons', require('./routes/admin/CGM/CGMAddonAdminRoute'));
 app.use('/admin/cgm/coach-charge', require('./routes/admin/CGM/CGMCoachChargeRoute'));
 app.use('/admin/cgm/orders', require('./routes/admin/CGM/CGMOrderAdminRoute'));
 app.use('/admin/cgm/coaches', require('./routes/admin/CGM/DiabetesCoachAdminRoute'));
+app.use('/admin/cgm/coach-distance-config', require('./routes/admin/CGM/CoachDistanceConfigRoute'));
+
 
 
 //=============== Diabetic Coach Routes ===========================

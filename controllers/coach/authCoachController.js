@@ -20,23 +20,22 @@ const safeParse = (data, fallback) => {
     try { return JSON.parse(data); } catch (e) { return fallback; }
 };
 
-// 1. Direct Coach Registration (Phone ya Email mein se koi ek required)
+// 1. Direct Coach Registration (With Qualification, Types & Online/Offline Fees)
 const registerCoach = async (req, res) => {
     try {
         const body = req.body;
 
-        if (!body.name || body.price === undefined || !body.password) {
+        if (!body.name || !body.password) {
             if (req.file) removeOldFile(req.file.path);
             return res.status(400).json({ 
                 success: false, 
-                message: "Name, price, and password are required." 
+                message: "Coach name and password are required." 
             });
         }
 
         const phone = body.phone && body.phone.trim() !== '' ? body.phone.trim() : null;
         const email = body.email && body.email.trim() !== '' ? body.email.toLowerCase().trim() : null;
 
-        // Check: Dono me se kam se kam ek hona chahiye
         if (!phone && !email) {
             if (req.file) removeOldFile(req.file.path);
             return res.status(400).json({ 
@@ -45,13 +44,11 @@ const registerCoach = async (req, res) => {
             });
         }
 
-        // Duplicate check (Sirf wahi check karein jo user ne provide kiya hai)
         const duplicateConditions = [];
         if (phone) duplicateConditions.push({ phone });
         if (email) duplicateConditions.push({ email });
 
         const existingCoach = await DiabetesCoach.findOne({ $or: duplicateConditions });
-
         if (existingCoach) {
             if (req.file) removeOldFile(req.file.path);
             return res.status(400).json({ 
@@ -75,12 +72,38 @@ const registerCoach = async (req, res) => {
             pincode: body.pincode || ""
         });
 
+        // Online & Offline Fees
+        const onlineFee = body.onlineFee !== undefined ? Number(body.onlineFee) : (Number(body.price) || 299);
+        const offlineFee = body.offlineFee !== undefined ? Number(body.offlineFee) : 599;
+
+        // Offline Pricing Config (Beyond Radius Surcharge)
+        const offlinePricing = safeParse(body.offlinePricing, {
+            baseDistanceKM: Number(body.baseDistanceKM) || 5,
+            extraPricePerKM: Number(body.extraPricePerKM) || 15,
+            maxServiceRadiusKM: Number(body.maxServiceRadiusKM) || 25
+        });
+
         const newCoach = await DiabetesCoach.create({
             name: body.name.trim(),
             password: hashedPassword,
             phone,
             email,
-            price: Number(body.price) || 0,
+            qualification: body.qualification || "Certified Diabetes Educator",
+            coachType: body.coachType || "Both", // 'Diabetes Educator', 'Diabetes Coach', 'Both'
+            fees: {
+                online: onlineFee,
+                offline: offlineFee
+            },
+            price: onlineFee, // fallback
+            consultationModes: {
+                isOnlineAvailable: body.isOnlineAvailable !== false && body.isOnlineAvailable !== 'false',
+                isOfflineAvailable: body.isOfflineAvailable !== false && body.isOfflineAvailable !== 'false'
+            },
+            offlinePricing: {
+                baseDistanceKM: Number(offlinePricing.baseDistanceKM) || 5,
+                extraPricePerKM: Number(offlinePricing.extraPricePerKM) || 15,
+                maxServiceRadiusKM: Number(offlinePricing.maxServiceRadiusKM) || 25
+            },
             profileImage,
             about: body.about || "",
             languages,
@@ -95,7 +118,6 @@ const registerCoach = async (req, res) => {
             isActive: true
         });
 
-        // 🎟️ Generate JWT Token
         const token = jwt.sign(
             { id: newCoach._id, role: 'diabetes-coach' },
             process.env.JWT_SECRET,

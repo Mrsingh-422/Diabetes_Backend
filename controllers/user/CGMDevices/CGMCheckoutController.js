@@ -6,11 +6,12 @@ const CGMAddon = require('../../../models/CGMAddon');
 const CodConfig = require('../../../models/CodConfig');
 const DiabetesCoach = require('../../../models/DiabetesCoach');
 const { isCoachSlotAvailable } = require('../../../utils/timeSlotHelper');
+const CoachDistanceConfig = require('../../../models/CoachDistanceConfig');
 const { createRazorpayOrder, verifyRazorpaySignature } = require('../../../utils/razorpay');
 const mongoose = require('mongoose');
 
 // =========================================================================
-// 🧮 REUSABLE BILLING CALCULATION ENGINE (Device + Addons + Coach with Premium Slot)
+// 🧮 REUSABLE BILLING ENGINE (With Admin Managed Free KM & Auto Distance Surcharge)
 // =========================================================================
 const calculateCGMBillHelper = async ({
     deviceId,
@@ -18,6 +19,9 @@ const calculateCGMBillHelper = async ({
     quantity = 1,
     addons = [],
     coachId = null,
+    consultationMode = 'Online', // 'Online' OR 'Offline'
+    userLat = null,
+    userLng = null,
     scheduledDate = null,
     slotTime = null
 }) => {
@@ -32,7 +36,7 @@ const calculateCGMBillHelper = async ({
     let unitPrice = Number(device.sellingPrice) || 0;
     let unitMrp = Number(device.mrp) || 0;
 
-    // Check Variants (Glucometer Strips OR CGM Multi-Packs)
+    // Check Variants
     if (variantId && mongoose.Types.ObjectId.isValid(variantId)) {
         if (device.productType === 'Glucometer' && Array.isArray(device.glucometerConfig?.stripLancetVariants)) {
             const matched = device.glucometerConfig.stripLancetVariants.find(v => v._id?.toString() === variantId.toString());
@@ -55,7 +59,7 @@ const calculateCGMBillHelper = async ({
     const mrpTotal = unitMrp * orderQty;
     const deviceSavings = mrpTotal > itemTotal ? mrpTotal - itemTotal : 0;
 
-    // 2. Verify & Calculate Selected Addons
+    // 2. Addons Calculation
     let verifiedAddons = [];
     let addonsTotal = 0;
 
@@ -80,14 +84,19 @@ const calculateCGMBillHelper = async ({
         }
     }
 
-    // 3. 👨‍⚕️ Coach Consultation & Premium Slot Calculation
+    // 3. 👨‍⚕️ Coach Calculation with Admin Managed Distance Surcharge
     let coachInfo = {
         isIncluded: false,
         coachId: null,
         coachName: "",
+        coachType: "Both",
+        consultationMode: consultationMode || 'Online',
         scheduledDate: scheduledDate || null,
         slotTime: slotTime || null,
         basePrice: 0,
+        distanceInKM: 0,
+        freeDistanceIncludedKM: 5,
+        extraDistanceCharge: 0,
         isPremiumSlot: false,
         premiumExtraFee: 0,
         charge: 0
@@ -96,11 +105,39 @@ const calculateCGMBillHelper = async ({
     if (coachId && mongoose.Types.ObjectId.isValid(coachId)) {
         const coachDoc = await DiabetesCoach.findOne({ _id: coachId, isActive: true }).lean();
         if (coachDoc) {
-            const basePrice = Number(coachDoc.price) || 0;
-            let isPremium = false;
-            let extraFee = 0;
+            const isOffline = consultationMode === 'Offline';
+            let basePrice = isOffline 
+                ? (Number(coachDoc.fees?.offline) || 599) 
+                : (Number(coachDoc.fees?.online) || Number(coachDoc.price) || 299);
 
-            // Check agar user ka chuna hua slot Premium Slot hai
+            let distanceInKM = 0;
+            let extraDistanceCharge = 0;
+            let freeKM = 5;
+
+            // 🚗 Admin Global Distance Config Fetch
+            if (isOffline) {
+                const distanceConfig = await CoachDistanceConfig.findOne({ isActive: true }).lean();
+                freeKM = distanceConfig?.freeDistanceKM !== undefined ? Number(distanceConfig.freeDistanceKM) : 5;
+                const pricePerKM = distanceConfig?.pricePerKM !== undefined ? Number(distanceConfig.pricePerKM) : 15;
+
+                if (userLat && userLng && coachDoc.location?.lat && coachDoc.location?.lng) {
+                    distanceInKM = calculateHaversine(
+                        Number(userLat), Number(userLng),
+                        Number(coachDoc.location.lat), Number(coachDoc.location.lng)
+                    );
+
+                    // Agar user distance free distance se zyada hai, tabhi charge lagega
+                    if (distanceInKM > freeKM) {
+                        const extraKM = Number((distanceInKM - freeKM).toFixed(1));
+                        extraDistanceCharge = Math.round(extraKM * pricePerKM);
+                    }
+                }
+            }
+
+            // 💎 Premium Slot Check
+            let isPremium = false;
+            let extraSlotFee = 0;
+
             if (slotTime && Array.isArray(coachDoc.slotConfig?.premiumSlots)) {
                 const matchedPremium = coachDoc.slotConfig.premiumSlots.find(p => 
                     p.time === slotTime || (typeof slotTime === 'string' && slotTime.startsWith(p.time))
@@ -108,22 +145,28 @@ const calculateCGMBillHelper = async ({
 
                 if (matchedPremium && Number(matchedPremium.extraFee) > 0) {
                     isPremium = true;
-                    extraFee = Number(matchedPremium.extraFee);
+                    extraSlotFee = Number(matchedPremium.extraFee);
                 }
             }
 
-            const totalCoachCharge = basePrice + extraFee;
+            // Total Coach Charge = Base Fee + Auto Extra KM Surcharge + Premium Slot Fee
+            const totalCoachCharge = basePrice + extraDistanceCharge + extraSlotFee;
 
             coachInfo = {
                 isIncluded: true,
                 coachId: coachDoc._id,
                 coachName: coachDoc.name,
+                coachType: coachDoc.coachType || "Both",
+                consultationMode: isOffline ? 'Offline' : 'Online',
                 scheduledDate: scheduledDate || null,
                 slotTime: slotTime || null,
                 basePrice: basePrice,
+                distanceInKM: Number(distanceInKM.toFixed(1)),
+                freeDistanceIncludedKM: freeKM,
+                extraDistanceCharge: extraDistanceCharge,
                 isPremiumSlot: isPremium,
-                premiumExtraFee: extraFee,
-                charge: totalCoachCharge // basePrice + premiumExtraFee
+                premiumExtraFee: extraSlotFee,
+                charge: totalCoachCharge
             };
         }
     }
@@ -162,9 +205,12 @@ const calculateCGMBillHelper = async ({
             mrpTotal,
             deviceSavings,
             addonsTotal,
+            coachConsultationMode: coachInfo.consultationMode,
             coachBaseFee: coachInfo.basePrice,
+            coachFreeDistanceKM: coachInfo.freeDistanceIncludedKM,
+            coachExtraDistanceCharge: coachInfo.extraDistanceCharge,
             coachPremiumExtraFee: coachInfo.premiumExtraFee,
-            coachChargeTotal: coachInfo.charge, // Total coach fee
+            coachChargeTotal: coachInfo.charge,
             subtotal,
             couponDiscount: 0,
             totalPayable
@@ -229,6 +275,9 @@ const placeCGMOrder = async (req, res) => {
             quantity = 1,
             addons = [],
             coachId = null,
+            consultationMode = 'Online', // 'Online' OR 'Offline'
+            userLat = null,
+            userLng = null,
             scheduledDate = null,
             slotTime = null,
             deliveryAddress,
@@ -243,7 +292,7 @@ const placeCGMOrder = async (req, res) => {
             });
         }
 
-        // 🛡️ Collision Check: Agar coach aur slot chuna hai toh check karein ki slot already booked toh nahi
+        // Slot Collision Check
         if (coachId && scheduledDate && slotTime) {
             const isAvailable = await isCoachSlotAvailable(coachId, scheduledDate, slotTime, CGMOrder);
             if (!isAvailable) {
@@ -254,13 +303,16 @@ const placeCGMOrder = async (req, res) => {
             }
         }
 
-        // 1. Recalculate Bill securely on Backend (Including Premium Slot Extra Fee)
+        // 1. Recalculate Bill securely on Backend (With Online/Offline fee & KM surcharge)
         const bill = await calculateCGMBillHelper({
             deviceId,
             variantId,
             quantity,
             addons,
             coachId,
+            consultationMode,
+            userLat,
+            userLng,
             scheduledDate,
             slotTime
         });
@@ -277,7 +329,7 @@ const placeCGMOrder = async (req, res) => {
         const orderId = `HK-CGM-${Date.now().toString().slice(-6)}`;
         const deliveryOtp = Math.floor(1000 + Math.random() * 9000).toString();
 
-        // 2. Razorpay Order Creation for Online Payment
+        // 2. Razorpay Order Creation
         let rzpOrder = null;
         if (paymentMethod === 'Online' && finalTotal > 0) {
             rzpOrder = await createRazorpayOrder(finalTotal, `cgm_${orderId}`);
@@ -317,7 +369,7 @@ const placeCGMOrder = async (req, res) => {
                 addressType: deliveryAddress.addressType || "Home"
             },
             addons: bill.addonsSelected,
-            coachConsultation: bill.coachConsultation, // 👈 Saves scheduledDate, slotTime, isPremiumSlot, premiumExtraFee, charge
+            coachConsultation: bill.coachConsultation, // 👈 Stores Online/Offline mode, extra KM fee, and slot
             billSummary: bill.pricingBreakdown,
             appliedCoupon: null,
             paymentMethod,

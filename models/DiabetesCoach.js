@@ -11,11 +11,39 @@ const diabetesCoachSchema = new mongoose.Schema({
         type: String,
         default: null
     },
+    // 🎓 Qualification & Professional Specialization
+    qualification: { 
+        type: String, 
+        default: "Certified Diabetes Educator" 
+    },
+    coachType: { 
+        type: String, 
+        enum: ['Diabetes Educator', 'Diabetes Coach', 'Both'], 
+        default: 'Both',
+        index: true 
+    },
     price: {
         type: Number,
         required: [true, "Consultation / training charge is required"],
         min: 0
     }, // Consultation / Device onboarding charge in ₹
+
+    // 💳 Online & Offline Consultation Fees
+    fees: {
+        online: { type: Number, default: 299, min: 0 },
+        offline: { type: Number, default: 599, min: 0 }
+    },
+    consultationModes: {
+        isOnlineAvailable: { type: Boolean, default: false },
+        isOfflineAvailable: { type: Boolean, default: false }
+    },
+
+    // 🚗 Offline Travel / Distance Pricing (Beyond Base Range Surcharge)
+    offlinePricing: {
+        baseDistanceKM: { type: Number, default: 5 },     // Base included KM (e.g. 5 KM)
+        extraPricePerKM: { type: Number, default: 15 },   // Extra charge per KM beyond base distance
+        maxServiceRadiusKM: { type: Number, default: 25 } // Max distance coach will travel
+    },
     phone: { 
         type: String, 
         unique: true, 

@@ -6,7 +6,7 @@ const { calculateHaversine } = require('../../../utils/helpers');
 const mongoose = require('mongoose');
 
 // =========================================================================
-// 📍 1. POST API: GET COACHES WITH LIVE DISTANCE CALCULATION
+// 📍 1. POST API: GET COACHES WITH DISTANCE, MODES & TRAVEL COST
 // Endpoint: POST /user/cgm/coaches/nearby
 // =========================================================================
 const getNearbyDiabetesCoaches = async (req, res) => {
@@ -15,10 +15,15 @@ const getNearbyDiabetesCoaches = async (req, res) => {
             userLat, 
             userLng, 
             search = "", 
-            city 
+            city, 
+            coachType // 'Diabetes Educator', 'Diabetes Coach', 'Both'
         } = req.body;
 
         const query = { isActive: true };
+
+        if (coachType && coachType.trim() !== '') {
+            query.coachType = { $in: [coachType.trim(), 'Both'] };
+        }
 
         if (city && city.trim() !== '') {
             query['location.city'] = { $regex: city.trim(), $options: 'i' };
@@ -28,21 +33,21 @@ const getNearbyDiabetesCoaches = async (req, res) => {
             const regex = new RegExp(search.trim(), 'i');
             query.$or = [
                 { name: regex },
+                { qualification: regex },
                 { 'location.city': regex },
                 { languages: regex }
             ];
         }
 
         const coaches = await DiabetesCoach.find(query)
-            .select('_id name profileImage price about languages location rating totalReviews createdAt')
+            .select('-password -token -fcmToken')
             .lean();
 
-        // 🧮 Calculate Distance for each coach using utils/helpers.js
         const uLat = Number(userLat);
         const uLng = Number(userLng);
 
         let formattedCoaches = coaches.map(coach => {
-            let distanceInKM = null;
+            let distanceInKM = 0;
 
             if (uLat && uLng && coach.location?.lat && coach.location?.lng) {
                 distanceInKM = calculateHaversine(
@@ -51,26 +56,48 @@ const getNearbyDiabetesCoaches = async (req, res) => {
                 );
             }
 
+            // Offline Distance Travel Fee Calculation
+            const baseKM = Number(coach.offlinePricing?.baseDistanceKM) || 5;
+            const extraRate = Number(coach.offlinePricing?.extraPricePerKM) || 15;
+            const extraKM = distanceInKM > baseKM ? Number((distanceInKM - baseKM).toFixed(1)) : 0;
+            const extraDistanceFee = Math.round(extraKM * extraRate);
+
+            const onlineFee = coach.fees?.online !== undefined ? Number(coach.fees.online) : (Number(coach.price) || 299);
+            const offlineBaseFee = coach.fees?.offline !== undefined ? Number(coach.fees.offline) : 599;
+            const totalEstimatedOfflineFee = offlineBaseFee + extraDistanceFee;
+
             return {
                 _id: coach._id,
                 name: coach.name,
+                qualification: coach.qualification || "Certified Diabetes Educator",
+                coachType: coach.coachType || "Both",
                 profileImage: coach.profileImage,
-                price: coach.price, // Coach direct consultation price
                 about: coach.about,
                 languages: coach.languages || [],
+                pricing: {
+                    onlineFee,
+                    offlineBaseFee,
+                    extraDistanceFee,
+                    totalEstimatedOfflineFee
+                },
+                consultationModes: coach.consultationModes || { isOnlineAvailable: true, isOfflineAvailable: true },
+                offlinePricingRules: {
+                    baseDistanceKM: baseKM,
+                    extraPricePerKM: extraRate,
+                    maxServiceRadiusKM: Number(coach.offlinePricing?.maxServiceRadiusKM) || 25
+                },
                 location: {
                     city: coach.location?.city || "N/A",
                     state: coach.location?.state || "N/A",
                     address: coach.location?.address || ""
                 },
-                distanceInKM: distanceInKM !== null ? distanceInKM : 0,
-                distanceDisplay: distanceInKM !== null ? `${distanceInKM} km away` : "Distance N/A",
+                distanceInKM: distanceInKM,
+                distanceDisplay: distanceInKM > 0 ? `${distanceInKM} km away` : "Location not provided",
                 rating: coach.rating || 4.9,
                 totalReviews: coach.totalReviews || 0
             };
         });
 
-        // 🚀 Nearest Coach first sort (Agar user coordinates mile hain)
         if (uLat && uLng) {
             formattedCoaches.sort((a, b) => a.distanceInKM - b.distanceInKM);
         }

@@ -77,23 +77,26 @@ const cgmOrderSchema = new mongoose.Schema({
         totalPrice: { type: Number, required: true }
     }],
 
-    // 5. Coach Consultation (With Slots & Premium Extra Fee)
+    // 5. Coach Consultation (With Mode, Distance & Surcharge)
     coachConsultation: {
         isIncluded: { type: Boolean, default: false },
-        coachId: { 
-            type: mongoose.Schema.Types.ObjectId, 
-            ref: 'DiabetesCoach', 
-            default: null 
-        },
+        coachId: { type: mongoose.Schema.Types.ObjectId, ref: 'DiabetesCoach', default: null },
         coachName: { type: String, default: "" },
-        scheduledDate: { type: String, default: null }, // e.g. "2026-10-10"
-        slotTime: { type: String, default: null },      // e.g. "18:00" ya "06:00 PM - 06:30 PM"
-        basePrice: { type: Number, default: 0 },        // Coach ka base charge (e.g. ₹499)
-        isPremiumSlot: { type: Boolean, default: false },// Kya ye premium slot tha?
-        premiumExtraFee: { type: Number, default: 0 },  // Extra fee (e.g. ₹150)
-        charge: { type: Number, default: 0 }            // Total = basePrice + premiumExtraFee (e.g. ₹649)
+        coachType: { type: String, default: "Both" },
+        consultationMode: { 
+            type: String, 
+            enum: ['Online', 'Offline'], 
+            default: 'Online' 
+        },
+        scheduledDate: { type: String, default: null },
+        slotTime: { type: String, default: null },
+        basePrice: { type: Number, default: 0 },
+        distanceInKM: { type: Number, default: 0 },
+        extraDistanceCharge: { type: Number, default: 0 }, // Distance surcharge if offline
+        isPremiumSlot: { type: Boolean, default: false },
+        premiumExtraFee: { type: Number, default: 0 },
+        charge: { type: Number, default: 0 } // Final total coach fee
     },
-
     // 6. Billing Summary
     billSummary: {
         itemTotal: { type: Number, required: true, default: 0 },
