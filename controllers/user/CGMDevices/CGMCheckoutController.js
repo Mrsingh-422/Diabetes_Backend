@@ -5,13 +5,14 @@ const CGMDevices = require('../../../models/CGMDevicesModel');
 const CGMAddon = require('../../../models/CGMAddon');
 const CodConfig = require('../../../models/CodConfig');
 const DiabetesCoach = require('../../../models/DiabetesCoach');
-const { isCoachSlotAvailable } = require('../../../utils/timeSlotHelper');
 const CoachDistanceConfig = require('../../../models/CoachDistanceConfig');
+const { isCoachSlotAvailable } = require('../../../utils/timeSlotHelper');
+const { calculateHaversine } = require('../../../utils/helpers'); // 👈 FIX 1: Missing import added!
 const { createRazorpayOrder, verifyRazorpaySignature } = require('../../../utils/razorpay');
 const mongoose = require('mongoose');
 
 // =========================================================================
-// 🧮 REUSABLE BILLING ENGINE (With Admin Managed Free KM & Auto Distance Surcharge)
+// 🧮 REUSABLE BILLING ENGINE (Device + Addons + Online/Offline Coach Fee + KM Surcharge)
 // =========================================================================
 const calculateCGMBillHelper = async ({
     deviceId,
@@ -84,7 +85,7 @@ const calculateCGMBillHelper = async ({
         }
     }
 
-    // 3. 👨‍⚕️ Coach Calculation with Admin Managed Distance Surcharge
+    // 3. 👨‍⚕️ Coach Calculation with Distance Surcharge & Premium Slot
     let coachInfo = {
         isIncluded: false,
         coachId: null,
@@ -106,40 +107,46 @@ const calculateCGMBillHelper = async ({
         const coachDoc = await DiabetesCoach.findOne({ _id: coachId, isActive: true }).lean();
         if (coachDoc) {
             const isOffline = consultationMode === 'Offline';
-            let basePrice = isOffline 
-                ? (Number(coachDoc.fees?.offline) || 599) 
-                : (Number(coachDoc.fees?.online) || Number(coachDoc.price) || 299);
+
+            // Safe fees fallback
+            let basePrice = isOffline
+                ? (coachDoc.fees?.offline !== undefined ? Number(coachDoc.fees.offline) : 599)
+                : (coachDoc.fees?.online !== undefined ? Number(coachDoc.fees.online) : (Number(coachDoc.price) || 299));
 
             let distanceInKM = 0;
             let extraDistanceCharge = 0;
             let freeKM = 5;
 
-            // 🚗 Admin Global Distance Config Fetch
+            // Offline Distance Calculation
             if (isOffline) {
-                const distanceConfig = await CoachDistanceConfig.findOne({ isActive: true }).lean();
-                freeKM = distanceConfig?.freeDistanceKM !== undefined ? Number(distanceConfig.freeDistanceKM) : 5;
-                const pricePerKM = distanceConfig?.pricePerKM !== undefined ? Number(distanceConfig.pricePerKM) : 15;
+                try {
+                    const distanceConfig = await CoachDistanceConfig.findOne({ isActive: true }).lean();
+                    freeKM = distanceConfig?.freeDistanceKM !== undefined ? Number(distanceConfig.freeDistanceKM) : 5;
+                    const pricePerKM = distanceConfig?.pricePerKM !== undefined ? Number(distanceConfig.pricePerKM) : 15;
 
-                if (userLat && userLng && coachDoc.location?.lat && coachDoc.location?.lng) {
-                    distanceInKM = calculateHaversine(
-                        Number(userLat), Number(userLng),
-                        Number(coachDoc.location.lat), Number(coachDoc.location.lng)
-                    );
+                    if (userLat && userLng && coachDoc.location?.lat && coachDoc.location?.lng) {
+                        distanceInKM = calculateHaversine(
+                            Number(userLat), Number(userLng),
+                            Number(coachDoc.location.lat), Number(coachDoc.location.lng)
+                        );
 
-                    // Agar user distance free distance se zyada hai, tabhi charge lagega
-                    if (distanceInKM > freeKM) {
-                        const extraKM = Number((distanceInKM - freeKM).toFixed(1));
-                        extraDistanceCharge = Math.round(extraKM * pricePerKM);
+                        if (distanceInKM > freeKM) {
+                            const extraKM = Number((distanceInKM - freeKM).toFixed(1));
+                            extraDistanceCharge = Math.round(extraKM * pricePerKM);
+                        }
                     }
+                } catch (distErr) {
+                    console.error("Distance calculation error:", distErr);
+                    extraDistanceCharge = 0;
                 }
             }
 
-            // 💎 Premium Slot Check
+            // Premium Slot Check
             let isPremium = false;
             let extraSlotFee = 0;
 
             if (slotTime && Array.isArray(coachDoc.slotConfig?.premiumSlots)) {
-                const matchedPremium = coachDoc.slotConfig.premiumSlots.find(p => 
+                const matchedPremium = coachDoc.slotConfig.premiumSlots.find(p =>
                     p.time === slotTime || (typeof slotTime === 'string' && slotTime.startsWith(p.time))
                 );
 
@@ -149,7 +156,6 @@ const calculateCGMBillHelper = async ({
                 }
             }
 
-            // Total Coach Charge = Base Fee + Auto Extra KM Surcharge + Premium Slot Fee
             const totalCoachCharge = basePrice + extraDistanceCharge + extraSlotFee;
 
             coachInfo = {
@@ -223,7 +229,7 @@ const calculateCGMBillHelper = async ({
 };
 
 // =========================================================================
-// 🧮 1. CHECKOUT PREVIEW API
+// 🧮 1. CHECKOUT PREVIEW API (FIXED: Passed consultationMode, userLat, userLng)
 // Endpoint: POST /api/user/cgm/checkout/calculate-bill
 // =========================================================================
 const calculateCGMBill = async (req, res) => {
@@ -234,6 +240,9 @@ const calculateCGMBill = async (req, res) => {
             quantity = 1,
             addons = [],
             coachId = null,
+            consultationMode = 'Online', // 👈 FIX 2: Extracted & passed
+            userLat = null,              // 👈 FIX 2: Extracted & passed
+            userLng = null,              // 👈 FIX 2: Extracted & passed
             scheduledDate = null,
             slotTime = null
         } = req.body;
@@ -248,6 +257,9 @@ const calculateCGMBill = async (req, res) => {
             quantity,
             addons,
             coachId,
+            consultationMode,
+            userLat,
+            userLng,
             scheduledDate,
             slotTime
         });
@@ -258,6 +270,7 @@ const calculateCGMBill = async (req, res) => {
         });
 
     } catch (error) {
+        console.error("calculateCGMBill Error:", error);
         res.status(400).json({ success: false, message: error.message });
     }
 };
@@ -275,7 +288,7 @@ const placeCGMOrder = async (req, res) => {
             quantity = 1,
             addons = [],
             coachId = null,
-            consultationMode = 'Online', // 'Online' OR 'Offline'
+            consultationMode = 'Online',
             userLat = null,
             userLng = null,
             scheduledDate = null,
@@ -303,7 +316,10 @@ const placeCGMOrder = async (req, res) => {
             }
         }
 
-        // 1. Recalculate Bill securely on Backend (With Online/Offline fee & KM surcharge)
+        const finalLat = userLat !== null ? userLat : (deliveryAddress.lat || null);
+        const finalLng = userLng !== null ? userLng : (deliveryAddress.lng || null);
+
+        // Calculate Bill
         const bill = await calculateCGMBillHelper({
             deviceId,
             variantId,
@@ -311,13 +327,12 @@ const placeCGMOrder = async (req, res) => {
             addons,
             coachId,
             consultationMode,
-            userLat,
-            userLng,
+            userLat: finalLat,
+            userLng: finalLng,
             scheduledDate,
             slotTime
         });
 
-        // COD Policy check
         if (paymentMethod === 'COD' && bill.orderPolicies.isCodAvailable === false) {
             return res.status(400).json({
                 success: false,
@@ -329,7 +344,6 @@ const placeCGMOrder = async (req, res) => {
         const orderId = `HK-CGM-${Date.now().toString().slice(-6)}`;
         const deliveryOtp = Math.floor(1000 + Math.random() * 9000).toString();
 
-        // 2. Razorpay Order Creation
         let rzpOrder = null;
         if (paymentMethod === 'Online' && finalTotal > 0) {
             rzpOrder = await createRazorpayOrder(finalTotal, `cgm_${orderId}`);
@@ -337,7 +351,6 @@ const placeCGMOrder = async (req, res) => {
 
         const isAutoConfirmed = paymentMethod === 'COD' || finalTotal === 0;
 
-        // 3. Create Order Document
         const newOrder = await CGMOrder.create({
             orderId,
             userId,
@@ -369,7 +382,7 @@ const placeCGMOrder = async (req, res) => {
                 addressType: deliveryAddress.addressType || "Home"
             },
             addons: bill.addonsSelected,
-            coachConsultation: bill.coachConsultation, // 👈 Stores Online/Offline mode, extra KM fee, and slot
+            coachConsultation: bill.coachConsultation,
             billSummary: bill.pricingBreakdown,
             appliedCoupon: null,
             paymentMethod,
@@ -384,7 +397,6 @@ const placeCGMOrder = async (req, res) => {
             }]
         });
 
-        // Response for Online Payment
         if (paymentMethod === 'Online' && rzpOrder) {
             return res.status(201).json({
                 success: true,
@@ -399,7 +411,6 @@ const placeCGMOrder = async (req, res) => {
             });
         }
 
-        // Response for COD
         res.status(201).json({
             success: true,
             isOnlinePayment: false,
@@ -411,13 +422,13 @@ const placeCGMOrder = async (req, res) => {
         });
 
     } catch (error) {
+        console.error("placeCGMOrder Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
 
 // =========================================================================
 // 💳 3. VERIFY RAZORPAY PAYMENT API
-// Endpoint: POST /api/user/cgm/checkout/verify-payment
 // =========================================================================
 const verifyCGMPayment = async (req, res) => {
     try {
@@ -477,8 +488,7 @@ const verifyCGMPayment = async (req, res) => {
 };
 
 // =========================================================================
-// 📋 4. GET MY ORDERS (LIGHTWEIGHT SUMMARY LIST)
-// Endpoint: GET /api/user/cgm/checkout/my-orders
+// 📋 4. GET MY ORDERS
 // =========================================================================
 const getMyCGMOrders = async (req, res) => {
     try {
@@ -505,8 +515,7 @@ const getMyCGMOrders = async (req, res) => {
 };
 
 // =========================================================================
-// 🔍 5. GET SINGLE ORDER DETAILS BY ID (FULL DETAIL VIEW)
-// Endpoint: GET /api/user/cgm/checkout/order/:id
+// 🔍 5. GET ORDER DETAILS BY ID (FIXED: Populated coachId from DiabetesCoach)
 // =========================================================================
 const getCGMOrderById = async (req, res) => {
     try {
@@ -522,7 +531,7 @@ const getCGMOrderById = async (req, res) => {
         })
         .populate('device.deviceId', 'title brand mainImage deviceModel glucometerConfig cgmConfig userManualPdf')
         .populate('addons.addonId', 'name price imageUrl')
-        .populate('coachConsultation.coachChargeId', 'name coachCharge description')
+        .populate('coachConsultation.coachId', 'name price qualification coachType profileImage phone email') // 👈 FIX 3: Correct key
         .populate('userId', 'name phone email')
         .lean();
 
@@ -541,8 +550,7 @@ const getCGMOrderById = async (req, res) => {
 };
 
 // =========================================================================
-// 🧩 4. GET ACTIVE CGM ADDONS FOR USER CHECKOUT SCREEN
-// Endpoint: GET /user/cgm/devices/addons
+// 🧩 6. GET ACTIVE ADDONS
 // =========================================================================
 const getUserCGMAddons = async (req, res) => {
     try {

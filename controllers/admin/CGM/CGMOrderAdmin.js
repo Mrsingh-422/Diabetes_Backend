@@ -1,7 +1,10 @@
-// controllers/admin/CGM/CGMOrderAdminController.js
+// controllers/admin/CGM/CGMOrderAdmin.js
 
 const CGMOrder = require('../../../models/CGMOrder');
 const mongoose = require('mongoose');
+
+// Helper to escape regex special characters (prevents crash on searching '+91...')
+const escapeRegex = (text) => text.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
 
 // =========================================================================
 // 📋 1. GET ALL ORDERS FOR ADMIN DASHBOARD (LIGHTWEIGHT TABLE VIEW)
@@ -29,9 +32,10 @@ const getAllAdminCGMOrders = async (req, res) => {
             query['device.productType'] = productType;
         }
 
-        // 2. Search Filter (Order ID, Customer Name, ya Phone number se search)
+        // 2. Safe Search Filter (Order ID, Customer Name, Phone, ya Product Name)
         if (search && search.trim() !== '') {
-            const regex = new RegExp(search.trim(), 'i');
+            const sanitizedSearch = escapeRegex(search.trim());
+            const regex = new RegExp(sanitizedSearch, 'i');
             query.$or = [
                 { orderId: regex },
                 { 'deliveryAddress.name': regex },
@@ -47,16 +51,16 @@ const getAllAdminCGMOrders = async (req, res) => {
         // 3. Total Count calculation
         const totalDocs = await CGMOrder.countDocuments(query);
 
-        // 4. Lightweight Projection: Sirf Admin Dashboard Table ke fields
+        // 4. Lightweight Projection: Fast dashboard table loading
         const orders = await CGMOrder.find(query)
-            .select('_id orderId userId device.title device.productType device.mainImage device.selectedVariant device.unitPrice device.quantity deliveryAddress.name deliveryAddress.phone deliveryAddress.city billSummary.totalPayable paymentMethod paymentStatus status createdAt')
+            .select('_id orderId userId device.title device.productType device.mainImage device.selectedVariant device.unitPrice device.quantity deliveryAddress.name deliveryAddress.phone deliveryAddress.city billSummary.totalPayable paymentMethod paymentStatus status coachConsultation.isIncluded coachConsultation.coachName addons createdAt')
             .populate('userId', 'name phone email profilePic')
             .sort({ createdAt: -1 })
             .skip(skip)
             .limit(limitNum)
             .lean();
 
-        // 5. Clean Format for Admin Table
+        // 5. Clean Structured Table Rows for Admin
         const formattedOrders = orders.map(order => ({
             _id: order._id,
             orderId: order.orderId,
@@ -74,6 +78,11 @@ const getAllAdminCGMOrders = async (req, res) => {
                 quantity: order.device?.quantity || 1,
                 unitPrice: order.device?.unitPrice || 0
             },
+            coach: {
+                isIncluded: Boolean(order.coachConsultation?.isIncluded),
+                coachName: order.coachConsultation?.coachName || null
+            },
+            addonsCount: Array.isArray(order.addons) ? order.addons.length : 0,
             city: order.deliveryAddress?.city || "N/A",
             totalAmount: order.billSummary?.totalPayable || 0,
             paymentMethod: order.paymentMethod || "COD",
@@ -114,7 +123,7 @@ const getAdminCGMOrderById = async (req, res) => {
             .populate('userId', 'name phone email profilePic gender dob')
             .populate('device.deviceId', 'title brand mainImage deviceModel glucometerConfig cgmConfig userManualPdf')
             .populate('addons.addonId', 'name price description imageUrl')
-            .populate('coachConsultation.coachChargeId', 'name coachCharge description')
+            .populate('coachConsultation.coachId', 'name qualification coachType profileImage phone email price') // 👈 Fixed: Correct field & model
             .lean();
 
         if (!order) {
@@ -123,7 +132,7 @@ const getAdminCGMOrderById = async (req, res) => {
 
         res.json({
             success: true,
-            data: order // 👈 Returns 100% full complete detailed document
+            data: order //  100% complete details for admin modal
         });
 
     } catch (error) {

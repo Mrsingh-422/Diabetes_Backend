@@ -346,7 +346,30 @@ const generateCoachSlots = ({
     return { isClosed: false, slots };
 };
 
+// ==========================================
+// 🛡️ 7. REAL-TIME COACH SLOT AVAILABILITY CHECKER (For Booking Creation)
+// ==========================================
+const isCoachSlotAvailable = async (coachId, selectedDate, slotTime, BookingModel) => {
+    try {
+        const activeStatuses = ['Placed', 'Confirmed', 'Scheduled', 'In-Progress'];
 
+        const existingBooking = await BookingModel.findOne({
+            'coachConsultation.coachId': coachId,
+            'coachConsultation.scheduledDate': selectedDate,
+            'coachConsultation.slotTime': slotTime,
+            status: { $in: activeStatuses }
+        });
+
+        return !existingBooking; // True if available, false if already booked
+    } catch (error) {
+        console.error("isCoachSlotAvailable error:", error);
+        return false;
+    }
+};
+
+// ==========================================
+// EXPORTS
+// ==========================================
 module.exports = { 
     generateTimeSlots, 
     generateFoodSlots, 
@@ -354,5 +377,5 @@ module.exports = {
     generateAmbulanceSlots,
     isAmbulanceAvailable,
     generateCoachSlots,
-    
+    isCoachSlotAvailable // 👈 Ye export add karein
 };

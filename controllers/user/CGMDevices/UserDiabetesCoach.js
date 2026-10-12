@@ -114,19 +114,18 @@ const getNearbyDiabetesCoaches = async (req, res) => {
 };
 
 // =========================================================================
-// 🔍 2. GET SINGLE COACH DETAILS BY ID (WITH OPTIONAL DATE SLOTS PREVIEW)
+// 🔍 2. GET SINGLE COACH DETAILS BY ID (WITH SAFE DATE SLOTS PREVIEW)
 // Endpoint: GET /user/cgm/coaches/get/:id?selectedDate=2026-10-10
 // =========================================================================
 const getUserDiabetesCoachById = async (req, res) => {
     try {
         const { id } = req.params;
-        const { selectedDate } = req.query; // Optional e.g. "2026-10-10"
+        const { selectedDate } = req.query;
 
         if (!mongoose.Types.ObjectId.isValid(id)) {
             return res.status(400).json({ success: false, message: "Invalid Coach ID format." });
         }
 
-        // Sensitive credentials (-password -token -fcmToken) exclude karein
         const coach = await DiabetesCoach.findOne({ _id: id, isActive: true })
             .select('-password -token -fcmToken')
             .lean();
@@ -137,31 +136,44 @@ const getUserDiabetesCoachById = async (req, res) => {
 
         let generatedSlots = null;
 
-        // Agar frontend ne selectedDate bheji hai, toh us date ke live slots generate karein
+        // Agar date di ho AUR coach ne slots DB mein configure kiye hon, tabhi slots banayein
         if (selectedDate) {
-            const bookedOrders = await CGMOrder.find({
-                'coachConsultation.coachId': id,
-                'coachConsultation.scheduledDate': selectedDate,
-                status: { $in: ['Placed', 'Confirmed'] }
-            }).select('coachConsultation.slotTime').lean();
+            if (!coach.slotConfig || !coach.slotConfig.startTime || !coach.slotConfig.endTime) {
+                generatedSlots = {
+                    isClosed: true,
+                    reason: "No slots configured by coach yet.",
+                    slots: []
+                };
+            } else {
+                let bookedAppointments = [];
+                try {
+                    const bookedOrders = await CGMOrder.find({
+                        'coachConsultation.coachId': id,
+                        'coachConsultation.scheduledDate': selectedDate,
+                        status: { $in: ['Placed', 'Confirmed'] }
+                    }).select('coachConsultation.slotTime').lean();
 
-            const bookedAppointments = bookedOrders.map(b => ({
-                slotTime: b.coachConsultation?.slotTime
-            }));
+                    bookedAppointments = (bookedOrders || []).map(b => ({
+                        slotTime: b.coachConsultation?.slotTime
+                    }));
+                } catch (dbErr) {
+                    bookedAppointments = [];
+                }
 
-            generatedSlots = generateCoachSlots({
-                config: coach.slotConfig || {},
-                bookedAppointments,
-                selectedDate,
-                coachBasePrice: coach.price
-            });
+                generatedSlots = generateCoachSlots({
+                    config: coach.slotConfig,
+                    bookedAppointments,
+                    selectedDate,
+                    coachBasePrice: Number(coach.fees?.online) || Number(coach.price) || 0
+                });
+            }
         }
 
         res.json({
             success: true,
             data: {
                 ...coach,
-                availableSlotsPreview: generatedSlots // Returns slots with premium extra fees & availability
+                availableSlotsPreview: generatedSlots
             }
         });
 
