@@ -331,7 +331,7 @@ const bookClinicOrder = async (req, res) => {
         }
 
         const totalPayable = calculation.pricingBreakdown.totalPrice;
-        const tempBookingId = `CLN-ORD-${Math.floor(100000 + Math.random() * 900000)}`;
+        const tempBookingId = `DI-ORD-${Math.floor(100000 + Math.random() * 900000)}`;
 
         let rzpOrder = null;
         if (paymentMethod !== 'COD' && totalPayable > 0) {

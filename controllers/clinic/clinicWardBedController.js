@@ -85,7 +85,7 @@ const getClinicWards = async (req, res) => {
         const checkDate = date ? new Date(date) : new Date();
 
         // 1. Fetch all wards for this clinic
-        const wards = await Ward.find({ clinicId }).lean();
+        const wards = await Ward.find({ clinicId }).sort({createdAt:-1}).lean();
 
         // 2. Fetch all active/confirmed bed appointments for this clinic on this date
         const activeBookings = await Appointment.find({
@@ -137,12 +137,13 @@ const getClinicWards = async (req, res) => {
 
 
 // ==========================================
-// 🛏️ GET BEDS IN CLINIC WARD (Frontend Data Wrapper Format)
-// Endpoint: GET /api/user/clinics/wards/:wardId/beds?startDate=...&endDate=...
+// 🛏️ GET BEDS IN CLINIC WARD (Fixed: User Booking = 'Occupied')
+// Endpoint: GET /api/clinic/wards/:wardId/beds?startDate=...&endDate=...
 // ==========================================
 const getBedsInClinicWard = async (req, res) => {
     try {
         const { wardId } = req.params;
+        const clinicId = req.user?.id || req.params.clinicId;
         const { startDate, endDate } = req.query;
 
         if (!mongoose.Types.ObjectId.isValid(wardId)) {
@@ -162,25 +163,65 @@ const getBedsInClinicWard = async (req, res) => {
         const start = startDate ? moment(startDate).startOf('day').toDate() : moment().startOf('day').toDate();
         const end = endDate ? moment(endDate).endOf('day').toDate() : moment(start).endOf('day').toDate();
 
-        // 4. Check conflicting active appointments in database
+        // 4. Fetch Active Bookings for these beds
         const activeAppointments = await Appointment.find({
             bedId: { $in: beds.map(b => b._id) },
-            status: { $in: ['Confirmed', 'In-Progress', 'Clinic-Pending', 'Discharge-Pending'] },
+            status: { $in: ['Confirmed', 'In-Progress', 'Admitted', 'Pending', 'Clinic-Pending', 'Discharge-Pending'] },
             $or: [
-                { startDate: { $lte: end }, endDate: { $gte: start } }
+                { startDate: { $lte: end }, endDate: { $gte: start } },
+                { status: { $in: ['Confirmed', 'In-Progress', 'Admitted'] } } // Active stay
             ]
-        }).select('bedId bedNumber bookingId status').lean();
+        })
+        .select('bedId bedNumber bookingId status patients userId startDate endDate consultationType bookingType bookingReason')
+        .populate('userId', 'name phone email profilePic')
+        .sort({ updatedAt: -1 })
+        .lean();
 
-        const occupiedBedIds = new Set(activeAppointments.map(a => a.bedId?.toString()).filter(Boolean));
-        const occupiedBedNumbers = new Set(activeAppointments.map(a => a.bedNumber).filter(Boolean));
+        // Fast Lookup Map for active occupant by Bed ID
+        const appointmentMap = {};
+        activeAppointments.forEach(appt => {
+            if (appt.bedId) {
+                appointmentMap[appt.bedId.toString()] = appt;
+            }
+        });
 
-        // 5. Map each bed with real-time availability flags
+        // 🎯 5. STATUS LOGIC (User Booked = OCCUPIED)
         const bedsList = beds.map(bed => {
-            const isBookedById = bed._id && occupiedBedIds.has(bed._id.toString());
-            const isBookedByNum = bed.bedNumber && occupiedBedNumbers.has(bed.bedNumber);
-            const isManuallyOccupied = bed.status === 'Occupied' || bed.status === 'Reserved' || bed.status === 'Maintenance';
+            const activeAppt = appointmentMap[bed._id.toString()];
 
-            const isOccupied = isBookedById || isBookedByNum || isManuallyOccupied;
+            let finalStatus = 'Available';
+
+            if (bed.status === 'Maintenance') {
+                finalStatus = 'Maintenance';
+            } else if (activeAppt || bed.status === 'Occupied') {
+                // 🎯 FIX: User ne bed book kiya hai toh HAMESHA 'Occupied' dikhega
+                finalStatus = 'Occupied';
+            } else if (bed.status === 'Reserved') {
+                // 🎯 Sirf tab 'Reserved' jab clinic ne manually pre-hold kiya ho
+                finalStatus = 'Reserved'; 
+            } else {
+                finalStatus = 'Available';
+            }
+
+            // 👤 6. ATTACH OCCUPANT DETAILS (Show on Bed Click)
+            let occupantInfo = null;
+            if (activeAppt) {
+                const mainPatient = (activeAppt.patients && activeAppt.patients[0]) || {};
+                occupantInfo = {
+                    appointmentId: activeAppt._id,
+                    bookingId: activeAppt.bookingId,
+                    patientName: mainPatient.patientName || activeAppt.userId?.name || "Patient",
+                    phone: activeAppt.userId?.phone || "",
+                    age: mainPatient.patientAge || null,
+                    gender: mainPatient.gender || "Male",
+                    relation: mainPatient.relation || "Self",
+                    reasonForVisit: mainPatient.reasonForVisit || activeAppt.bookingReason || "",
+                    startDate: activeAppt.startDate,
+                    endDate: activeAppt.endDate,
+                    appointmentStatus: activeAppt.status,
+                    bookingType: activeAppt.bookingType || "Admission"
+                };
+            }
 
             return {
                 _id: bed._id,
@@ -188,13 +229,15 @@ const getBedsInClinicWard = async (req, res) => {
                 bedNumber: bed.bedNumber,
                 pricePerDay: bed.pricePerDay || ward.pricePerDay || 600,
                 dailyCharge: bed.pricePerDay || ward.pricePerDay || 600,
-                status: isOccupied ? (bed.status === 'Maintenance' ? 'Maintenance' : 'Occupied') : 'Available',
-                isAvailable: !isOccupied,
-                isOccupied: isOccupied
+                status: finalStatus,                          // 👈 Ab 'Occupied' aayega
+                isAvailable: finalStatus === 'Available',
+                isOccupied: finalStatus === 'Occupied',       // 👈 true
+                isReserved: finalStatus === 'Reserved',       // 👈 false
+                isMaintenance: finalStatus === 'Maintenance',
+                occupantInfo: occupantInfo
             };
         });
 
-        // 🎯 6. Response wrapped inside 'data' for Frontend compatibility
         res.json({
             success: true,
             data: {
@@ -206,6 +249,8 @@ const getBedsInClinicWard = async (req, res) => {
                 wardType: ward.type,
                 pricePerDay: ward.pricePerDay || 600,
                 availableBedsCount: bedsList.filter(b => b.isAvailable).length,
+                occupiedBedsCount: bedsList.filter(b => b.isOccupied).length, // 👈 Occupied counter me count hoga
+                reservedBedsCount: bedsList.filter(b => b.isReserved).length,
                 totalBedsCount: bedsList.length,
                 beds: bedsList
             }
@@ -406,13 +451,21 @@ const deleteClinicWard = async (req, res) => {
 };
 
 // ==========================================
-// 8. UPDATE INDIVIDUAL BED STATUS (Maintenance / Available)
+// 8. UPDATE INDIVIDUAL BED STATUS (Supports 'Reserved')
 // Endpoint: PATCH /api/clinic/wards/bed/status
 // ==========================================
 const updateClinicBedStatus = async (req, res) => {
     try {
-        const { bedId, status } = req.body; // 'Available' | 'Maintenance' | 'Reserved'
+        const { bedId, status } = req.body; // 'Available' | 'Occupied' | 'Reserved' | 'Maintenance'
         const clinicId = req.user.id;
+
+        const allowedStatuses = ['Available', 'Occupied', 'Reserved', 'Maintenance'];
+        if (!allowedStatuses.includes(status)) {
+            return res.status(400).json({
+                success: false,
+                message: `Invalid status. Allowed values: ${allowedStatuses.join(', ')}`
+            });
+        }
 
         const bed = await Bed.findOne({ _id: bedId, clinicId });
         if (!bed) {
@@ -423,11 +476,16 @@ const updateClinicBedStatus = async (req, res) => {
         bed.status = status;
         await bed.save();
 
-        // Sync Ward available beds counter
-        if (oldStatus !== 'Available' && status === 'Available') {
-            await Ward.findByIdAndUpdate(bed.wardId, { $inc: { availableBeds: 1 } });
-        } else if (oldStatus === 'Available' && status !== 'Available') {
+        // 🔄 Sync Ward Available Beds Counter
+        const wasBusy = (oldStatus === 'Occupied' || oldStatus === 'Reserved' || oldStatus === 'Maintenance');
+        const isBusyNow = (status === 'Occupied' || status === 'Reserved' || status === 'Maintenance');
+
+        if (!wasBusy && isBusyNow) {
+            // Available se busy hua toh -1
             await Ward.findByIdAndUpdate(bed.wardId, { $inc: { availableBeds: -1 } });
+        } else if (wasBusy && status === 'Available') {
+            // Wapas Available hua toh +1
+            await Ward.findByIdAndUpdate(bed.wardId, { $inc: { availableBeds: 1 } });
         }
 
         res.json({

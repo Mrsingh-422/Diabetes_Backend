@@ -488,25 +488,67 @@ const verifyCGMPayment = async (req, res) => {
 };
 
 // =========================================================================
-// 📋 4. GET MY ORDERS
+// 📋 4. GET MY ORDERS (WITH PAGINATION & COACH/ADDON SUMMARY)
+// Endpoint: GET /api/user/cgm/checkout/my-orders
 // =========================================================================
 const getMyCGMOrders = async (req, res) => {
     try {
         const userId = req.user.id;
-        const { status } = req.query;
+        const { status, page = 1, limit = 10 } = req.query;
 
         const query = { userId };
-        if (status) query.status = status;
+        if (status && status.trim() !== '') {
+            query.status = status.trim();
+        }
 
+        const pageNum = parseInt(page, 10) || 1;
+        const limitNum = parseInt(limit, 10) || 10;
+        const skip = (pageNum - 1) * limitNum;
+
+        const totalDocs = await CGMOrder.countDocuments(query);
+
+        // Lightweight card projection + Coach/Addons summary
         const orders = await CGMOrder.find(query)
-            .select('orderId device.title device.productType device.mainImage device.selectedVariant device.unitPrice device.quantity billSummary.totalPayable paymentMethod paymentStatus status deliveryAddress.city createdAt')
+            .select('_id orderId device.title device.productType device.mainImage device.selectedVariant device.unitPrice device.quantity deliveryAddress.city billSummary.totalPayable paymentMethod paymentStatus status coachConsultation.isIncluded coachConsultation.coachName coachConsultation.consultationMode addons createdAt')
             .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limitNum)
             .lean();
+
+        // Clean Format for User Order Cards
+        const formattedOrders = orders.map(order => ({
+            _id: order._id,
+            orderId: order.orderId,
+            device: {
+                title: order.device?.title || "Device",
+                productType: order.device?.productType || "Glucometer",
+                mainImage: order.device?.mainImage || null,
+                selectedVariant: order.device?.selectedVariant?.variantName || "Standard",
+                unitPrice: order.device?.unitPrice || 0,
+                quantity: order.device?.quantity || 1
+            },
+            coachSummary: {
+                isIncluded: Boolean(order.coachConsultation?.isIncluded),
+                coachName: order.coachConsultation?.coachName || null,
+                consultationMode: order.coachConsultation?.consultationMode || "Online"
+            },
+            addonsCount: Array.isArray(order.addons) ? order.addons.length : 0,
+            city: order.deliveryAddress?.city || "N/A",
+            totalAmount: order.billSummary?.totalPayable || 0,
+            paymentMethod: order.paymentMethod || "COD",
+            paymentStatus: order.paymentStatus || "Pending",
+            status: order.status || "Placed",
+            orderDate: order.createdAt
+        }));
 
         res.json({
             success: true,
-            count: orders.length,
-            data: orders
+            totalOrders: totalDocs,
+            totalPages: Math.ceil(totalDocs / limitNum) || 1,
+            currentPage: pageNum,
+            limit: limitNum,
+            count: formattedOrders.length,
+            data: formattedOrders
         });
 
     } catch (error) {
@@ -515,25 +557,28 @@ const getMyCGMOrders = async (req, res) => {
 };
 
 // =========================================================================
-// 🔍 5. GET ORDER DETAILS BY ID (FIXED: Populated coachId from DiabetesCoach)
+// 🔍 5. GET SINGLE ORDER FULL DETAILS BY ID
+// Endpoint: GET /api/user/cgm/checkout/order/:id
 // =========================================================================
 const getCGMOrderById = async (req, res) => {
     try {
         const userId = req.user.id;
         const { id } = req.params;
 
-        const order = await CGMOrder.findOne({
+        const query = {
             $or: [
                 ...(mongoose.Types.ObjectId.isValid(id) ? [{ _id: id }] : []),
                 { orderId: id }
             ],
             userId
-        })
-        .populate('device.deviceId', 'title brand mainImage deviceModel glucometerConfig cgmConfig userManualPdf')
-        .populate('addons.addonId', 'name price imageUrl')
-        .populate('coachConsultation.coachId', 'name price qualification coachType profileImage phone email') // 👈 FIX 3: Correct key
-        .populate('userId', 'name phone email')
-        .lean();
+        };
+
+        const order = await CGMOrder.findOne(query)
+            .populate('device.deviceId', 'title brand mainImage deviceModel glucometerConfig cgmConfig userManualPdf')
+            .populate('addons.addonId', 'name price description imageUrl')
+            .populate('coachConsultation.coachId', 'name price qualification coachType profileImage phone email')
+            .populate('userId', 'name phone email')
+            .lean();
 
         if (!order) {
             return res.status(404).json({ success: false, message: "Order not found." });
@@ -541,14 +586,13 @@ const getCGMOrderById = async (req, res) => {
 
         res.json({
             success: true,
-            data: order
+            data: order //  100% complete details for full order tracking view
         });
 
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
 };
-
 // =========================================================================
 // 🧩 6. GET ACTIVE ADDONS
 // =========================================================================
