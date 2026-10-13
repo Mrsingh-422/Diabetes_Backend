@@ -137,7 +137,7 @@ const getClinicWards = async (req, res) => {
 
 
 // ==========================================
-// 🛏️ GET BEDS IN CLINIC WARD (Fixed: User Booking = 'Occupied')
+// 🛏️ GET BEDS IN CLINIC WARD (Frontend Safe & Real Patient Name Resolved)
 // Endpoint: GET /api/clinic/wards/:wardId/beds?startDate=...&endDate=...
 // ==========================================
 const getBedsInClinicWard = async (req, res) => {
@@ -169,7 +169,7 @@ const getBedsInClinicWard = async (req, res) => {
             status: { $in: ['Confirmed', 'In-Progress', 'Admitted', 'Pending', 'Clinic-Pending', 'Discharge-Pending'] },
             $or: [
                 { startDate: { $lte: end }, endDate: { $gte: start } },
-                { status: { $in: ['Confirmed', 'In-Progress', 'Admitted'] } } // Active stay
+                { status: { $in: ['Confirmed', 'In-Progress', 'Admitted'] } }
             ]
         })
         .select('bedId bedNumber bookingId status patients userId startDate endDate consultationType bookingType bookingReason')
@@ -185,7 +185,7 @@ const getBedsInClinicWard = async (req, res) => {
             }
         });
 
-        // 🎯 5. STATUS LOGIC (User Booked = OCCUPIED)
+        // 5. STATUS & OCCUPANT MAPPING
         const bedsList = beds.map(bed => {
             const activeAppt = appointmentMap[bed._id.toString()];
 
@@ -194,23 +194,33 @@ const getBedsInClinicWard = async (req, res) => {
             if (bed.status === 'Maintenance') {
                 finalStatus = 'Maintenance';
             } else if (activeAppt || bed.status === 'Occupied') {
-                // 🎯 FIX: User ne bed book kiya hai toh HAMESHA 'Occupied' dikhega
                 finalStatus = 'Occupied';
             } else if (bed.status === 'Reserved') {
-                // 🎯 Sirf tab 'Reserved' jab clinic ne manually pre-hold kiya ho
                 finalStatus = 'Reserved'; 
             } else {
                 finalStatus = 'Available';
             }
 
-            // 👤 6. ATTACH OCCUPANT DETAILS (Show on Bed Click)
+            // 👤 6. ATTACH OCCUPANT DETAILS (With Real Patient Name Resolution)
             let occupantInfo = null;
             if (activeAppt) {
                 const mainPatient = (activeAppt.patients && activeAppt.patients[0]) || {};
+
+                // 🎯 REAL USER NAME RESOLVER:
+                let resolvedPatientName = mainPatient.patientName || activeAppt.userId?.name || "Patient";
+                const pNameLower = (mainPatient.patientName || "").trim().toLowerCase();
+                const pRelLower = (mainPatient.relation || "").trim().toLowerCase();
+
+                // Agar naam 'myself' / 'self' hai ya relation 'self' hai, toh account holder (userId.name) ka real naam use karein
+                const isSelfPlaceholder = pNameLower.includes("myself") || pNameLower === "self" || pRelLower === "self";
+                if (isSelfPlaceholder && activeAppt.userId?.name) {
+                    resolvedPatientName = activeAppt.userId.name;
+                }
+
                 occupantInfo = {
                     appointmentId: activeAppt._id,
                     bookingId: activeAppt.bookingId,
-                    patientName: mainPatient.patientName || activeAppt.userId?.name || "Patient",
+                    patientName: resolvedPatientName, //  Real User Name (No "Myself (Primary Account)")
                     phone: activeAppt.userId?.phone || "",
                     age: mainPatient.patientAge || null,
                     gender: mainPatient.gender || "Male",
@@ -229,10 +239,10 @@ const getBedsInClinicWard = async (req, res) => {
                 bedNumber: bed.bedNumber,
                 pricePerDay: bed.pricePerDay || ward.pricePerDay || 600,
                 dailyCharge: bed.pricePerDay || ward.pricePerDay || 600,
-                status: finalStatus,                          // 👈 Ab 'Occupied' aayega
+                status: finalStatus,
                 isAvailable: finalStatus === 'Available',
-                isOccupied: finalStatus === 'Occupied',       // 👈 true
-                isReserved: finalStatus === 'Reserved',       // 👈 false
+                isOccupied: finalStatus === 'Occupied',
+                isReserved: finalStatus === 'Reserved',
                 isMaintenance: finalStatus === 'Maintenance',
                 occupantInfo: occupantInfo
             };
@@ -249,7 +259,7 @@ const getBedsInClinicWard = async (req, res) => {
                 wardType: ward.type,
                 pricePerDay: ward.pricePerDay || 600,
                 availableBedsCount: bedsList.filter(b => b.isAvailable).length,
-                occupiedBedsCount: bedsList.filter(b => b.isOccupied).length, // 👈 Occupied counter me count hoga
+                occupiedBedsCount: bedsList.filter(b => b.isOccupied).length,
                 reservedBedsCount: bedsList.filter(b => b.isReserved).length,
                 totalBedsCount: bedsList.length,
                 beds: bedsList
