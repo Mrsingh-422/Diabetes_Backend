@@ -1,6 +1,9 @@
 // controllers/clinic/ClinicAdmin.js
 const Clinic = require('../../../models/Clinic'); 
 const Doctor = require('../../../models/Doctor');
+const Ward = require('../../../models/Ward');
+const Ambulance = require('../../../models/Ambulance');
+const mongoose = require('mongoose');
 const ProfileUpdateRequest = require('../../../models/ProfileUpdateRequest');
 
 // ==========================================
@@ -314,6 +317,77 @@ const approveClinicDoctorStatus = async (req, res) => {
     }
 };
 
+// ==========================================
+// 🔍 8. ADMIN: GET COMPLETE CLINIC DETAILS BY ID (360° View)
+// Endpoint: GET /api/admin/clinic/details/:id
+// ==========================================
+const getClinicDetailsByIdAdmin = async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({ 
+                success: false, 
+                message: `Invalid Clinic ID format: '${id}'` 
+            });
+        }
+
+        // 1. Fetch Complete Clinic Document (.populate('SpecialistsId') hata diya gaya hai)
+        const clinic = await Clinic.findById(id)
+            .select('-password -phnOtp -token')
+            .lean();
+
+        if (!clinic) {
+            return res.status(404).json({ 
+                success: false, 
+                message: "Clinic not found in database." 
+            });
+        }
+
+        // 2. Fetch Associated Doctors of this Clinic
+        const doctors = await Doctor.find({ clinicId: id })
+            .select('name phone email speciality qualification experienceYears dutyStatus profileStatus fees profileImage')
+            .sort({ createdAt: -1 })
+            .lean();
+
+        // 3. Fetch Wards & Bed Units of this Clinic
+        const wards = await Ward.find({ clinicId: id })
+            .sort({ createdAt: -1 })
+            .lean();
+
+        // 4. Fetch Ambulances linked to this Clinic
+        const ambulances = await Ambulance.find({ clinicId: id })
+            .select('name vehicleNumber vehicleType phone serviceRadius availableForEmergency profileStatus pricing supportStaff')
+            .sort({ createdAt: -1 })
+            .lean();
+
+        // 5. Total Bed Calculation
+        const totalBeds = wards.reduce((acc, w) => acc + (w.totalBeds || 0), 0);
+        const availableBeds = wards.reduce((acc, w) => acc + (w.availableBeds || 0), 0);
+
+        res.status(200).json({
+            success: true,
+            data: {
+                clinic,
+                overview: {
+                    totalDoctors: doctors.length,
+                    totalWards: wards.length,
+                    totalBeds,
+                    availableBeds,
+                    occupiedBeds: Math.max(0, totalBeds - availableBeds),
+                    totalAmbulances: ambulances.length
+                },
+                doctors,
+                wards,
+                ambulances
+            }
+        });
+
+    } catch (error) {
+        console.error("Get Clinic Details Admin Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
 module.exports = {
     getClinics,
     approveClinicStatus,
@@ -322,5 +396,7 @@ module.exports = {
     // Doctor Admin Controllers
     getClinicDoctorsAdmin,
     getClinicDoctorDetailsAdmin,
-    approveClinicDoctorStatus
+    approveClinicDoctorStatus,
+    // Clinic Details Admin Controller
+    getClinicDetailsByIdAdmin
 };

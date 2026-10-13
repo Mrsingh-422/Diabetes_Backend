@@ -71,10 +71,22 @@ const createClinicAppointmentByClinic = async (req, res) => {
         }
 
         // ========================================================
-        // 👨‍👩‍👦 STEP 2: FAMILY MEMBER HANDLING
+        // 👨‍👩‍👦 STEP 2: FAMILY MEMBER HANDLING & REAL NAME RESOLUTION
         // ========================================================
-        const isSelfBooking = relation.toLowerCase() === 'self';
+        const isSelfBooking = relation.toLowerCase() === 'self' || 
+                              patientName.toLowerCase().includes('myself') || 
+                              patientName.toLowerCase() === 'self';
         
+        // 🎯 FIX: Agar 'Self' booking hai, toh real user name resolve karein (Placeholder string ko overwrite karein)
+        let resolvedPatientName = patientName;
+        if (isSelfBooking) {
+            if (user?.name && !user.name.toLowerCase().includes('myself') && user.name.toLowerCase() !== 'self') {
+                resolvedPatientName = user.name;
+            } else if (address?.name) {
+                resolvedPatientName = address.name;
+            }
+        }
+
         if (!isSelfBooking) {
             const memberExists = user.familyMember && user.familyMember.some(
                 m => m.memberName?.toLowerCase() === patientName.toLowerCase() && m.relation?.toLowerCase() === relation.toLowerCase()
@@ -170,16 +182,16 @@ const createClinicAppointmentByClinic = async (req, res) => {
             appointmentTime,
 
             patients: [{
-                patientName: patientName,
+                patientName: resolvedPatientName, // 👈 Resolved real user name
                 patientAge: patientAge,
                 gender: patientGender,
-                relation: relation,
+                relation: isSelfBooking ? 'Self' : relation,
                 reasonForVisit: symptoms,
                 isMainUser: isSelfBooking
             }],
 
             address: address ? {
-                name: address.name || patientName,
+                name: address.name || resolvedPatientName,
                 phone: patientPhone,
                 houseNo: address.houseNo || "",
                 sector: address.sector || "",
@@ -189,7 +201,7 @@ const createClinicAppointmentByClinic = async (req, res) => {
                 pincode: address.pincode || "",
                 addressType: address.addressType || "Home"
             } : {
-                name: patientName,
+                name: resolvedPatientName,
                 phone: patientPhone,
                 addressType: "Home"
             },
@@ -263,6 +275,7 @@ const createClinicAppointmentByClinic = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
 // ==========================================
 // 📋 2. GET ALL CLINIC BOOKINGS (With Pagination, OPD/IPD/Emergency Filter & Search)
 // Full Path: GET /api/clinic/booking/all-bookings
@@ -329,6 +342,15 @@ const getClinicBookings = async (req, res) => {
             const dateVal = b.appointmentDate || b.startDate;
             const primaryPatient = Array.isArray(b.patients) && b.patients.length > 0 ? b.patients[0] : null;
 
+            // 🎯 FIX: Agar patientName 'Myself' ya 'Self' hai, toh registered userId.name dikhao
+            let resolvedName = primaryPatient?.patientName || b.address?.name || b.userId?.name || "Patient";
+            const lowerName = resolvedName.toLowerCase();
+            const lowerRel = (primaryPatient?.relation || "").toLowerCase();
+
+            if ((lowerName.includes("myself") || lowerName === "self" || lowerRel === "self") && b.userId?.name) {
+                resolvedName = b.userId.name;
+            }
+
             return {
                 _id: b._id,
                 bookingId: b.bookingId,
@@ -340,7 +362,7 @@ const getClinicBookings = async (req, res) => {
                 totalAmount: b.totalAmount || 0,
                 appointmentDate: dateVal ? new Date(dateVal).toISOString().split('T')[0] : null,
                 appointmentTime: b.appointmentTime || "10:30 AM",
-                patientName: primaryPatient?.patientName || b.address?.name || b.userId?.name || "Patient",
+                patientName: resolvedName, // 👈 Real User Name (No "Myself (Primary Account)")
                 patientAge: primaryPatient?.patientAge || null,
                 patientGender: primaryPatient?.gender || null,
                 wardInfo: b.wardName ? `${b.wardName} (Bed #${b.bedNumber})` : null,
@@ -394,6 +416,18 @@ const getSingleClinicBookingDetails = async (req, res) => {
             return res.status(404).json({ 
                 success: false, 
                 message: "Booking record not found or not assigned to your clinic facility." 
+            });
+        }
+
+        // 🎯 FIX: Single view me bhi patients array me real name resolve karein
+        if (booking.patients && Array.isArray(booking.patients) && booking.patients.length > 0) {
+            booking.patients = booking.patients.map(p => {
+                const pName = (p.patientName || "").toLowerCase();
+                const pRel = (p.relation || "").toLowerCase();
+                if ((pName.includes("myself") || pName === "self" || pRel === "self") && booking.userId?.name) {
+                    return { ...p, patientName: booking.userId.name };
+                }
+                return p;
             });
         }
 

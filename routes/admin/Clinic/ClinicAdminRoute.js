@@ -8,7 +8,8 @@ const {
     adminGetApprovedClinics,
     getClinicDoctorsAdmin,
     getClinicDoctorDetailsAdmin,
-    approveClinicDoctorStatus
+    approveClinicDoctorStatus,
+    getClinicDetailsByIdAdmin
 } = require('../../../controllers/admin/Clinic/ClinicAdmin.js'); 
 
 // Base route : /api/admin/clinic
@@ -23,5 +24,8 @@ router.get('/approved-list', protect('admin'), adminGetApprovedClinics);
 router.get('/doctors/list', protect('admin'), getClinicDoctorsAdmin);
 router.get('/doctors/details/:id', protect('admin'), getClinicDoctorDetailsAdmin);
 router.patch('/doctors/approve/:id', protect('admin'), approveClinicDoctorStatus);
+
+// GET: Admin fetches complete clinic details with doctors, wards & ambulances
+router.get('/details/:id', protect('admin'), getClinicDetailsByIdAdmin);
 
 module.exports = router;
