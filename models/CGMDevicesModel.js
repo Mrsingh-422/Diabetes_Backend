@@ -95,7 +95,7 @@ const cgmDeviceSchema = new mongoose.Schema({
             mrp: { type: Number, required: true },
             sellingPrice: { type: Number, required: true },
             savingsAmount: { type: Number, default: 0 },
-            stockQuantity: { type: Number, default: 100 },
+            stockQuantity: { type: Number, default: 0, min: 0, required: true },
             isDefault: { type: Boolean, default: false }
         }],
 
@@ -133,7 +133,7 @@ const cgmDeviceSchema = new mongoose.Schema({
             mrp: { type: Number, required: true },
             sellingPrice: { type: Number, required: true },
             savingsAmount: { type: Number, default: 0 },
-            stockQuantity: { type: Number, default: 50 },
+            stockQuantity: { type: Number, default: 0, min: 0, required: true },
             isDefault: { type: Boolean, default: false }
         }]
     },
@@ -175,11 +175,7 @@ const cgmDeviceSchema = new mongoose.Schema({
     }],
 
     // Inventory & Status
-    stockQuantity: { 
-        type: Number, 
-        default: 100, 
-        min: 0 
-    },
+    stockQuantity: { type: Number, default: 0, min: 0, required: true },
     isAvailable: { 
         type: Boolean, 
         default: true 

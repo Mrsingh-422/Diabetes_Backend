@@ -14,13 +14,14 @@ const mongoose = require('mongoose');
 // =========================================================================
 // 🧮 REUSABLE BILLING ENGINE (Device + Addons + Online/Offline Coach Fee + KM Surcharge)
 // =========================================================================
+//  REUSABLE BILLING ENGINE (With Real-Time Stock Validation)
 const calculateCGMBillHelper = async ({
     deviceId,
     variantId = null,
     quantity = 1,
     addons = [],
     coachId = null,
-    consultationMode = 'Online', // 'Online' OR 'Offline'
+    consultationMode = 'Online',
     userLat = null,
     userLng = null,
     scheduledDate = null,
@@ -36,8 +37,9 @@ const calculateCGMBillHelper = async ({
     let selectedVariant = null;
     let unitPrice = Number(device.sellingPrice) || 0;
     let unitMrp = Number(device.mrp) || 0;
+    let currentAvailableStock = Number(device.stockQuantity) || 0;
 
-    // Check Variants
+    // Check Variants (Glucometer Strips OR CGM Multi-Packs)
     if (variantId && mongoose.Types.ObjectId.isValid(variantId)) {
         if (device.productType === 'Glucometer' && Array.isArray(device.glucometerConfig?.stripLancetVariants)) {
             const matched = device.glucometerConfig.stripLancetVariants.find(v => v._id?.toString() === variantId.toString());
@@ -45,6 +47,7 @@ const calculateCGMBillHelper = async ({
                 selectedVariant = matched;
                 unitPrice = Number(matched.sellingPrice);
                 unitMrp = Number(matched.mrp);
+                currentAvailableStock = Number(matched.stockQuantity) || 0;
             }
         } else if (device.productType === 'CGM' && Array.isArray(device.cgmConfig?.cgmPacks)) {
             const matched = device.cgmConfig.cgmPacks.find(p => p._id?.toString() === variantId.toString());
@@ -52,8 +55,18 @@ const calculateCGMBillHelper = async ({
                 selectedVariant = matched;
                 unitPrice = Number(matched.sellingPrice);
                 unitMrp = Number(matched.mrp);
+                currentAvailableStock = Number(matched.stockQuantity) || 0;
             }
         }
+    }
+
+    // 🛑 OUT OF STOCK CHECK
+    if (currentAvailableStock <= 0) {
+        throw new Error(`Out of Stock: '${selectedVariant ? (selectedVariant.variantName || selectedVariant.packName) : device.title}' is currently sold out.`);
+    }
+
+    if (currentAvailableStock < orderQty) {
+        throw new Error(`Insufficient Stock: Only ${currentAvailableStock} unit(s) available.`);
     }
 
     const itemTotal = unitPrice * orderQty;
@@ -107,8 +120,6 @@ const calculateCGMBillHelper = async ({
         const coachDoc = await DiabetesCoach.findOne({ _id: coachId, isActive: true }).lean();
         if (coachDoc) {
             const isOffline = consultationMode === 'Offline';
-
-            // Safe fees fallback
             let basePrice = isOffline
                 ? (coachDoc.fees?.offline !== undefined ? Number(coachDoc.fees.offline) : 599)
                 : (coachDoc.fees?.online !== undefined ? Number(coachDoc.fees.online) : (Number(coachDoc.price) || 299));
@@ -117,7 +128,6 @@ const calculateCGMBillHelper = async ({
             let extraDistanceCharge = 0;
             let freeKM = 5;
 
-            // Offline Distance Calculation
             if (isOffline) {
                 try {
                     const distanceConfig = await CoachDistanceConfig.findOne({ isActive: true }).lean();
@@ -136,12 +146,10 @@ const calculateCGMBillHelper = async ({
                         }
                     }
                 } catch (distErr) {
-                    console.error("Distance calculation error:", distErr);
                     extraDistanceCharge = 0;
                 }
             }
 
-            // Premium Slot Check
             let isPremium = false;
             let extraSlotFee = 0;
 
@@ -196,6 +204,7 @@ const calculateCGMBillHelper = async ({
             unitPrice,
             unitMrp,
             quantity: orderQty,
+            availableStock: currentAvailableStock,
             selectedVariant: selectedVariant ? {
                 variantId: selectedVariant._id,
                 variantName: selectedVariant.variantName || selectedVariant.packName,
@@ -227,6 +236,7 @@ const calculateCGMBillHelper = async ({
         }
     };
 };
+
 
 // =========================================================================
 // 🧮 1. CHECKOUT PREVIEW API (FIXED: Passed consultationMode, userLat, userLng)
@@ -276,7 +286,7 @@ const calculateCGMBill = async (req, res) => {
 };
 
 // =========================================================================
-// 🛍️ 2. CHECKOUT & PLACE ORDER API (COD / RAZORPAY ONLINE)
+// 🛍️ 2. CHECKOUT & PLACE ORDER (With Automatic Stock Deduction)
 // Endpoint: POST /api/user/cgm/checkout/place-order
 // =========================================================================
 const placeCGMOrder = async (req, res) => {
@@ -305,6 +315,51 @@ const placeCGMOrder = async (req, res) => {
             });
         }
 
+        const orderQty = Math.max(1, parseInt(quantity, 10) || 1);
+
+        // 1. Fetch Device document to deduct real stock
+        const targetDevice = await CGMDevices.findById(deviceId);
+        if (!targetDevice || !targetDevice.isActive) {
+            return res.status(404).json({ success: false, message: "Product is currently unavailable." });
+        }
+
+        // 2. Validate and Deduct Stock in memory
+        if (variantId && mongoose.Types.ObjectId.isValid(variantId)) {
+            if (targetDevice.productType === 'Glucometer' && Array.isArray(targetDevice.glucometerConfig?.stripLancetVariants)) {
+                const variantDoc = targetDevice.glucometerConfig.stripLancetVariants.id(variantId);
+                if (!variantDoc || (variantDoc.stockQuantity || 0) < orderQty) {
+                    return res.status(400).json({ 
+                        success: false, 
+                        message: `Insufficient stock for ${variantDoc?.variantName || 'selected variant'}. Only ${variantDoc?.stockQuantity || 0} unit(s) left.` 
+                    });
+                }
+                variantDoc.stockQuantity -= orderQty;
+            } else if (targetDevice.productType === 'CGM' && Array.isArray(targetDevice.cgmConfig?.cgmPacks)) {
+                const packDoc = targetDevice.cgmConfig.cgmPacks.id(variantId);
+                if (!packDoc || (packDoc.stockQuantity || 0) < orderQty) {
+                    return res.status(400).json({ 
+                        success: false, 
+                        message: `Insufficient stock for ${packDoc?.packName || 'selected pack'}. Only ${packDoc?.stockQuantity || 0} unit(s) left.` 
+                    });
+                }
+                packDoc.stockQuantity -= orderQty;
+            }
+        } else {
+            // Standalone Device
+            if ((targetDevice.stockQuantity || 0) < orderQty) {
+                return res.status(400).json({ 
+                    success: false, 
+                    message: `Insufficient stock for ${targetDevice.title}. Only ${targetDevice.stockQuantity || 0} unit(s) left.` 
+                });
+            }
+        }
+
+        // Parent device overall stock reduction
+        targetDevice.stockQuantity = Math.max(0, (targetDevice.stockQuantity || 0) - orderQty);
+        if (targetDevice.stockQuantity === 0) {
+            targetDevice.isAvailable = false; // Auto mark unavailable if sold out
+        }
+
         // Slot Collision Check
         if (coachId && scheduledDate && slotTime) {
             const isAvailable = await isCoachSlotAvailable(coachId, scheduledDate, slotTime, CGMOrder);
@@ -323,7 +378,7 @@ const placeCGMOrder = async (req, res) => {
         const bill = await calculateCGMBillHelper({
             deviceId,
             variantId,
-            quantity,
+            quantity: orderQty,
             addons,
             coachId,
             consultationMode,
@@ -341,7 +396,7 @@ const placeCGMOrder = async (req, res) => {
         }
 
         const finalTotal = bill.pricingBreakdown.totalPayable;
-        const orderId = `HK-CGM-${Date.now().toString().slice(-6)}`;
+        const orderId = `DW-CGM-${Date.now().toString().slice(-6)}`;
         const deliveryOtp = Math.floor(1000 + Math.random() * 9000).toString();
 
         let rzpOrder = null;
@@ -351,6 +406,7 @@ const placeCGMOrder = async (req, res) => {
 
         const isAutoConfirmed = paymentMethod === 'COD' || finalTotal === 0;
 
+        // 3. Create Order Document
         const newOrder = await CGMOrder.create({
             orderId,
             userId,
@@ -397,6 +453,9 @@ const placeCGMOrder = async (req, res) => {
             }]
         });
 
+        // 🔻 4. SAVE REDUCED STOCK IN DATABASE PERMANENTLY
+        await targetDevice.save();
+
         if (paymentMethod === 'Online' && rzpOrder) {
             return res.status(201).json({
                 success: true,
@@ -414,7 +473,7 @@ const placeCGMOrder = async (req, res) => {
         res.status(201).json({
             success: true,
             isOnlinePayment: false,
-            message: "Order placed successfully (Cash on Delivery).",
+            message: "Order placed successfully (Cash on Delivery). Stock updated.",
             orderId: newOrder.orderId,
             deliveryOtp: newOrder.deliveryOtp,
             billSummary: bill.pricingBreakdown,
@@ -614,7 +673,7 @@ const getUserCGMAddons = async (req, res) => {
 };
 
 // =========================================================================
-// 🚫 6. CANCEL CGM ORDER BY USER
+// 🚫 6. CANCEL CGM ORDER (WITH AUTOMATIC STOCK RESTORATION)
 // Endpoint: PATCH /user/cgm/devices/order/cancel/:id
 // =========================================================================
 const cancelUserCGMOrder = async (req, res) => {
@@ -623,7 +682,6 @@ const cancelUserCGMOrder = async (req, res) => {
         const { id } = req.params;
         const { cancelReason } = req.body;
 
-        // Find order belonging to the authenticated user (by _id or orderId)
         const order = await CGMOrder.findOne({
             $or: [
                 ...(mongoose.Types.ObjectId.isValid(id) ? [{ _id: id }] : []),
@@ -633,37 +691,48 @@ const cancelUserCGMOrder = async (req, res) => {
         });
 
         if (!order) {
-            return res.status(404).json({
-                success: false,
-                message: "Order not found."
-            });
+            return res.status(404).json({ success: false, message: "Order not found." });
         }
 
-        // 1. Check if already cancelled
         if (order.status === 'Cancelled') {
-            return res.status(400).json({
-                success: false,
-                message: "This order is already cancelled."
-            });
+            return res.status(400).json({ success: false, message: "This order is already cancelled." });
         }
 
-        // 2. Check if already delivered
         if (order.status === 'Delivered') {
-            return res.status(400).json({
-                success: false,
-                message: "Delivered orders cannot be cancelled. You can apply for a return if applicable."
-            });
+            return res.status(400).json({ success: false, message: "Delivered orders cannot be cancelled." });
         }
 
-        // 3. 🚨 RESTRICTION: Cannot cancel once 'Out For Delivery'
         if (order.status === 'Out For Delivery') {
             return res.status(400).json({
                 success: false,
-                message: "Order is already out for delivery and cannot be cancelled now. Please refuse delivery at doorstep if you do not want it."
+                message: "Order is already out for delivery and cannot be cancelled now. Please refuse delivery at doorstep."
             });
         }
 
-        // 4. Online Payment Auto-Refund via Razorpay API (If Paid)
+        // 🔄 RESTORE STOCK IN DATABASE
+        if (order.device?.deviceId) {
+            const deviceDoc = await CGMDevices.findById(order.device.deviceId);
+            if (deviceDoc) {
+                const restoreQty = Number(order.device.quantity) || 1;
+                const vId = order.device.selectedVariant?.variantId;
+
+                if (vId && mongoose.Types.ObjectId.isValid(vId)) {
+                    if (deviceDoc.productType === 'Glucometer' && Array.isArray(deviceDoc.glucometerConfig?.stripLancetVariants)) {
+                        const vDoc = deviceDoc.glucometerConfig.stripLancetVariants.id(vId);
+                        if (vDoc) vDoc.stockQuantity = (vDoc.stockQuantity || 0) + restoreQty;
+                    } else if (deviceDoc.productType === 'CGM' && Array.isArray(deviceDoc.cgmConfig?.cgmPacks)) {
+                        const pDoc = deviceDoc.cgmConfig.cgmPacks.id(vId);
+                        if (pDoc) pDoc.stockQuantity = (pDoc.stockQuantity || 0) + restoreQty;
+                    }
+                }
+
+                deviceDoc.stockQuantity = (deviceDoc.stockQuantity || 0) + restoreQty;
+                deviceDoc.isAvailable = true; // Make available again
+                await deviceDoc.save();
+            }
+        }
+
+        // Online Refund logic
         let refundData = null;
         if (order.paymentMethod === 'Online' && order.paymentStatus === 'Paid' && order.transactionId) {
             try {
@@ -674,12 +743,11 @@ const cancelUserCGMOrder = async (req, res) => {
                 );
                 order.paymentStatus = 'Refunded';
             } catch (refundErr) {
-                console.error("Razorpay Auto-Refund Failed on Cancellation:", refundErr);
-                order.paymentStatus = 'Refund-Initiated'; // Flag for admin manual review
+                console.error("Razorpay Auto-Refund Failed:", refundErr);
+                order.paymentStatus = 'Refund-Initiated';
             }
         }
 
-        // 5. Update Order Status & Timeline
         const reasonText = cancelReason && cancelReason.trim() !== '' 
             ? cancelReason.trim() 
             : "Cancelled by user before dispatch.";
@@ -688,14 +756,14 @@ const cancelUserCGMOrder = async (req, res) => {
         order.trackingTimeline.push({
             status: 'Cancelled',
             timestamp: new Date(),
-            note: `Order cancelled by user. Reason: ${reasonText}`
+            note: `Order cancelled by user. Reason: ${reasonText}. Stock restored.`
         });
 
         await order.save();
 
         res.json({
             success: true,
-            message: "Order cancelled successfully!",
+            message: "Order cancelled successfully and stock has been restored!",
             orderId: order.orderId,
             status: order.status,
             paymentStatus: order.paymentStatus,
