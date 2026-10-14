@@ -133,7 +133,7 @@ const cgmOrderSchema = new mongoose.Schema({
     },
     status: { 
         type: String, 
-        enum: ['Placed', 'Confirmed', 'Packed', 'Shipped', 'Out For Delivery', 'Delivered', 'Cancelled'], 
+        enum: ['Placed', 'Confirmed',  'Out For Delivery', 'Delivered', 'Cancelled'], 
         default: 'Placed' 
     },
     deliveryOtp: { 

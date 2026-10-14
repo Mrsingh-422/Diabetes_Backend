@@ -8,7 +8,7 @@ const DiabetesCoach = require('../../../models/DiabetesCoach');
 const CoachDistanceConfig = require('../../../models/CoachDistanceConfig');
 const { isCoachSlotAvailable } = require('../../../utils/timeSlotHelper');
 const { calculateHaversine } = require('../../../utils/helpers'); // 👈 FIX 1: Missing import added!
-const { createRazorpayOrder, verifyRazorpaySignature } = require('../../../utils/razorpay');
+const { createRazorpayOrder, verifyRazorpaySignature ,refundRazorpayPayment} = require('../../../utils/razorpay');
 const mongoose = require('mongoose');
 
 // =========================================================================
@@ -613,11 +613,111 @@ const getUserCGMAddons = async (req, res) => {
     }
 };
 
+// =========================================================================
+// 🚫 6. CANCEL CGM ORDER BY USER
+// Endpoint: PATCH /user/cgm/devices/order/cancel/:id
+// =========================================================================
+const cancelUserCGMOrder = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const { id } = req.params;
+        const { cancelReason } = req.body;
+
+        // Find order belonging to the authenticated user (by _id or orderId)
+        const order = await CGMOrder.findOne({
+            $or: [
+                ...(mongoose.Types.ObjectId.isValid(id) ? [{ _id: id }] : []),
+                { orderId: id }
+            ],
+            userId
+        });
+
+        if (!order) {
+            return res.status(404).json({
+                success: false,
+                message: "Order not found."
+            });
+        }
+
+        // 1. Check if already cancelled
+        if (order.status === 'Cancelled') {
+            return res.status(400).json({
+                success: false,
+                message: "This order is already cancelled."
+            });
+        }
+
+        // 2. Check if already delivered
+        if (order.status === 'Delivered') {
+            return res.status(400).json({
+                success: false,
+                message: "Delivered orders cannot be cancelled. You can apply for a return if applicable."
+            });
+        }
+
+        // 3. 🚨 RESTRICTION: Cannot cancel once 'Out For Delivery'
+        if (order.status === 'Out For Delivery') {
+            return res.status(400).json({
+                success: false,
+                message: "Order is already out for delivery and cannot be cancelled now. Please refuse delivery at doorstep if you do not want it."
+            });
+        }
+
+        // 4. Online Payment Auto-Refund via Razorpay API (If Paid)
+        let refundData = null;
+        if (order.paymentMethod === 'Online' && order.paymentStatus === 'Paid' && order.transactionId) {
+            try {
+                refundData = await refundRazorpayPayment(
+                    order.transactionId,
+                    order.billSummary?.totalPayable || 0,
+                    order.orderId
+                );
+                order.paymentStatus = 'Refunded';
+            } catch (refundErr) {
+                console.error("Razorpay Auto-Refund Failed on Cancellation:", refundErr);
+                order.paymentStatus = 'Refund-Initiated'; // Flag for admin manual review
+            }
+        }
+
+        // 5. Update Order Status & Timeline
+        const reasonText = cancelReason && cancelReason.trim() !== '' 
+            ? cancelReason.trim() 
+            : "Cancelled by user before dispatch.";
+
+        order.status = 'Cancelled';
+        order.trackingTimeline.push({
+            status: 'Cancelled',
+            timestamp: new Date(),
+            note: `Order cancelled by user. Reason: ${reasonText}`
+        });
+
+        await order.save();
+
+        res.json({
+            success: true,
+            message: "Order cancelled successfully!",
+            orderId: order.orderId,
+            status: order.status,
+            paymentStatus: order.paymentStatus,
+            refundProcessed: Boolean(refundData),
+            cancelReason: reasonText,
+            data: order
+        });
+
+    } catch (error) {
+        console.error("cancelUserCGMOrder error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
+
 module.exports = {
     calculateCGMBill,
     placeCGMOrder,
     verifyCGMPayment,
     getMyCGMOrders,
     getCGMOrderById,
-    getUserCGMAddons
+    getUserCGMAddons,
+    cancelUserCGMOrder
 };

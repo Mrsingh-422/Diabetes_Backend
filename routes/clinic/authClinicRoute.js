@@ -12,7 +12,8 @@ const {
     updateClinicProfile,
     getLatestClinicProfileRequest, //  Active import
     getMyClinicProfile,
-    changeClinicPassword
+    changeClinicPassword,
+    clinicLessInfo
 } = require('../../controllers/clinic/authClinic.js');
 
 // Base route: /api/auth/clinic
@@ -37,5 +38,7 @@ router.get('/profile', protect('clinic'), getMyClinicProfile);
 router.get('/profile/update-status', protect('clinic'), getLatestClinicProfileRequest);
 
 router.patch('/change-password', protect('clinic'), changeClinicPassword);
+// GET: Lightweight Profile Info (Name, Email, Phone, Image only)
+router.get('/less-info', protect('clinic'), clinicLessInfo);
 
 module.exports = router;

@@ -8,6 +8,7 @@ const Bed = require('../../models/Bed');
 const Ward = require('../../models/Ward');
 const User = require('../../models/User');
 const crypto = require('crypto');
+const moment = require('moment');
 // Safe JSON parser for FormData
 const parseField = (val) => {
     if (typeof val === 'string') {
@@ -277,8 +278,8 @@ const createClinicAppointmentByClinic = async (req, res) => {
 };
 
 // ==========================================
-// 📋 2. GET ALL CLINIC BOOKINGS (With Pagination, OPD/IPD/Emergency Filter & Search)
-// Full Path: GET /api/clinic/booking/all-bookings
+// 📋 2. GET ALL CLINIC BOOKINGS (Default: Current Date, Filter & Search)
+// Full Path: GET /api/clinic/booking/all-bookings?date=YYYY-MM-DD
 // ==========================================
 const getClinicBookings = async (req, res) => {
     try {
@@ -288,6 +289,7 @@ const getClinicBookings = async (req, res) => {
             bookingType, 
             type, 
             search, 
+            date, // 👈 e.g. "2026-10-14" ya "all"
             page = 1, 
             limit = 20 
         } = req.query;
@@ -298,10 +300,12 @@ const getClinicBookings = async (req, res) => {
 
         const query = { clinicId };
 
+        // 1. Status Filter
         if (status) {
             query.status = status;
         }
 
+        // 2. Booking Type Filter (OPD / IPD / Emergency)
         const targetType = (bookingType || type || '').trim();
         if (targetType) {
             const normalized = targetType.toUpperCase();
@@ -316,14 +320,43 @@ const getClinicBookings = async (req, res) => {
             }
         }
 
+        const andConditions = [];
+
+        // 🎯 3. DATE FILTER (Default: Current Date / Today)
+        if (date !== 'all') {
+            const filterMoment = (date && date.trim() !== '') ? moment(date) : moment();
+            const startOfDay = filterMoment.clone().startOf('day').toDate();
+            const endOfDay = filterMoment.clone().endOf('day').toDate();
+
+            andConditions.push({
+                $or: [
+                    // OPD Appointments: matches appointmentDate of target day
+                    { appointmentDate: { $gte: startOfDay, $lte: endOfDay } },
+                    // IPD Admissions / Daycare: stay overlaps with target day
+                    { 
+                        bookingType: { $in: ['Admission', 'Emergency'] },
+                        startDate: { $lte: endOfDay },
+                        endDate: { $gte: startOfDay }
+                    }
+                ]
+            });
+        }
+
+        // 🎯 4. SEARCH FILTER
         if (search && search.trim() !== '') {
             const searchRegex = new RegExp(search.trim(), 'i');
-            query.$or = [
-                { bookingId: searchRegex },
-                { "patients.patientName": searchRegex },
-                { "address.name": searchRegex },
-                { "address.phone": searchRegex }
-            ];
+            andConditions.push({
+                $or: [
+                    { bookingId: searchRegex },
+                    { "patients.patientName": searchRegex },
+                    { "address.name": searchRegex },
+                    { "address.phone": searchRegex }
+                ]
+            });
+        }
+
+        if (andConditions.length > 0) {
+            query.$and = andConditions;
         }
 
         const totalDocs = await Appointment.countDocuments(query);
@@ -342,7 +375,7 @@ const getClinicBookings = async (req, res) => {
             const dateVal = b.appointmentDate || b.startDate;
             const primaryPatient = Array.isArray(b.patients) && b.patients.length > 0 ? b.patients[0] : null;
 
-            // 🎯 FIX: Agar patientName 'Myself' ya 'Self' hai, toh registered userId.name dikhao
+            // 🎯 Real User Name Resolution (No "Myself (Primary Account)")
             let resolvedName = primaryPatient?.patientName || b.address?.name || b.userId?.name || "Patient";
             const lowerName = resolvedName.toLowerCase();
             const lowerRel = (primaryPatient?.relation || "").toLowerCase();
@@ -362,7 +395,7 @@ const getClinicBookings = async (req, res) => {
                 totalAmount: b.totalAmount || 0,
                 appointmentDate: dateVal ? new Date(dateVal).toISOString().split('T')[0] : null,
                 appointmentTime: b.appointmentTime || "10:30 AM",
-                patientName: resolvedName, // 👈 Real User Name (No "Myself (Primary Account)")
+                patientName: resolvedName,
                 patientAge: primaryPatient?.patientAge || null,
                 patientGender: primaryPatient?.gender || null,
                 wardInfo: b.wardName ? `${b.wardName} (Bed #${b.bedNumber})` : null,
@@ -378,6 +411,7 @@ const getClinicBookings = async (req, res) => {
 
         res.json({
             success: true,
+            filterApplied: date === 'all' ? 'All Dates' : (date ? moment(date).format('YYYY-MM-DD') : moment().format('YYYY-MM-DD') + ' (Today)'),
             totalDocs,
             totalPages: Math.ceil(totalDocs / limitNum),
             currentPage: pageNum,

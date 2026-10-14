@@ -432,6 +432,39 @@ const changeClinicPassword = async (req, res) => {
     }
 };
 
+// ==========================================
+// 🏥 GET CLINIC MINIMAL / LESS INFO (Navbar / Header Profile View)
+// Endpoint: GET /api/auth/clinic/less-info
+// ==========================================
+const clinicLessInfo = async (req, res) => {
+    try {
+        const clinic = await Clinic.findById(req.user.id)
+            .select('_id name clinicName email phoneNumber image ')
+            .lean();
+
+        if (!clinic) {
+            return res.status(404).json({ 
+                success: false, 
+                message: "Clinic profile not found." 
+            });
+        }
+
+        res.status(200).json({
+            success: true,
+            data: {
+                _id: clinic._id,
+                name: clinic.name,
+                clinicName: clinic.clinicName || clinic.name,
+                email: clinic.email || "",
+                phone: clinic.phoneNumber || "",
+                profileImage: clinic.image || clinic.posterimage || null
+            }
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
 module.exports = { 
     registerClinic, 
     loginClinic, 
@@ -439,5 +472,6 @@ module.exports = {
     updateClinicProfile, 
     getLatestClinicProfileRequest,
     getMyClinicProfile,
-    changeClinicPassword 
+    changeClinicPassword ,
+    clinicLessInfo
 };

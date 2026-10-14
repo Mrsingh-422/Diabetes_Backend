@@ -9,7 +9,8 @@ const {
     placeCGMOrder,
     verifyCGMPayment,
     getMyCGMOrders,
-    getCGMOrderById
+    getCGMOrderById,
+    cancelUserCGMOrder
 } = require('../../../controllers/user/CGMDevices/CGMCheckoutController');
 
 // Base URL: /api/user/cgm/checkout
@@ -28,6 +29,10 @@ router.get('/my-orders', protect('user'), getMyCGMOrders);
 
 // 🔍 5. Get Single Order Full Details by ID
 router.get('/order/:id', protect('user'), getCGMOrderById);
+
+
+// 6. Cancel Order by User (Protected with User token)
+router.patch('/order/cancel/:id', protect('user'), cancelUserCGMOrder);
 
 
 
