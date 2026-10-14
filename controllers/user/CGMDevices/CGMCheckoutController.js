@@ -673,7 +673,7 @@ const getUserCGMAddons = async (req, res) => {
 };
 
 // =========================================================================
-// 🚫 6. CANCEL CGM ORDER (WITH AUTOMATIC STOCK RESTORATION)
+// 🚫 6. CANCEL CGM ORDER BY USER (INITIATES 100% REFUND REQUEST FOR ADMIN)
 // Endpoint: PATCH /user/cgm/devices/order/cancel/:id
 // =========================================================================
 const cancelUserCGMOrder = async (req, res) => {
@@ -727,24 +727,8 @@ const cancelUserCGMOrder = async (req, res) => {
                 }
 
                 deviceDoc.stockQuantity = (deviceDoc.stockQuantity || 0) + restoreQty;
-                deviceDoc.isAvailable = true; // Make available again
+                deviceDoc.isAvailable = true;
                 await deviceDoc.save();
-            }
-        }
-
-        // Online Refund logic
-        let refundData = null;
-        if (order.paymentMethod === 'Online' && order.paymentStatus === 'Paid' && order.transactionId) {
-            try {
-                refundData = await refundRazorpayPayment(
-                    order.transactionId,
-                    order.billSummary?.totalPayable || 0,
-                    order.orderId
-                );
-                order.paymentStatus = 'Refunded';
-            } catch (refundErr) {
-                console.error("Razorpay Auto-Refund Failed:", refundErr);
-                order.paymentStatus = 'Refund-Initiated';
             }
         }
 
@@ -752,23 +736,40 @@ const cancelUserCGMOrder = async (req, res) => {
             ? cancelReason.trim() 
             : "Cancelled by user before dispatch.";
 
+        // 💰 100% Refund Setup for Online Paid Orders
+        const isOnlinePaid = order.paymentMethod === 'Online' && order.paymentStatus === 'Paid';
+        const totalAmount = order.billSummary?.totalPayable || 0;
+
         order.status = 'Cancelled';
+        order.paymentStatus = isOnlinePaid ? 'Refund-Pending' : order.paymentStatus;
+        
+        order.refundDetails = {
+            isRefundApplicable: isOnlinePaid,
+            refundAmount: isOnlinePaid ? totalAmount : 0, // 👈 100% Refund Amount
+            totalPaidAmount: isOnlinePaid ? totalAmount : 0,
+            penaltyCharge: 0, // User cancel par zero penalty
+            cancelledBy: 'User',
+            refundStatus: isOnlinePaid ? 'Pending' : 'Not Applicable',
+            refundNote: `100% refund requested due to user cancellation. Reason: ${reasonText}`
+        };
+
         order.trackingTimeline.push({
             status: 'Cancelled',
             timestamp: new Date(),
-            note: `Order cancelled by user. Reason: ${reasonText}. Stock restored.`
+            note: `Order cancelled by user. ${isOnlinePaid ? '100% refund initiated for Admin processing.' : ''} Reason: ${reasonText}`
         });
 
         await order.save();
 
         res.json({
             success: true,
-            message: "Order cancelled successfully and stock has been restored!",
+            message: isOnlinePaid 
+                ? "Order cancelled successfully! 100% refund has been submitted to Admin for processing." 
+                : "Order cancelled successfully!",
             orderId: order.orderId,
             status: order.status,
             paymentStatus: order.paymentStatus,
-            refundProcessed: Boolean(refundData),
-            cancelReason: reasonText,
+            refundInfo: order.refundDetails,
             data: order
         });
 

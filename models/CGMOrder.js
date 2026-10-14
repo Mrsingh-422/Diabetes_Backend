@@ -133,12 +133,34 @@ const cgmOrderSchema = new mongoose.Schema({
     },
     status: { 
         type: String, 
-        enum: ['Placed', 'Confirmed',  'Out For Delivery', 'Delivered', 'Cancelled'], 
+        enum: ['Placed', 'Confirmed', 'Packed', 'Shipped', 'Out For Delivery', 'Delivered', 'Cancelled'], 
         default: 'Placed' 
     },
     deliveryOtp: { 
         type: String, 
         default: null 
+    },
+
+    // 💰 Dynamic Refund & Penalty Tracking
+    refundDetails: {
+        isRefundApplicable: { type: Boolean, default: false },
+        refundAmount: { type: Number, default: 0 },         // 100% amount for user cancellation
+        totalPaidAmount: { type: Number, default: 0 },
+        penaltyCharge: { type: Number, default: 0 },       // Driver cancellation penalty ke liye future-proof
+        cancelledBy: { 
+            type: String, 
+            enum: ['User', 'Driver', 'Admin'], 
+            default: 'User' 
+        },
+        refundStatus: { 
+            type: String, 
+            enum: ['Not Applicable', 'Pending', 'Processed', 'Failed'], 
+            default: 'Not Applicable' 
+        },
+        refundedAt: { type: Date, default: null },
+        razorpayRefundId: { type: String, default: null },
+        refundNote: { type: String, default: "" },
+        processedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Admin', default: null }
     },
 
     trackingTimeline: [{
