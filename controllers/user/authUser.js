@@ -210,6 +210,10 @@ const loginUser = async (req, res) => {
         res.status(200).json({
             success: true,
             isPasswordAvailable: true,
+            isProfileCompleted: user.isProfileCompleted ?? false, // 👈 Frontend ko turant batayega
+            profileCompletionPercentage: user.profileCompletionPercentage || 25,
+            onboardingStep: user.onboardingStep || 1,
+            message: "Login Successful",
             token,
             user: {
                 ...user._doc,
@@ -294,7 +298,9 @@ const setInitialPassword = async (req, res) => {
                 countryCode: user.countryCode,
                 profileStatus: user.profileStatus,
                 isPasswordAvailable: true,
-                isUserRegistered: true
+                isUserRegistered: true,
+                isProfileCompleted: user.isProfileCompleted ?? false //  Added
+
             }
         });
 
@@ -489,7 +495,7 @@ const getUserProfile = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
-// Update Profile (Existing Code)
+// endpoint: PUT /api/auth/user/update
 // endpoint: PUT /api/auth/user/update
 const updateUserProfile = async (req, res) => {
     try {
@@ -500,48 +506,137 @@ const updateUserProfile = async (req, res) => {
             return res.status(404).json({ success: false, message: "User not found" });
         }
 
-        // Profile Pic handling
+        // 1. Profile Picture Handling
         if (req.file) {
             user.profilePic = `/uploads/users/${req.file.filename}`;
         }
 
-        // Destructure all fields from Figma Image
         const { 
             name, fatherName, phone, countryCode, email, 
-            weight, gender, dob, height,
-            country, state, city, 
-            insuranceId 
+            weight, gender, dob, height, country, state, city, insuranceId,
+            
+            // 🩸 Onboarding Fields
+            diabeticType,
+            sinceHowLong,
+            hasFamilyHistoryDiabetes,
+            familyHistoryDiabetesMembers,
+            familyHistoryDiabetesOther,
+            hasCaregiver,
+            caregiverDetails,
+            partnerCode,
+            isProfileCompleted
         } = req.body;
 
-        // Basic Info
+        // Basic Profile Updates
         if (name) user.name = name;
         if (fatherName) user.fatherName = fatherName;
         if (email) user.email = email;
-        
-        // Stats & Gender
         if (weight) user.weight = weight;
         if (gender) user.gender = gender;
         if (dob) user.dob = dob;
         if (height) user.height = height;
-
-        // Phone Update
+        if (country) user.country = country;
+        if (state) user.state = state;
+        if (city) user.city = city;
+        if (insuranceId) user.insuranceId = insuranceId;
         if (phone && countryCode) {
             user.phone = phone;
             user.countryCode = countryCode;
         }
 
-        // Location Info
-        if (country) user.country = country;
-        if (state) user.state = state;
-        if (city) user.city = city;
-        
-        if (insuranceId) user.insuranceId = insuranceId;
+        // ====================================================
+        // 🩸 1. DIABETIC TYPE (Clean & Safe)
+        // ====================================================
+        if (diabeticType !== undefined && diabeticType !== null) {
+            user.diabeticType = diabeticType.toString().trim();
+            user.diabteticType = user.diabeticType; // Purane code ke saath silent backup
+        }
+
+        // ====================================================
+        // 🗓️ 2. SINCE HOW LONG
+        // ====================================================
+        if (sinceHowLong) {
+            const parsedSince = typeof sinceHowLong === 'string' 
+                ? JSON.parse(sinceHowLong) 
+                : sinceHowLong;
+
+            user.sinceHowLong.day = parsedSince.day || user.sinceHowLong.day || '';
+            user.sinceHowLong.month = parsedSince.month || user.sinceHowLong.month || '';
+            user.sinceHowLong.year = parsedSince.year || user.sinceHowLong.year || '';
+            user.sinceHowLong.formatted = `${user.sinceHowLong.day} ${user.sinceHowLong.month} ${user.sinceHowLong.year}`.trim();
+            user.diabeticduration = user.sinceHowLong.formatted;
+        }
+
+        // ====================================================
+        // 👨‍👩‍👧 3. FAMILY HISTORY
+        // ====================================================
+        if (hasFamilyHistoryDiabetes !== undefined) {
+            user.hasFamilyHistoryDiabetes = (hasFamilyHistoryDiabetes === true || hasFamilyHistoryDiabetes === 'true');
+        }
+
+        if (familyHistoryDiabetesMembers !== undefined) {
+            const members = typeof familyHistoryDiabetesMembers === 'string'
+                ? JSON.parse(familyHistoryDiabetesMembers)
+                : familyHistoryDiabetesMembers;
+
+            user.familyHistoryDiabetesMembers = Array.isArray(members) ? members : [members];
+            user.familyhistorydiabetic = user.familyHistoryDiabetesMembers;
+        }
+
+        if (familyHistoryDiabetesOther !== undefined) {
+            user.familyHistoryDiabetesOther = familyHistoryDiabetesOther.toString().trim();
+        }
+
+        // ====================================================
+        // 🤝 4. CAREGIVER DETAILS
+        // ====================================================
+        if (hasCaregiver !== undefined) {
+            user.hasCaregiver = (hasCaregiver === true || hasCaregiver === 'true');
+        }
+
+        if (caregiverDetails) {
+            const parsedCaregiver = typeof caregiverDetails === 'string'
+                ? JSON.parse(caregiverDetails)
+                : caregiverDetails;
+
+            user.caregiverDetails.name = parsedCaregiver.name || user.caregiverDetails.name || '';
+            user.caregiverDetails.relationship = parsedCaregiver.relationship || user.caregiverDetails.relationship || '';
+            user.caregiverDetails.phone = parsedCaregiver.phone || user.caregiverDetails.phone || '';
+            user.caregiverDetails.diabeticType = parsedCaregiver.diabeticType || user.caregiverDetails.diabeticType || '';
+
+            // Old schema silent sync
+            user.caregiversname = user.caregiverDetails.name;
+            user.relationship = user.caregiverDetails.relationship;
+            user.caregiversnumber = user.caregiverDetails.phone;
+            user.caregiversdibtype = user.caregiverDetails.diabeticType;
+        }
+
+        // ====================================================
+        // 🎟️ 5. PARTNER CODE
+        // ====================================================
+        if (partnerCode !== undefined) {
+            user.partnerCode = partnerCode.toString().trim();
+        }
+
+        // ====================================================
+        // 🎯 6. PROFILE COMPLETION LOGIC
+        // ====================================================
+        if (isProfileCompleted !== undefined) {
+            user.isProfileCompleted = (isProfileCompleted === true || isProfileCompleted === 'true');
+        } else if (user.diabeticType && user.diabeticType.trim() !== '') {
+            // Agar user ne diabeticType bhar diya, profile automatically completed mark ho jayegi!
+            user.isProfileCompleted = true;
+            user.profileCompletionPercentage = 100;
+            user.onboardingStep = 3;
+        }
 
         await user.save();
 
-        res.json({ 
+        res.status(200).json({ 
             success: true, 
             message: "Profile Updated Successfully", 
+            isProfileCompleted: user.isProfileCompleted,
+            profileCompletionPercentage: user.profileCompletionPercentage,
             data: user 
         });
 
