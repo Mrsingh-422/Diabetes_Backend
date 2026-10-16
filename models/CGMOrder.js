@@ -44,9 +44,28 @@ const cgmOrderSchema = new mongoose.Schema({
 
     // 2. Patient Diabetic Profile (Checkout form fields)
     diabetesProfile: {
+        isDiabetic: {
+            type: Boolean // 👈 User diabetic hai ya nahi
+        },
         diabetesType: {
             type: String,
-            enum: ['Type 1', 'Type 2', 'Pre-diabetic', 'Gestational', 'General Wellness', 'Not Sure'],
+            enum: [
+                // Short Names
+                'Type 1', 
+                'Type 2', 
+                'Pre-diabetic', 
+                'Gestational', 
+                'General Wellness', 
+                'Not Sure',
+                
+                // Full UI Form Names (Figma Dropdown Sync)
+                'Type 1 Diabetic',
+                'Type 2 Diabetic',
+                'Pre-Diabetic',
+                'Non Diabetic',
+                "Don't Know",
+                'Other'
+            ],
             default: 'Type 2'
         },
         hasUsedBefore: { 
@@ -65,7 +84,26 @@ const cgmOrderSchema = new mongoose.Schema({
         city: { type: String, required: true },
         state: { type: String, required: true },
         pincode: { type: String, required: true },
-        addressType: { type: String, default: 'Home' }
+        addressType: { type: String, default: 'Home' },
+         // 🏥 Delivery Type Option
+         deliveryType: {
+            type: String,
+            enum: ['In-person', 'Hospital', 'Other']
+        },
+
+        // 🛏️ Hospital Specific Details (Filled when deliveryType === 'Hospital')
+        hospitalDetails: {
+            hospitalName: { type: String },
+            floorNo: { type: String },
+            ward: { type: String },
+            bedNo: { type: String }
+        },
+
+        // 📝 Other Location Details (Filled when deliveryType === 'Other')
+        otherDeliveryDetails: {
+            type: String
+        }
+
     },
 
     // 4. Selected CGM Addons (Protective patches, lancets, swabs, etc.)
@@ -95,7 +133,11 @@ const cgmOrderSchema = new mongoose.Schema({
         extraDistanceCharge: { type: Number, default: 0 }, // Distance surcharge if offline
         isPremiumSlot: { type: Boolean, default: false },
         premiumExtraFee: { type: Number, default: 0 },
-        charge: { type: Number, default: 0 } // Final total coach fee
+        charge: { type: Number, default: 0 }, // Final total coach fee
+         // 💬 User's specific instruction to the coach
+         specialInstructions: { 
+            type: String 
+        }
     },
     // 6. Billing Summary
     billSummary: {

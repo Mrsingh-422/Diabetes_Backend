@@ -29,6 +29,7 @@ const userSchema = new mongoose.Schema({
     // =========================================================================
     // 🌟 PROFILE COMPLETION & ONBOARDING FLAGS (Login check ke liye)
     // =========================================================================
+
     isProfileCompleted: {
         type: Boolean,
         default: false,
@@ -37,6 +38,17 @@ const userSchema = new mongoose.Schema({
     profileCompletionPercentage: {
         type: Number,
         default: 25 // Registration ke baad 25%, medical onboarding ke baad 100%
+    },
+
+    is50PercentCompleted: {
+        type: Boolean,
+        default: false,
+        index: true
+    },
+    is100PercentCompleted: {
+        type: Boolean,
+        default: false,
+        index: true
     },
     onboardingStep: {
         type: Number,

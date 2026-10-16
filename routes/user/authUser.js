@@ -33,7 +33,8 @@ const {
     removeEmergency,getUserDashboard,
     updateToUserAddress,
     setInitialPassword,
-    checkPasswordStatus
+    checkPasswordStatus,
+    getProfileCompletionStatus
     
 } = require('../../controllers/user/authUser.js'); 
 
@@ -59,6 +60,8 @@ router.post('/reset-password', resetPassword);   // Sets New Password
 
 router.get('/profile', protect('user'), getUserProfile); //get profile
 router.put('/update', protect('user'), userProfileUpload, updateUserProfile);
+router.get('/profile-completion', protect('user'), getProfileCompletionStatus);
+
 
 // My Work
 router.put('/update-work', protect('user'), updateWorkDetails);

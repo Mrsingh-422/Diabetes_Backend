@@ -644,7 +644,148 @@ const updateUserProfile = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+// =========================================================================
+// 🎯 HELPER: DYNAMIC PROFILE COMPLETION CALCULATOR
+// =========================================================================
+const calculateProfileCompletion = (user) => {
+    // 1. Main User Details Check
+    const hasName = Boolean(user.name && user.name.trim() !== '');
+    const hasGender = Boolean(user.gender && user.gender.trim() !== '');
+    const hasDob = Boolean(user.dob);
+    const hasBodyStats = Boolean(user.height || user.weight);
 
+    const isUserDetailsFilled = hasName && hasGender && hasDob && hasBodyStats;
+
+    // 2. Disease / Diabetic Details Check
+    const isDiseaseDetailsFilled = Boolean(
+        (user.diabeticType && user.diabeticType.trim() !== '') ||
+        (user.diabteticType && user.diabteticType.trim() !== '')
+    );
+
+    // 3. Address Check (Array not empty)
+    const isAddressFilled = Boolean(
+        Array.isArray(user.userAddress) && user.userAddress.length > 0
+    );
+
+    // 4. Family Member Check (Array not empty)
+    const isFamilyMemberFilled = Boolean(
+        Array.isArray(user.familyMember) && user.familyMember.length > 0
+    );
+
+    // =======================================================
+    // 📊 Milestone Calculation Logic
+    // Stage 1 (50%): User Details (25%) + Disease Details (25%) = 50%
+    // Stage 2 (100%): Address (25%) + Family Member (25%) => Total 100%
+    // =======================================================
+    let percentage = 0;
+
+    if (isUserDetailsFilled) percentage += 25;
+    if (isDiseaseDetailsFilled) percentage += 25;
+    if (isAddressFilled) percentage += 25;
+    if (isFamilyMemberFilled) percentage += 25;
+
+    // Flags
+    const is50PercentCompleted = isUserDetailsFilled && isDiseaseDetailsFilled;
+    const is100PercentCompleted = percentage === 100;
+
+    // Frontend guidance message (Next missing step)
+    let nextStep = "Profile 100% Completed";
+    if (!isUserDetailsFilled) {
+        nextStep = "Fill Main User Details (Name, Gender, DOB, Height/Weight)";
+    } else if (!isDiseaseDetailsFilled) {
+        nextStep = "Fill Diabetic & Disease Details";
+    } else if (!isAddressFilled) {
+        nextStep = "Add at least 1 Delivery Address";
+    } else if (!isFamilyMemberFilled) {
+        nextStep = "Add at least 1 Family Member";
+    }
+
+    return {
+        percentage,
+        is50PercentCompleted,
+        is100PercentCompleted,
+        nextStep,
+        checklist: {
+            mainUserDetails: isUserDetailsFilled,
+            diseaseDetails: isDiseaseDetailsFilled,
+            addressDetails: isAddressFilled,
+            familyMemberDetails: isFamilyMemberFilled
+        }
+    };
+};
+
+// =========================================================================
+// 🎯 GET PROFILE COMPLETION STATUS
+// endpoint: GET /api/auth/user/profile-completion
+// =========================================================================
+const getProfileCompletionStatus = async (req, res) => {
+    try {
+        const user = await User.findById(req.user.id);
+        if (!user) {
+            return res.status(404).json({ success: false, message: "User not found" });
+        }
+
+        // 1. User Details (Name, Gender, DOB, Height/Weight)
+        const isUserDetailsFilled = Boolean(
+            user.name && user.gender && user.dob && (user.height || user.weight)
+        );
+
+        // 2. Disease Details (diabeticType check)
+        const isDiseaseDetailsFilled = Boolean(
+            (user.diabeticType && user.diabeticType.trim() !== "") ||
+            (user.diabeticTypeNew && user.diabeticTypeNew.trim() !== "") ||
+            (user.diabteticType && user.diabteticType.trim() !== "")
+        );
+
+        // 3. Address (Kam se kam 1 address ho)
+        const isAddressFilled = Boolean(
+            Array.isArray(user.userAddress) && user.userAddress.length > 0
+        );
+
+        // 4. Family Member (Kam se kam 1 member ho)
+        const isFamilyMemberFilled = Boolean(
+            Array.isArray(user.familyMember) && user.familyMember.length > 0
+        );
+
+        // Percentage Calculation
+        let percentage = 0;
+        if (isUserDetailsFilled) percentage += 25;
+        if (isDiseaseDetailsFilled) percentage += 25;
+        if (isAddressFilled) percentage += 25;
+        if (isFamilyMemberFilled) percentage += 25;
+
+        // Milestones
+        const is50PercentCompleted = isUserDetailsFilled && isDiseaseDetailsFilled;
+        const is100PercentCompleted = percentage === 100;
+
+        // DB flags sync
+        user.profileCompletionPercentage = percentage;
+        user.is50PercentCompleted = is50PercentCompleted;
+        user.is100PercentCompleted = is100PercentCompleted;
+        user.isProfileCompleted = is100PercentCompleted;
+        await user.save();
+
+        res.status(200).json({
+            success: true,
+            message: "Profile completion status fetched successfully",
+            data: {
+                userId: user._id,
+                name: user.name,
+                percentage,
+                is50PercentCompleted,
+                is100PercentCompleted,
+                checklist: {
+                    mainUserDetails: isUserDetailsFilled,
+                    diseaseDetails: isDiseaseDetailsFilled,
+                    addressDetails: isAddressFilled,
+                    familyMemberDetails: isFamilyMemberFilled
+                }
+            }
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
 
 // --- 1. UPDATE WORK DETAILS (Figma Screen 16) ---
 const updateWorkDetails = async (req, res) => {
@@ -1408,6 +1549,7 @@ module.exports = {
     registerUser, 
     loginUser, 
     updateUserProfile,
+    getProfileCompletionStatus,
     forgotPassword,
     verifyOtp,
     resetPassword,
