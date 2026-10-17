@@ -367,6 +367,8 @@ app.use('/admin/cgm/orders', require('./routes/admin/CGM/CGMOrderAdminRoute'));
 app.use('/admin/cgm/coaches', require('./routes/admin/CGM/DiabetesCoachAdminRoute'));
 app.use('/admin/cgm/coach-distance-config', require('./routes/admin/CGM/CoachDistanceConfigRoute'));
 app.use('/admin/cgm/refunds', require('./routes/admin/CGM/CGMRefundAdminRoute'));
+app.use('/admin/cgm/coach-bookings', require('./routes/admin/CGM/DiabeticCoachBookingRoute'));
+
 
 
 
