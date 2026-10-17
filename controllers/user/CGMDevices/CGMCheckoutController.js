@@ -7,7 +7,7 @@ const CodConfig = require('../../../models/CodConfig');
 const DiabetesCoach = require('../../../models/DiabetesCoach');
 const CoachDistanceConfig = require('../../../models/CoachDistanceConfig');
 const { isCoachSlotAvailable } = require('../../../utils/timeSlotHelper');
-const { calculateHaversine } = require('../../../utils/helpers'); // 👈 FIX 1: Missing import added!
+const { calculateHaversine } = require('../../../utils/helpers');
 const { createRazorpayOrder, verifyRazorpaySignature ,refundRazorpayPayment} = require('../../../utils/razorpay');
 const mongoose = require('mongoose');
 

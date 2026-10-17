@@ -1,4 +1,5 @@
 // models/DiabetesCoach.js
+// This model also used as Driver model for Diabetes Coach. So, we can use the same model for both purposes.
 const mongoose = require('mongoose');
 
 const diabetesCoachSchema = new mongoose.Schema({
