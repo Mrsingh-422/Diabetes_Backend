@@ -380,6 +380,8 @@ app.use('/api/coach/slots', require('./routes/coach/coachSlotRoute'));
 app.use('/user/cgm/devices', require('./routes/user/CGMDevices/UserCGMDeviceRoute'));
 app.use('/api/user/cgm/checkout', require('./routes/user/CGMDevices/CGMCheckoutRoute'));
 app.use('/user/cgm/coaches', require('./routes/user/CGMDevices/UserDiabetesCoachRoute'));
+app.use('/api/user/coach-booking', require('./routes/user/CGMDevices/DiabeticCoachBookingRoute'));
+
 
 
 

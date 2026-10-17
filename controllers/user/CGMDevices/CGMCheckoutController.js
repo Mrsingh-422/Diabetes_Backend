@@ -12,9 +12,9 @@ const { createRazorpayOrder, verifyRazorpaySignature ,refundRazorpayPayment} = r
 const mongoose = require('mongoose');
 
 // =========================================================================
-// 🧮 REUSABLE BILLING ENGINE (Complete & Fully Updated)
-// (Device + Variants + Addons + Coach Charges + Hospital/Delivery Info + Diabetic Profile)
+// 🧮 REUSABLE BILLING ENGINE (Device + Addons + Online/Offline Coach Fee + KM Surcharge)
 // =========================================================================
+//  REUSABLE BILLING ENGINE (With Real-Time Stock Validation)
 const calculateCGMBillHelper = async ({
     deviceId,
     variantId = null,
@@ -25,12 +25,7 @@ const calculateCGMBillHelper = async ({
     userLat = null,
     userLng = null,
     scheduledDate = null,
-    slotTime = null,
-    specialInstructions = "",
-    deliveryType = "In-person",
-    hospitalDetails = null,
-    otherDeliveryDetails = "",
-    diabetesProfile = null
+    slotTime = null
 }) => {
     // 1. Fetch & Verify Device
     const device = await CGMDevices.findOne({ _id: deviceId, isActive: true }).lean();
@@ -65,7 +60,7 @@ const calculateCGMBillHelper = async ({
         }
     }
 
-    // 🛑 Real-Time Stock Validation
+    // 🛑 OUT OF STOCK CHECK
     if (currentAvailableStock <= 0) {
         throw new Error(`Out of Stock: '${selectedVariant ? (selectedVariant.variantName || selectedVariant.packName) : device.title}' is currently sold out.`);
     }
@@ -78,7 +73,7 @@ const calculateCGMBillHelper = async ({
     const mrpTotal = unitMrp * orderQty;
     const deviceSavings = mrpTotal > itemTotal ? mrpTotal - itemTotal : 0;
 
-    // 2. Addons Verification & Calculation
+    // 2. Addons Calculation
     let verifiedAddons = [];
     let addonsTotal = 0;
 
@@ -103,7 +98,7 @@ const calculateCGMBillHelper = async ({
         }
     }
 
-    // 3. 👨‍⚕️ Coach Calculation with Distance Surcharge, Premium Slot & Instructions
+    // 3. 👨‍⚕️ Coach Calculation with Distance Surcharge & Premium Slot
     let coachInfo = {
         isIncluded: false,
         coachId: null,
@@ -118,8 +113,7 @@ const calculateCGMBillHelper = async ({
         extraDistanceCharge: 0,
         isPremiumSlot: false,
         premiumExtraFee: 0,
-        charge: 0,
-        specialInstructions: specialInstructions ? specialInstructions.trim() : ""
+        charge: 0
     };
 
     if (coachId && mongoose.Types.ObjectId.isValid(coachId)) {
@@ -186,8 +180,7 @@ const calculateCGMBillHelper = async ({
                 extraDistanceCharge: extraDistanceCharge,
                 isPremiumSlot: isPremium,
                 premiumExtraFee: extraSlotFee,
-                charge: totalCoachCharge,
-                specialInstructions: specialInstructions ? specialInstructions.trim() : ""
+                charge: totalCoachCharge
             };
         }
     }
@@ -199,35 +192,6 @@ const calculateCGMBillHelper = async ({
     // 5. COD Policy Check
     const codConfig = await CodConfig.findOne({ vendorType: { $in: ['Pharmacy', 'All'] } });
     const isCodAvailable = codConfig ? Boolean(codConfig.isCodAvailable) : true;
-
-    // 6. Delivery Mode Preview
-    const deliverySummary = {
-        deliveryType: deliveryType || "In-person",
-        hospitalDetails: deliveryType === 'Hospital' ? {
-            hospitalName: hospitalDetails?.hospitalName || "",
-            floorNo: hospitalDetails?.floorNo || "",
-            ward: hospitalDetails?.ward || "",
-            bedNo: hospitalDetails?.bedNo || ""
-        } : null,
-        otherDeliveryDetails: deliveryType === 'Other' ? (otherDeliveryDetails || "") : null
-    };
-
-    // 7. Patient Diabetic Info Summary
-    let resolvedIsDiabetic = true;
-    if (diabetesProfile?.isDiabetic !== undefined) {
-        resolvedIsDiabetic = (diabetesProfile.isDiabetic === true || diabetesProfile.isDiabetic === 'true');
-    }
-
-    let resolvedDiabetesType = diabetesProfile?.diabetesType ? diabetesProfile.diabetesType.trim() : 'Type 2';
-    if (resolvedIsDiabetic === false && (!diabetesProfile?.diabetesType || diabetesProfile.diabetesType.trim() === '')) {
-        resolvedDiabetesType = 'Non Diabetic';
-    }
-
-    const patientDiabeticSummary = {
-        isDiabetic: resolvedIsDiabetic,
-        diabetesType: resolvedDiabetesType,
-        hasUsedBefore: Boolean(diabetesProfile?.hasUsedBefore)
-    };
 
     return {
         deviceSummary: {
@@ -251,8 +215,6 @@ const calculateCGMBillHelper = async ({
         },
         addonsSelected: verifiedAddons,
         coachConsultation: coachInfo,
-        deliveryInfo: deliverySummary,
-        patientDiabeticProfile: patientDiabeticSummary,
         pricingBreakdown: {
             itemTotal,
             mrpTotal,
@@ -275,47 +237,29 @@ const calculateCGMBillHelper = async ({
     };
 };
 
+
 // =========================================================================
-// 🧮 1. CHECKOUT PREVIEW API (Fully Updated Handler)
+// 🧮 1. CHECKOUT PREVIEW API (FIXED: Passed consultationMode, userLat, userLng)
 // Endpoint: POST /api/user/cgm/checkout/calculate-bill
 // =========================================================================
 const calculateCGMBill = async (req, res) => {
     try {
         const {
             deviceId,
-            variantId = null,
+            variantId,
             quantity = 1,
             addons = [],
             coachId = null,
-            consultationMode = 'Online',
-            userLat = null,
-            userLng = null,
+            consultationMode = 'Online', // 👈 FIX 2: Extracted & passed
+            userLat = null,              // 👈 FIX 2: Extracted & passed
+            userLng = null,              // 👈 FIX 2: Extracted & passed
             scheduledDate = null,
-            slotTime = null,
-            specialInstructions = "",
-            coachInstructions = "", // fallback alias
-            deliveryAddress = null,
-            deliveryType = "In-person",
-            hospitalDetails = null,
-            otherDeliveryDetails = "",
-            diabetesProfile = null
+            slotTime = null
         } = req.body;
 
         if (!deviceId) {
             return res.status(400).json({ success: false, message: "deviceId is required." });
         }
-
-        // Lat/Lng extract (Body root ya deliveryAddress se)
-        const finalLat = userLat !== null ? userLat : (deliveryAddress?.lat || null);
-        const finalLng = userLng !== null ? userLng : (deliveryAddress?.lng || null);
-
-        // Delivery type & hospital details extract
-        const resolvedDeliveryType = deliveryAddress?.deliveryType || deliveryType || "In-person";
-        const resolvedHospitalDetails = deliveryAddress?.hospitalDetails || hospitalDetails || null;
-        const resolvedOtherDeliveryDetails = deliveryAddress?.otherDeliveryDetails || otherDeliveryDetails || "";
-
-        // Coach instructions extract
-        const finalCoachInstruction = (specialInstructions || coachInstructions || "").trim();
 
         const bill = await calculateCGMBillHelper({
             deviceId,
@@ -324,18 +268,13 @@ const calculateCGMBill = async (req, res) => {
             addons,
             coachId,
             consultationMode,
-            userLat: finalLat,
-            userLng: finalLng,
+            userLat,
+            userLng,
             scheduledDate,
-            slotTime,
-            specialInstructions: finalCoachInstruction,
-            deliveryType: resolvedDeliveryType,
-            hospitalDetails: resolvedHospitalDetails,
-            otherDeliveryDetails: resolvedOtherDeliveryDetails,
-            diabetesProfile
+            slotTime
         });
 
-        res.status(200).json({
+        res.json({
             success: true,
             data: bill
         });
@@ -345,8 +284,9 @@ const calculateCGMBill = async (req, res) => {
         res.status(400).json({ success: false, message: error.message });
     }
 };
+
 // =========================================================================
-// 🛍️ 2. CHECKOUT & PLACE ORDER (With Safe Diabetic Profile, Delivery Type & Hospital)
+// 🛍️ 2. CHECKOUT & PLACE ORDER (With Automatic Stock Deduction)
 // Endpoint: POST /api/user/cgm/checkout/place-order
 // =========================================================================
 const placeCGMOrder = async (req, res) => {
@@ -363,13 +303,11 @@ const placeCGMOrder = async (req, res) => {
             userLng = null,
             scheduledDate = null,
             slotTime = null,
-            specialInstructions = "",
             deliveryAddress,
             diabetesProfile,
             paymentMethod = 'COD'
         } = req.body;
 
-        // 1. Mandatory Validations
         if (!deviceId || !deliveryAddress || !deliveryAddress.name || !deliveryAddress.phone || !deliveryAddress.city || !deliveryAddress.pincode) {
             return res.status(400).json({
                 success: false,
@@ -377,24 +315,15 @@ const placeCGMOrder = async (req, res) => {
             });
         }
 
-        // 2. Validate Hospital details if deliveryType is 'Hospital'
-        const deliveryType = deliveryAddress.deliveryType || 'In-person';
-        if (deliveryType === 'Hospital' && (!deliveryAddress.hospitalDetails || !deliveryAddress.hospitalDetails.hospitalName)) {
-            return res.status(400).json({
-                success: false,
-                message: "Hospital name is required when deliveryType is 'Hospital'."
-            });
-        }
-
         const orderQty = Math.max(1, parseInt(quantity, 10) || 1);
 
-        // 3. Fetch Device document for real-time stock deduction
+        // 1. Fetch Device document to deduct real stock
         const targetDevice = await CGMDevices.findById(deviceId);
         if (!targetDevice || !targetDevice.isActive) {
             return res.status(404).json({ success: false, message: "Product is currently unavailable." });
         }
 
-        // Stock deduction check
+        // 2. Validate and Deduct Stock in memory
         if (variantId && mongoose.Types.ObjectId.isValid(variantId)) {
             if (targetDevice.productType === 'Glucometer' && Array.isArray(targetDevice.glucometerConfig?.stripLancetVariants)) {
                 const variantDoc = targetDevice.glucometerConfig.stripLancetVariants.id(variantId);
@@ -416,6 +345,7 @@ const placeCGMOrder = async (req, res) => {
                 packDoc.stockQuantity -= orderQty;
             }
         } else {
+            // Standalone Device
             if ((targetDevice.stockQuantity || 0) < orderQty) {
                 return res.status(400).json({ 
                     success: false, 
@@ -424,12 +354,13 @@ const placeCGMOrder = async (req, res) => {
             }
         }
 
+        // Parent device overall stock reduction
         targetDevice.stockQuantity = Math.max(0, (targetDevice.stockQuantity || 0) - orderQty);
         if (targetDevice.stockQuantity === 0) {
-            targetDevice.isAvailable = false;
+            targetDevice.isAvailable = false; // Auto mark unavailable if sold out
         }
 
-        // Slot Collision Check for Coach
+        // Slot Collision Check
         if (coachId && scheduledDate && slotTime) {
             const isAvailable = await isCoachSlotAvailable(coachId, scheduledDate, slotTime, CGMOrder);
             if (!isAvailable) {
@@ -443,7 +374,7 @@ const placeCGMOrder = async (req, res) => {
         const finalLat = userLat !== null ? userLat : (deliveryAddress.lat || null);
         const finalLng = userLng !== null ? userLng : (deliveryAddress.lng || null);
 
-        // 4. Calculate Final Bill
+        // Calculate Bill
         const bill = await calculateCGMBillHelper({
             deviceId,
             variantId,
@@ -454,8 +385,7 @@ const placeCGMOrder = async (req, res) => {
             userLat: finalLat,
             userLng: finalLng,
             scheduledDate,
-            slotTime,
-            specialInstructions
+            slotTime
         });
 
         if (paymentMethod === 'COD' && bill.orderPolicies.isCodAvailable === false) {
@@ -476,46 +406,7 @@ const placeCGMOrder = async (req, res) => {
 
         const isAutoConfirmed = paymentMethod === 'COD' || finalTotal === 0;
 
-        // 5. Build Smart Diabetic Profile (Handles non-diabetic & direct matches)
-        let resolvedIsDiabetic = true;
-        if (diabetesProfile?.isDiabetic !== undefined) {
-            resolvedIsDiabetic = (diabetesProfile.isDiabetic === true || diabetesProfile.isDiabetic === 'true');
-        }
-
-        let resolvedDiabetesType = diabetesProfile?.diabetesType ? diabetesProfile.diabetesType.trim() : 'Type 2';
-        // Agar user diabetic nahi hai aur type set nahi kiya gaya, toh automatic 'Non Diabetic'
-        if (resolvedIsDiabetic === false && (!diabetesProfile?.diabetesType || diabetesProfile.diabetesType.trim() === '')) {
-            resolvedDiabetesType = 'Non Diabetic';
-        }
-
-        const cleanDiabetesProfile = {
-            isDiabetic: resolvedIsDiabetic,
-            diabetesType: resolvedDiabetesType,
-            hasUsedBefore: Boolean(diabetesProfile?.hasUsedBefore)
-        };
-
-        // 6. Build Clean Delivery Address
-        const cleanDeliveryAddress = {
-            name: deliveryAddress.name,
-            phone: deliveryAddress.phone,
-            houseNo: deliveryAddress.houseNo || "",
-            sector: deliveryAddress.sector || "",
-            landmark: deliveryAddress.landmark || "",
-            city: deliveryAddress.city,
-            state: deliveryAddress.state || "",
-            pincode: deliveryAddress.pincode,
-            addressType: deliveryAddress.addressType || "Home",
-            deliveryType: deliveryType,
-            hospitalDetails: deliveryType === 'Hospital' ? {
-                hospitalName: deliveryAddress.hospitalDetails?.hospitalName || "",
-                floorNo: deliveryAddress.hospitalDetails?.floorNo || "",
-                ward: deliveryAddress.hospitalDetails?.ward || "",
-                bedNo: deliveryAddress.hospitalDetails?.bedNo || ""
-            } : undefined,
-            otherDeliveryDetails: deliveryType === 'Other' ? (deliveryAddress.otherDeliveryDetails || "") : undefined
-        };
-
-        // 7. Create CGMOrder Document
+        // 3. Create Order Document
         const newOrder = await CGMOrder.create({
             orderId,
             userId,
@@ -531,13 +422,23 @@ const placeCGMOrder = async (req, res) => {
                 unitMrp: bill.deviceSummary.unitMrp,
                 quantity: bill.deviceSummary.quantity
             },
-            diabetesProfile: cleanDiabetesProfile,
-            deliveryAddress: cleanDeliveryAddress,
-            addons: bill.addonsSelected,
-            coachConsultation: {
-                ...bill.coachConsultation,
-                specialInstructions: specialInstructions ? specialInstructions.trim() : ""
+            diabetesProfile: {
+                diabetesType: diabetesProfile?.diabetesType || 'Type 2',
+                hasUsedBefore: Boolean(diabetesProfile?.hasUsedBefore)
             },
+            deliveryAddress: {
+                name: deliveryAddress.name,
+                phone: deliveryAddress.phone,
+                houseNo: deliveryAddress.houseNo || "",
+                sector: deliveryAddress.sector || "",
+                landmark: deliveryAddress.landmark || "",
+                city: deliveryAddress.city,
+                state: deliveryAddress.state || "",
+                pincode: deliveryAddress.pincode,
+                addressType: deliveryAddress.addressType || "Home"
+            },
+            addons: bill.addonsSelected,
+            coachConsultation: bill.coachConsultation,
             billSummary: bill.pricingBreakdown,
             appliedCoupon: null,
             paymentMethod,
@@ -548,11 +449,11 @@ const placeCGMOrder = async (req, res) => {
             trackingTimeline: [{
                 status: isAutoConfirmed ? 'Confirmed' : 'Placed',
                 timestamp: new Date(),
-                note: `Order placed successfully (${paymentMethod}). Delivery: ${deliveryType}. Total: ₹${finalTotal}.`
+                note: `Order placed successfully (${paymentMethod}). Total: ₹${finalTotal}.`
             }]
         });
 
-        // 8. Permanently deduct stock
+        // 🔻 4. SAVE REDUCED STOCK IN DATABASE PERMANENTLY
         await targetDevice.save();
 
         if (paymentMethod === 'Online' && rzpOrder) {

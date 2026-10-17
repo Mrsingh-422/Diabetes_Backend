@@ -1,5 +1,6 @@
 // controllers/user/CGMDevices/UserDiabetesCoach.js
 const { generateCoachSlots } = require('../../../utils/timeSlotHelper');
+const DiabeticCoachBooking = require('../../../models/DiabeticCoachBooking');
 const CGMOrder = require('../../../models/CGMOrder');
 const DiabetesCoach = require('../../../models/DiabetesCoach');
 const { calculateHaversine } = require('../../../utils/helpers');
@@ -114,7 +115,7 @@ const getNearbyDiabetesCoaches = async (req, res) => {
 };
 
 // =========================================================================
-// 🔍 2. GET SINGLE COACH DETAILS BY ID (WITH SAFE DATE SLOTS PREVIEW)
+// 🔍 2. GET SINGLE COACH DETAILS BY ID (WITH REAL-TIME BOOKED SLOTS)
 // Endpoint: GET /user/cgm/coaches/get/:id?selectedDate=2026-10-10
 // =========================================================================
 const getUserDiabetesCoachById = async (req, res) => {
@@ -136,7 +137,6 @@ const getUserDiabetesCoachById = async (req, res) => {
 
         let generatedSlots = null;
 
-        // Agar date di ho AUR coach ne slots DB mein configure kiye hon, tabhi slots banayein
         if (selectedDate) {
             if (!coach.slotConfig || !coach.slotConfig.startTime || !coach.slotConfig.endTime) {
                 generatedSlots = {
@@ -147,15 +147,33 @@ const getUserDiabetesCoachById = async (req, res) => {
             } else {
                 let bookedAppointments = [];
                 try {
-                    const bookedOrders = await CGMOrder.find({
+                    // 15-Minute Payment Timeout (Agar 15 min me pay nahi kiya toh slot auto-free)
+                    const fifteenMinsAgo = new Date(Date.now() - 15 * 60 * 1000);
+
+                    // A. Fetch from Dedicated DiabeticCoachBooking Model
+                    const coachBookings = await DiabeticCoachBooking.find({
+                        coachId: id,
+                        scheduledDate: selectedDate,
+                        $or: [
+                            { status: { $in: ['Confirmed', 'In-Progress'] } },
+                            { status: 'Placed', createdAt: { $gte: fifteenMinsAgo } } // Unpaid hold only for 15 mins
+                        ]
+                    }).select('slotTime').lean();
+
+                    // B. Fetch from CGMOrder (Device checkout bundle bookings)
+                    const cgmOrders = await CGMOrder.find({
                         'coachConsultation.coachId': id,
                         'coachConsultation.scheduledDate': selectedDate,
-                        status: { $in: ['Placed', 'Confirmed'] }
+                        $or: [
+                            { status: { $in: ['Confirmed', 'In-Progress'] } },
+                            { status: 'Placed', createdAt: { $gte: fifteenMinsAgo } }
+                        ]
                     }).select('coachConsultation.slotTime').lean();
 
-                    bookedAppointments = (bookedOrders || []).map(b => ({
-                        slotTime: b.coachConsultation?.slotTime
-                    }));
+                    bookedAppointments = [
+                        ...(coachBookings || []).map(b => ({ slotTime: b.slotTime })),
+                        ...(cgmOrders || []).map(b => ({ slotTime: b.coachConsultation?.slotTime }))
+                    ];
                 } catch (dbErr) {
                     bookedAppointments = [];
                 }
@@ -181,7 +199,6 @@ const getUserDiabetesCoachById = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
-
 // =========================================================================
 // ⏰ 3. GET COACH SLOTS FOR A SPECIFIC DATE (CALENDAR DATE PICKER)
 // Endpoint: GET /user/cgm/coaches/slots/:id?selectedDate=2026-10-10
@@ -210,7 +227,6 @@ const getCoachAvailableSlots = async (req, res) => {
             return res.status(404).json({ success: false, message: "Coach not found or currently inactive." });
         }
 
-        // 🚫 CHECK: Agar DB mein coach ne slots set hi nahi kiye hain, toh Dummy slots mat bhejo
         if (!coach.slotConfig || !coach.slotConfig.startTime || !coach.slotConfig.endTime) {
             return res.json({
                 success: true,
@@ -224,28 +240,46 @@ const getCoachAvailableSlots = async (req, res) => {
                 data: {
                     isClosed: true,
                     reason: "Coach has not set up working hours yet.",
-                    slots: [] // 👈 Empty array (No dummy slots)
+                    slots: []
                 }
             });
         }
 
-        // Already booked appointments check
+        // Real-Time Active Bookings Check
         let bookedAppointments = [];
         try {
-            const bookedOrders = await CGMOrder.find({
+            // Unpaid orders ko sirf 15 min tak block rakhenge, uske baad auto-free ho jayega
+            const fifteenMinsAgo = new Date(Date.now() - 15 * 60 * 1000);
+
+            // 1. Fetch from DiabeticCoachBooking
+            const coachBookings = await DiabeticCoachBooking.find({
+                coachId: id,
+                scheduledDate: selectedDate,
+                $or: [
+                    { status: { $in: ['Confirmed', 'In-Progress'] } },
+                    { status: 'Placed', createdAt: { $gte: fifteenMinsAgo } }
+                ]
+            }).select('slotTime').lean();
+
+            // 2. Fetch from CGMOrder
+            const cgmOrders = await CGMOrder.find({
                 'coachConsultation.coachId': id,
                 'coachConsultation.scheduledDate': selectedDate,
-                status: { $in: ['Placed', 'Confirmed'] }
+                $or: [
+                    { status: { $in: ['Confirmed', 'In-Progress'] } },
+                    { status: 'Placed', createdAt: { $gte: fifteenMinsAgo } }
+                ]
             }).select('coachConsultation.slotTime').lean();
 
-            bookedAppointments = (bookedOrders || []).map(b => ({
-                slotTime: b.coachConsultation?.slotTime
-            }));
+            bookedAppointments = [
+                ...(coachBookings || []).map(b => ({ slotTime: b.slotTime })),
+                ...(cgmOrders || []).map(b => ({ slotTime: b.coachConsultation?.slotTime }))
+            ];
         } catch (dbErr) {
             bookedAppointments = [];
         }
 
-        // Coach ki actual DB configuration se slots generate karein
+        // Slot Generator ko actual booked slots bhejo
         const slotsData = generateCoachSlots({
             config: coach.slotConfig,
             bookedAppointments,
@@ -269,7 +303,6 @@ const getCoachAvailableSlots = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
-
 
 module.exports = {
     getNearbyDiabetesCoaches,
