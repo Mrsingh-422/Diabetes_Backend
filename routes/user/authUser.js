@@ -34,7 +34,8 @@ const {
     updateToUserAddress,
     setInitialPassword,
     checkPasswordStatus,
-    getProfileCompletionStatus
+    getProfileCompletionStatus,
+    getUserProfileCard
     
 } = require('../../controllers/user/authUser.js'); 
 
@@ -61,6 +62,7 @@ router.post('/reset-password', resetPassword);   // Sets New Password
 router.get('/profile', protect('user'), getUserProfile); //get profile
 router.put('/update', protect('user'), userProfileUpload, updateUserProfile);
 router.get('/profile-completion', protect('user'), getProfileCompletionStatus);
+router.get('/profile-card', protect('user'), getUserProfileCard);
 
 
 // My Work

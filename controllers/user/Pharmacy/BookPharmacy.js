@@ -2241,6 +2241,7 @@ const getNonPrescriptionMedicines = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
 const getHighestDiscountMedicines = async (req, res) => {
     try {
         const page = parseInt(req.query.page) || 1;

@@ -1545,6 +1545,77 @@ const getUserDashboard = async (req, res) => {
     }
 };
 
+// =========================================================================
+// 🪪 GET USER PROFILE CARD DETAILS (Header / Profile Widget)
+// Endpoint: GET /api/auth/user/profile-card
+// =========================================================================
+const getUserProfileCard = async (req, res) => {
+    try {
+        const user = await User.findById(req.user.id).select(
+            'name email phone countryCode gender dob age height weight bloodgroup profilePic city state country diabeticType diabteticType sinceHowLong diabeticduration isProfileCompleted profileCompletionPercentage is50PercentCompleted is100PercentCompleted abhaDetails createdAt'
+        ).lean();
+
+        if (!user) {
+            return res.status(404).json({ success: false, message: "User not found" });
+        }
+
+        // Calculate dynamic age if DOB exists
+        let calculatedAge = user.age || null;
+        if (!calculatedAge && user.dob) {
+            const birthDate = new Date(user.dob);
+            const difference = Date.now() - birthDate.getTime();
+            const ageDate = new Date(difference);
+            calculatedAge = Math.abs(ageDate.getUTCFullYear() - 1970);
+        }
+
+        // Clean & compact profile card payload
+        const profileCard = {
+            userId: user._id,
+            name: user.name || "User",
+            profilePic: user.profilePic || null,
+            phone: user.phone ? (user.countryCode ? `${user.countryCode} ${user.phone}` : user.phone) : null,
+            email: user.email || null,
+            gender: user.gender || "Not Specified",
+            age: calculatedAge ? `${calculatedAge} yrs` : "Not Specified",
+            dob: user.dob ? new Date(user.dob).toISOString().split('T')[0] : null,
+            bloodGroup: user.bloodgroup || "Not Specified",
+            vitals: {
+                height: user.height ? (user.height.includes('cm') || user.height.includes("'") ? user.height : `${user.height} cm`) : "Not Set",
+                weight: user.weight ? (user.weight.includes('kg') ? user.weight : `${user.weight} kg`) : "Not Set"
+            },
+            location: {
+                city: user.city || "",
+                state: user.state || "",
+                country: user.country || "India",
+                displayLocation: [user.city, user.state].filter(Boolean).join(', ') || "Location Not Set"
+            },
+            diabeticProfile: {
+                isDiabetic: Boolean(user.diabeticType && user.diabeticType.trim() !== '' && user.diabeticType !== 'Non Diabetic'),
+                diabeticType: user.diabeticType || user.diabteticType || "Not Specified",
+                duration: user.sinceHowLong?.formatted || user.diabeticduration || "Not Specified"
+            },
+            abhaInfo: {
+                abhaNumber: user.abhaDetails?.abhaNumber || null,
+                isAbhaVerified: Boolean(user.abhaDetails?.isAbhaVerified)
+            },
+            profileProgress: {
+                isProfileCompleted: Boolean(user.isProfileCompleted || user.is100PercentCompleted),
+                is50PercentCompleted: Boolean(user.is50PercentCompleted),
+                completionPercentage: user.profileCompletionPercentage || 25
+            },
+            memberSince: user.createdAt
+        };
+
+        res.status(200).json({
+            success: true,
+            message: "User profile card fetched successfully",
+            data: profileCard
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
 module.exports = { 
     registerUser, 
     loginUser, 
@@ -1584,5 +1655,6 @@ module.exports = {
     getUserDashboard,
     updateToUserAddress,
     setInitialPassword,
-    checkPasswordStatus
+    checkPasswordStatus,
+    getUserProfileCard
 };
