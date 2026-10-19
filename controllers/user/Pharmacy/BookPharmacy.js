@@ -2092,7 +2092,7 @@ const getLatestAddedMedicines = async (req, res) => {
 };
 
 // GET OTC / NON-PRESCRIPTION MEDICINES (PRESCRIPTION REQUIRED: NO)
-// GET OTC MEDICINES WITH OPTIONAL CATEGORY FILTER
+// GET OTC MEDICINES WITH OPTIONAL CATEGORY FILTER (IN-STOCK FIRST, OUT-OF-STOCK LAST)
 const getNonPrescriptionMedicines = async (req, res) => {
     try {
         const { category, subCategory, page = 1 } = req.query;
@@ -2213,6 +2213,13 @@ const getNonPrescriptionMedicines = async (req, res) => {
                     updatedAt: 0
                 } 
             },
+            // 🌟 In-stock (isAvailable: true) sabse pehle, out-of-stock (isAvailable: false) baad mein
+            { 
+                $sort: { 
+                    isAvailable: -1, 
+                    _id: -1 
+                } 
+            },
             { $skip: skip },
             { $limit: limit }
         ];
@@ -2234,7 +2241,6 @@ const getNonPrescriptionMedicines = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
-
 const getHighestDiscountMedicines = async (req, res) => {
     try {
         const page = parseInt(req.query.page) || 1;
