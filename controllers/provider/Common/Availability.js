@@ -46,19 +46,31 @@ const setSlots = async (req, res) => {
         res.json({ success: true, message: "Availability settings saved", data: slots });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
-// 2. GET MY SLOTS
+// 2. GET MY SLOTS (Supports Pharmacy & Lab with DB-driven slots)
 const getMySlots = async (req, res) => {
     try {
-        const config = await Availability.findOne({ vendorId: req.user.id });
-        if (!config) return res.json({ success: true, data: null });
-
-        let generatedSlots = [];
-        if (config.vendorType !== 'Pharmacy') {
-            generatedSlots = generateTimeSlots(config);
+        const config = await Availability.findOne({ vendorId: req.user.id }).lean();
+        if (!config) {
+            return res.json({ 
+                success: true, 
+                message: "No slot configuration found. Please set your timings first.",
+                config: null, 
+                generatedSlots: [] 
+            });
         }
 
-        res.json({ success: true, config, generatedSlots });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        // ✅ FIXED: Ab Pharmacy ke liye bhi actual slots generate honge (No dummy data)
+        const generatedSlots = generateTimeSlots(config);
+
+        res.json({ 
+            success: true, 
+            config, 
+            totalGeneratedSlots: generatedSlots.length,
+            generatedSlots 
+        });
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
 
 // 3. BLOCK/HIDE A SLOT
