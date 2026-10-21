@@ -25,29 +25,33 @@ const pharmacyBookingSchema = new mongoose.Schema({
         duration: String, // e.g., "5 Days"
         startDate: Date,
 
-         // 🚨 NEW COMBO / BOGO TRACKING FIELDS
+        // 🚨 NEW COMBO / BOGO TRACKING FIELDS
         isComboApplied: { type: Boolean, default: false },
         comboOfferId: { type: mongoose.Schema.Types.ObjectId, ref: 'PharmacyComboOffer', default: null },
-        freeQuantity: { type: Number, default: 0 },// Saved units (Y)
-        // 🚨 NEW GST KEYS FOR BILL GENERATION
+        freeQuantity: { type: Number, default: 0 }, // Saved units (Y)
+
+        // 🚨 Dynamic GST snapshots inside order items
         hsn_number: { type: String, required: false, default: "" },
         taxableAmount: { type: Number, default: 0 },
-        cgstPercent: { type: Number, default: 6 },
-        sgstPercent: { type: Number, default: 6 },
+        cgstPercent: { type: Number, default: 0 },
+        sgstPercent: { type: Number, default: 0 },
         cgstAmount: { type: Number, default: 0 },
-        sgstAmount: { type: Number, default: 0 }
- 
+        sgstAmount: { type: Number, default: 0 },
+        // 🚨 Item-Level Return & Replacement Snapshots
+        isReturnAllowed: { type: Boolean, default: false },
+        isReplacementAllowed: { type: Boolean, default: false }
+
     }],
 
     // --- LOGISTICS & SLOTS ---
-    collectionType: { 
-        type: String, 
-        enum: ['Home Delivery', 'Self Pickup'], 
-        required: true 
+    collectionType: {
+        type: String,
+        enum: ['Home Delivery', 'Self Pickup'],
+        required: true
     },
     appointmentDate: { type: Date, required: true },
-    appointmentTime: { type: String, required: true }, 
-    isRapid: { type: Boolean, default: false }, 
+    appointmentTime: { type: String, required: true },
+    isRapid: { type: Boolean, default: false },
 
     // --- ADDRESS SECTION ---
     address: {
@@ -66,51 +70,62 @@ const pharmacyBookingSchema = new mongoose.Schema({
     // --- BILLING SUMMARY ---
     billSummary: {
         itemTotal: { type: Number, required: true },
+        originalItemTotal: { type: Number, default: 0 },
+        comboSavings: { type: Number, default: 0 },
+
+        // 🚨 ADDED: Global Invoice GST Summaries for final orders
+        taxableTotal: { type: Number, default: 0 },
+        cgstTotal: { type: Number, default: 0 },
+        sgstTotal: { type: Number, default: 0 },
+
         deliveryCharge: { type: Number, default: 0 },
         rapidDeliveryCharge: { type: Number, default: 0 },
         slotCharge: { type: Number, default: 0 },
         couponDiscount: { type: Number, default: 0 },
         couponId: { type: mongoose.Schema.Types.ObjectId, ref: 'Coupon' },
         totalAmount: { type: Number, required: true },
-
         cancellationFeeApplied: { type: Number, default: 0 },
         noShowFeeApplied: { type: Number, default: 0 }
-    }, 
+    },
 
     // --- PAYMENT & STATUS ---
-    paymentMethod: { type: String, enum: ['UPI','COD', 'Card', 'Netbanking', 'Wallet', 'Online'], default: 'COD' },
-    paymentStatus: { 
-        type: String, 
-        enum: ['Pending', 'Paid', 'Failed', 'Refunded'], 
-        default: 'Pending' 
+    paymentMethod: { type: String, enum: [
+        'Online', 'COD', 'UPI', 'Card', 'Netbanking', 'Wallet', 
+        'online', 'cod', 'upi', 'card', 'netbanking', 'wallet', 'emi', 'paylater',
+        'ONLINE', 'COD'
+    ], default: 'COD' },
+    paymentStatus: {
+        type: String,
+        enum: ['Pending', 'Paid', 'Failed', 'Refunded','Refund-Initiated'],
+        default: 'Pending'
     },
-    
+
     orderType: { type: String, enum: ['General', 'Prescription'], default: 'General' },
     driverId: { type: mongoose.Schema.Types.ObjectId, ref: 'Driver', default: null },
-    
+
     // Delivery Tracking Statuses
-    deliveryStatus: { 
-        type: String, 
-        enum: ['PendingAssignment', 'Assigned', 'Accepted', 'PickedUp', 'OutForDelivery', 'ReachedLocation', 'Delivered', 'CancelledByDriver', 'UserUnreachable', 'UserRefused'], 
-        default: 'PendingAssignment' 
+    deliveryStatus: {
+        type: String,
+        enum: ['PendingAssignment', 'Assigned', 'Accepted', 'PickedUp', 'OutForDelivery', 'ReachedLocation', 'Delivered', 'CancelledByDriver', 'UserUnreachable', 'UserRefused'],
+        default: 'PendingAssignment'
     },
-    
+
     deliveryOTP: { type: String }, // For final verification
     assignedAt: { type: Date },
     rejectedBy: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Driver' }], // To avoid re-assigning to same driver
-    
+
     // For Prescription orders
     prescriptionImages: [String],
-    status: { 
-        type: String, 
-        enum: ['Pending','Placed', 'Under Review', 'Packed', 'Shipped', 'Delivered', 'Cancelled'], 
-        default: 'Placed' 
+    status: {
+        type: String,
+        enum: ['Pending', 'Placed', 'Under Review', 'Packed', 'Shipped', 'Delivered', 'Cancelled'],
+        default: 'Placed'
     },
 
     cancelReason: { type: String },
     prescriptionFile: { type: String }, // For prescription-based orders
 
-     // 🌟 Figma Screen 14 (Proof of Delivery Photo)
+    // 🌟 Figma Screen 14 (Proof of Delivery Photo)
     deliveryProofPic: { type: String, default: null },
 
     // 🌟 Figma Screen 13 (Return Details)
@@ -119,6 +134,7 @@ const pharmacyBookingSchema = new mongoose.Schema({
     // Live trip tracking timestamps
     startedAt: { type: Date, default: null },
     arrivedAt: { type: Date, default: null },
+    deliveredAt: { type: Date, default: null },
 
     paymentDetails: {
         razorpayPaymentId: { type: String, default: "" },
@@ -137,9 +153,37 @@ const pharmacyBookingSchema = new mongoose.Schema({
             type: String
         },
         paidAt: { type: Date, default: null }
+    },
+    returnDetails: {
+        requestType: { type: String, enum: ['Return', 'Replacement'], default: null },
+        reason: { type: String, default: null },
+        userComments: { type: String, default: "" },
+        proofImages: [{ type: String }], // User ki uploaded photos
+        status: {
+            type: String,
+            enum: ['None', 'Requested', 'Approved', 'CollectedByDriver', 'ReceivedAtStore', 'Rejected', 'Completed'],
+            default: 'None'
+        },
+        pickupDriverId: { type: mongoose.Schema.Types.ObjectId, ref: 'Driver', default: null },
+        pickupStatus: {
+            type: String,
+            enum: ['PendingAssignment', 'Assigned', 'OutForPickup', 'ReachedLocation', 'PickedUp', 'DeliveredToStore'],
+            default: 'PendingAssignment'
+        },
+        returnOTP: { type: String, default: null },
+
+        // 🚨 MULTIPLE DRIVER PROOF PHOTOS ARRAY:
+        driverCollectedPics: [{ type: String }], // 👈 Array of photos (Barcode, Damage angle, Box)
+        vendorVerificationNote: { type: String, default: "" },
+
+        requestedAt: { type: Date, default: null },
+        collectedAt: { type: Date, default: null },
+        storeReceivedAt: { type: Date, default: null },
+        rejectionReason: { type: String, default: null },
+        refundAmount: { type: Number, default: 0 }
     }
 
-    
+
 }, { timestamps: true });
 
 

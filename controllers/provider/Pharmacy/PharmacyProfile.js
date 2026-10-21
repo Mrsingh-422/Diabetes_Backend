@@ -31,8 +31,37 @@ const updatePharmacyProfile = async (req, res) => {
             isHomeDeliveryAvailable, isRapidServiceAvailable, 
             isInsuranceAccepted, acceptedInsurances, is24x7,
             country, state, city, lat, lng,
-            alternatePhone
+            alternatePhone,
+            
+            // 🚨 CORPORATE & TAX COMPLIANCE INPUTS
+            cinNumber,
+            gstNumber,
+            tanNumber,
+            panNumber,
+            drugLicenseNumber,
+            foodLicenseNumber,
+            issuingAuthority,
+            drugLicenseType
         } = req.body;
+
+        // 🚨 1. VALIDATION: Agar tax/corporate details update ho rahi hain toh rules check karein
+        if (cinNumber !== undefined && cinNumber.trim() === "") {
+            return res.status(400).json({ 
+                success: false, 
+                message: "CIN Number (Corporate Identity Number) cannot be empty." 
+            });
+        }
+
+        const hasGst = gstNumber && gstNumber.trim() !== "";
+        const hasTanAndPan = (tanNumber && tanNumber.trim() !== "") && (panNumber && panNumber.trim() !== "");
+
+        // Agar user ne GST ya TAN/PAN me se kuch bheja hai toh rule satisfy hona chahiye
+        if ((gstNumber !== undefined || tanNumber !== undefined || panNumber !== undefined) && (!hasGst && !hasTanAndPan)) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Compliance Error: You must provide either a valid 'GST Number' OR both 'TAN Number and PAN Number'." 
+            });
+        }
  
         let updateData = {
             name, about, address, country, state, city,
@@ -40,7 +69,7 @@ const updatePharmacyProfile = async (req, res) => {
             isRapidServiceAvailable: isRapidServiceAvailable === 'true',
             isInsuranceAccepted: isInsuranceAccepted === 'true',
             is24x7: is24x7 === 'true',
-            location: { lat, lng },
+            location: { lat: Number(lat || 0), lng: Number(lng || 0) },
             alternatePhone
         };
  
@@ -49,20 +78,47 @@ const updatePharmacyProfile = async (req, res) => {
                 ? JSON.parse(acceptedInsurances) 
                 : acceptedInsurances;
         }
+
+        // 🚨 MAPPING COMPLIANCE FIELDS (Using dot notation to merge safely without overwriting other documents)
+        if (cinNumber !== undefined) updateData['documents.cinNumber'] = cinNumber.trim().toUpperCase();
+        if (gstNumber !== undefined) updateData['documents.gstNumber'] = hasGst ? gstNumber.trim().toUpperCase() : "";
+        if (tanNumber !== undefined) updateData['documents.tanNumber'] = hasTanAndPan ? tanNumber.trim().toUpperCase() : "";
+        if (panNumber !== undefined) updateData['documents.panNumber'] = hasTanAndPan ? panNumber.trim().toUpperCase() : "";
+        
+        if (drugLicenseNumber !== undefined) updateData['documents.drugLicenseNumber'] = drugLicenseNumber.trim();
+        if (foodLicenseNumber !== undefined) updateData['documents.foodLicenseNumber'] = foodLicenseNumber.trim();
+        if (issuingAuthority !== undefined) updateData['documents.issuingAuthority'] = issuingAuthority.trim();
+        if (drugLicenseType !== undefined) updateData['documents.drugLicenseType'] = drugLicenseType;
  
-        if (req.files && req.files.profileImage) {
-            updateData.profileImage = req.files.profileImage[0].path;
+        // 🚨 FILE ATTACHMENTS (Profile Pic & Signature/Stamp)
+        if (req.files) {
+            if (req.files.profileImage && req.files.profileImage[0]) {
+                updateData.profileImage = req.files.profileImage[0].path.replace(/\\/g, "/");
+            }
+            if (req.files.signatureImage && req.files.signatureImage[0]) {
+                updateData['documents.signatureImage'] = req.files.signatureImage[0].path.replace(/\\/g, "/");
+            }
+            if (req.files.drugLicenses && req.files.drugLicenses.length > 0) {
+                updateData['documents.drugLicenses'] = req.files.drugLicenses.map(f => f.path.replace(/\\/g, "/"));
+            }
+            if (req.files.pharmacyImages && req.files.pharmacyImages.length > 0) {
+                updateData['documents.pharmacyImages'] = req.files.pharmacyImages.map(f => f.path.replace(/\\/g, "/"));
+            }
         }
 
-        // 🚨 DISK CLEANUP: Delete unapproved files from any existing PENDING request
+        // 🚨 DISK CLEANUP: Purani unapproved pending request delete karein
         const existingPending = await ProfileUpdateRequest.findOne({ vendorId: pharmacyId, vendorModel: 'Pharmacy', status: 'Pending' });
         if (existingPending) {
             if (updateData.profileImage && existingPending.updatedFields?.profileImage) {
                 deleteFile(existingPending.updatedFields.profileImage);
             }
+            if (updateData['documents.signatureImage'] && existingPending.updatedFields?.['documents.signatureImage']) {
+                deleteFile(existingPending.updatedFields['documents.signatureImage']);
+            }
             await ProfileUpdateRequest.findByIdAndDelete(existingPending._id);
         }
  
+        // Admin ke liye pending profile update request create karein
         const request = await ProfileUpdateRequest.create({
             vendorId: pharmacyId,
             vendorModel: 'Pharmacy',
@@ -72,7 +128,7 @@ const updatePharmacyProfile = async (req, res) => {
 
         res.json({ 
             success: true, 
-            message: "Profile changes submitted to Admin for review. Your profile will update once approved.", 
+            message: "Profile and Tax/License changes submitted to Admin for review. Your bills will update once approved.", 
             data: request 
         });
 

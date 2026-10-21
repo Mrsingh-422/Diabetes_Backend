@@ -20,50 +20,52 @@ const pharmacySchema = new mongoose.Schema({
     phone: { type: String, unique: true, sparse: true },
     password: { type: String, required: true, select: false },
     
-    // Role updated to support both Standalone & Clinic Pharmacy
     role: { 
         type: String, 
         enum: ['Pharmacy', 'clinic-pharmacy'], 
         default: 'Pharmacy' 
     },
     
-    profileStatus: { 
-        type: String, 
-        enum: ['Incomplete', 'Pending', 'Approved', 'Rejected'], 
-        default: 'Incomplete' 
-    },
+     profileStatus: { type: String, enum: ['Incomplete', 'Pending', 'Approved', 'Rejected'], default: 'Incomplete' },
     token: { type: String, default: null },
-    fcmToken: { type: String, default: null },
+    fcmToken: {
+        type: String,
+        default: null
+    },
     isActive: { type: Boolean, default: true },
-    isOnline: { type: Boolean, default: true },
-
+    isOnline: {
+        type: Boolean,
+        default: true
+    },
     profileImage: { type: String, default: null },
 
     // Location Details
-    country: { type: String, default: 'India' },
+  country: { type: String, default: null },
     state: { type: String, default: null },
     city: { type: String, default: null },
     address: { type: String, default: null },
-    location: {
+        location: {
         lat: { type: Number, default: 0 },
         lng: { type: Number, default: 0 }
     },
 
-    documents: {
-        pharmacyImages: [{ type: String }],
-        pharmacyCertificates: [{ type: String }],
-        pharmacyLicenses: [{ type: String }],
-        gstCertificates: [{ type: String }],
-        drugLicenses: [{ type: String }],
-        otherCertificates: [{ type: String }],
 
-        cinNumber: { type: String, default: "" },
-        gstNumber: { type: String, default: "" },
-        tanNumber: { type: String, default: "" },
-        panNumber: { type: String, default: "" },
-        drugLicenseNumber: { type: String, default: "" },
-        foodLicenseNumber: { type: String, default: "" },
-        signatureImage: { type: String, default: null },
+    documents: {
+        
+        pharmacyImages: [{ type: String }],       // Figma: Pharmacy Image
+        pharmacyCertificates: [{ type: String }], // Figma: Pharmacy Certificate Image
+        pharmacyLicenses: [{ type: String }],     // Figma: Pharmacy License Certificate
+        gstCertificates: [{ type: String }],      // Figma: GST Certificate (Optional)
+        drugLicenses: [{ type: String }],        // Figma: Drug License
+        otherCertificates: [{ type: String }],   // Figma: Other Certificate (Optional)
+
+        cinNumber: { type: String, default: "" }, //  Compulsory (e.g. "U74999DL2026PTC123456")
+        gstNumber: { type: String, default: "" }, // Either GSTIN
+        tanNumber: { type: String, default: "" }, //  OR (TAN + PAN)
+        panNumber: { type: String, default: "" }, //  OR (TAN + PAN)
+        drugLicenseNumber: { type: String, default: "" }, // E.g., "27192-195" ya "DRUG/19-20/32879-80"
+        foodLicenseNumber: { type: String, default: "" }, //  E.g., "Food Lic No.: 122200260001" (FSSAI)
+        signatureImage: { type: String, default: null },   // Authorised Signator
 
         documentState: { type: String },
         issuingAuthority: { type: String },
@@ -103,5 +105,7 @@ const pharmacySchema = new mongoose.Schema({
         isVerified: { type: Boolean, default: false }
     }
 }, { timestamps: true });
+ 
+pharmacySchema.index({ location: "2dsphere" });
 
 module.exports = mongoose.model('Pharmacy', pharmacySchema);

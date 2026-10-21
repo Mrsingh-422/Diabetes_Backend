@@ -1,15 +1,18 @@
 const express = require('express');
 const router = express.Router();
 const { protect } = require('../../../middleware/authMiddleware');
-const { pharmacyPrescriptionUploads } = require('../../../middleware/multer');
-const { scanPrescription,getMedicineSuggestions,getMedicineFullDetails, getMedicineCategories,getPharmacySubCategories,getMedicineCategoryDetails,getPharmacySearchSuggestions,getPharmacyNameSuggestions, getPharmacies, getPharmacyDetails,getTrendingMedicinesNearUser,getStandardMedicineCatalog,getMedicineVendors,
+const { pharmacyPrescriptionUploads,pharmacyReturnProofUploads } = require('../../../middleware/multer');
+const { scanPrescription,getMedicineSuggestions,getMedicineFullDetails, getMedicineCategories,getPharmacySubCategories,getMedicineCategoryDetails,getPharmacySearchSuggestions,getPharmacyNameSuggestions, getPharmacies, getPharmacyDetails,searchAlternateBrand,getTrendingMedicinesNearUser,getStandardMedicineCatalog,getMedicineVendors,
     getPharmacySlots,getPharmacyDeliveryCharges,checkoutMedicineOrder,getPharmacyAvailableCoupons,validateCoupon,uploadPrescription,cancelMedicineOrder, placeOrder,verifyPharmacyPayment,getOrderHistory,trackOrder,
 getLatestAddedMedicines,getNonPrescriptionMedicines,getHighestDiscountMedicines,
 
 createPrescriptionRequest,payAndConfirmOrder,verifyPrescriptionRequestPayment,
  getUserPrescriptionRequests, getUserPrescriptionRequestDetails,estimateRxPrices,
 
-getActiveStoreComboOffers,getGlobalActiveComboOffers,getComboOfferDetails,ratePharmacyOrder
+getActiveStoreComboOffers,getGlobalActiveComboOffers,getComboOfferDetails,ratePharmacyOrder,
+getSimilarInStockMedicines,
+requestPharmacyOrderReturn,cancelReturnRequestByCustomer,
+retryPharmacyPayment
 } = require('../../../controllers/user/Pharmacy/BookPharmacy');
 
 // Base URL: /user/pharmacy
@@ -23,18 +26,19 @@ router.post('/scan-rx',
 router.post('/search-suggestions', getMedicineSuggestions);
 router.get('/full-details/:id', getMedicineFullDetails);
 
-router.get('/categories', getMedicineCategories);  //  6
+router.get('/categories', getMedicineCategories);
 router.get('/sub-categories', getPharmacySubCategories);
-router.get('/category-details', getMedicineCategoryDetails);  // 2
+router.get('/category-details', getMedicineCategoryDetails);
 
-router.get('/standard-list', getStandardMedicineCatalog); // get all list medicine   7
+router.get('/standard-list', getStandardMedicineCatalog); // get all list medicine
 router.post('/trending-medicines', getTrendingMedicinesNearUser); // Get trending medicines near user
-router.get('/medicine-details/:medicineId', getMedicineVendors); // Get medcine by id   3
+router.get('/medicine-details/:medicineId', getMedicineVendors); // Get medcine by id
+router.get('/search-alternate', searchAlternateBrand);
 
 router.get('/search-suggestions', getPharmacySearchSuggestions);
-router.get('/pharmacy-suggestions', getPharmacyNameSuggestions);   // 5
-router.post('/list', getPharmacies); // Search & Filter     1
-router.get('/details/:id', getPharmacyDetails); // Profile Detail  4
+router.get('/pharmacy-suggestions', getPharmacyNameSuggestions);
+router.post('/list', getPharmacies); // Search & Filter
+router.get('/details/:id', getPharmacyDetails); // Profile Detail
 
 
 
@@ -119,5 +123,20 @@ router.get(
     '/global-combo-offers', 
     getGlobalActiveComboOffers
 );
+
+router.get(
+    '/medicine-details/:medicineId/substitutes', 
+    getSimilarInStockMedicines
+);
+
+router.post(
+    '/orders/return-request/:orderId', 
+    protect('user'), 
+    pharmacyReturnProofUploads, 
+    requestPharmacyOrderReturn
+);
+router.post('/orders/return-request/cancel/:orderId', protect('user'), cancelReturnRequestByCustomer);
+
+router.post('/retry-payment', protect('user'), retryPharmacyPayment);
 
 module.exports = router;
