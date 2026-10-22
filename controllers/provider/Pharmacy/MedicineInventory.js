@@ -358,11 +358,11 @@ const requestMrpIncrease = async (req, res) => {
             reason: reason || "New batch arrived with higher printed MRP price."
         };
 
-        // Create Master Request Document
+        // 🌟 FIX: requestType ko 'MRP_Increase' kiya gaya hai
         const newRequest = await MasterRequest.create({
             vendorId: pharmacyId,
             vendorType: 'Pharmacy',
-            requestType: 'Medicine',
+            requestType: 'MRP_Increase', // 👈 Ab ye pure Medicine me nahi jayegi
             data: requestData
         });
 

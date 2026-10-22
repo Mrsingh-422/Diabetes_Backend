@@ -258,10 +258,12 @@ const getMedicineDetails = async (req, res) => {
 // Endpoint: GET /admin/pharmacy/medicine/requests/pending
 const getPendingMedicineRequests = async (req, res) => {
     try {
+        // 🌟 FIX: 'data.medicineId': { $exists: false } laga diya taaki sirf Nayi dawaiyan hi aayein
         const requests = await MasterRequest.find({ 
             vendorType: 'Pharmacy', 
             requestType: 'Medicine', 
-            status: 'Pending' 
+            status: 'Pending',
+            'data.medicineId': { $exists: false } // 👈 Price hike requests yahan kabhi nahi aayengi
         }).populate('vendorId', 'name email phone');
 
         res.json({ success: true, count: requests.length, data: requests });
@@ -269,7 +271,6 @@ const getPendingMedicineRequests = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
-
 // --- 9. APPROVE MEDICINE REQUEST (Moves data to Master Collection) ---
 // Endpoint: PUT /admin/pharmacy/medicine/requests/approve/:requestId
 const approveMedicineRequest = async (req, res) => {
@@ -324,17 +325,20 @@ const rejectMedicineRequest = async (req, res) => {
 };
 
 
-// 1. GET ALL MEDICINE REQUESTS FOR ADMIN (With Status Filter & Pagination)
-// Endpoint: GET /admin/pharmacy/requests?status=Pending&page=1
+// 1. GET ALL PRICE HIKE REQUESTS FOR ADMIN (Only MRP Increase Requests)
+// Endpoint: GET /admin/pharmacy/medicine/increase/requests?status=Pending&page=1
 const getAdminMedicineRequests = async (req, res) => {
     try {
         const { status, page = 1, limit = 20 } = req.query;
         const skip = (parseInt(page) - 1) * limit;
 
-        // Filter strictly for Pharmacy vendor requests of type Medicine
+        // 🌟 FIX: Strictly MRP Increase requests filter
         let query = { 
             vendorType: 'Pharmacy', 
-            requestType: 'Medicine' 
+            $or: [
+                { requestType: 'MRP_Increase' },
+                { requestType: 'Medicine', 'data.medicineId': { $exists: true } } // Purane records ka backup
+            ]
         };
 
         if (status) {
@@ -342,7 +346,7 @@ const getAdminMedicineRequests = async (req, res) => {
         }
 
         const requests = await MasterRequest.find(query)
-            .populate('vendorId', 'name email phone city state address') // Populates Pharmacy Store details
+            .populate('vendorId', 'name email phone city state address')
             .sort({ createdAt: -1 })
             .skip(skip)
             .limit(parseInt(limit));
