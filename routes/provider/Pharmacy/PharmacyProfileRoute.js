@@ -2,10 +2,14 @@ const express = require('express');
 const router = express.Router();
 const { protect } = require('../../../middleware/authMiddleware');
 const { pharmacyDocUploads } = require('../../../middleware/multer');
-const { getPharmacyProfile, updatePharmacyProfile,changePharmacyPassword, getMyMedicines,getLatestPharmacyProfileRequest } = require('../../../controllers/provider/Pharmacy/PharmacyProfile');
+const { getPharmacyProfile, updatePharmacyProfile,changePharmacyPassword, 
+    getMyMedicines,getLatestPharmacyProfileRequest,getPharmacyBasicDetails } = require('../../../controllers/provider/Pharmacy/PharmacyProfile');
 
 // Base URL: /provider/pharmacy/profile
 
+
+// 🌟 1. Basic/Mini Profile (name, email, phone, profileImage, role)
+router.get('/basic', protect('pharmacy'), getPharmacyBasicDetails);
 // GET Request to fetch own profile
 router.get('/', protect('pharmacy'), getPharmacyProfile);
 

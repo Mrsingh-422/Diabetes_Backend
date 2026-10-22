@@ -2,7 +2,9 @@ const express = require('express');
 const router = express.Router();
 const { protect } = require('../../../middleware/authMiddleware');
 const { pharmacyPrescriptionUploads,pharmacyReturnProofUploads } = require('../../../middleware/multer');
-const { scanPrescription,getMedicineSuggestions,getMedicineFullDetails, getMedicineCategories,getPharmacySubCategories,getMedicineCategoryDetails,getPharmacySearchSuggestions,getPharmacyNameSuggestions, getPharmacies, getPharmacyDetails,searchAlternateBrand,getTrendingMedicinesNearUser,getStandardMedicineCatalog,getMedicineVendors,
+const { scanPrescription,getMedicineSuggestions,
+    // getMedicineFullDetails,
+     getMedicineCategories,getPharmacySubCategories,getMedicineCategoryDetails,getPharmacySearchSuggestions,getPharmacyNameSuggestions, getPharmacies, getPharmacyDetails,searchAlternateBrand,getTrendingMedicinesNearUser,getStandardMedicineCatalog,getMedicineVendors,
     getPharmacySlots,getPharmacyDeliveryCharges,checkoutMedicineOrder,getPharmacyAvailableCoupons,validateCoupon,uploadPrescription,cancelMedicineOrder, placeOrder,verifyPharmacyPayment,getOrderHistory,trackOrder,
 getLatestAddedMedicines,getNonPrescriptionMedicines,getHighestDiscountMedicines,
 
@@ -24,7 +26,7 @@ router.post('/scan-rx',
 );
 // --- API 1: GET MEDICINE SUGGESTIONS (Search Bar) ---
 router.post('/search-suggestions', getMedicineSuggestions);
-router.get('/full-details/:id', getMedicineFullDetails);
+// router.get('/full-details/:id', getMedicineFullDetails);
 
 router.get('/categories', getMedicineCategories);
 router.get('/sub-categories', getPharmacySubCategories);
@@ -37,6 +39,7 @@ router.get('/search-alternate', searchAlternateBrand);
 
 router.get('/search-suggestions', getPharmacySearchSuggestions);
 router.get('/pharmacy-suggestions', getPharmacyNameSuggestions);
+
 router.post('/list', getPharmacies); // Search & Filter
 router.get('/details/:id', getPharmacyDetails); // Profile Detail
 

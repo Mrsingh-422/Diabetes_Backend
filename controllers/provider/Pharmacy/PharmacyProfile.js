@@ -209,11 +209,53 @@ const changePharmacyPassword = async (req, res) => {
     }
 };
 
+// ==========================================
+// 🌟 GET PHARMACY BASIC PROFILE (Header / Mini Profile)
+// Endpoint: GET /provider/pharmacy/profile/basic
+// ==========================================
+const getPharmacyBasicDetails = async (req, res) => {
+    try {
+        const pharmacyId = req.user?.id || req.user?._id;
 
+        const pharmacy = await Pharmacy.findById(pharmacyId)
+            .select('name email phone profileImage role')
+            .lean();
+
+        if (!pharmacy) {
+            return res.status(404).json({ 
+                success: false, 
+                message: "Pharmacy not found." 
+            });
+        }
+
+        //  Clean Image URL Path (Removes 'public' and converts '\\' to '/')
+        if (pharmacy.profileImage) {
+            let cleanPath = pharmacy.profileImage.replace(/\\/g, "/"); // Windows '\\' to '/'
+            cleanPath = cleanPath.replace(/^public\//, "");            // 'public/' hata diya
+            if (!cleanPath.startsWith("/")) {
+                cleanPath = "/" + cleanPath;                          // '/uploads/...' format ensure kiya
+            }
+            pharmacy.profileImage = cleanPath;
+        }
+
+        res.status(200).json({
+            success: true,
+            data: pharmacy
+        });
+
+    } catch (error) {
+        console.error("getPharmacyBasicDetails Error:", error);
+        res.status(500).json({ 
+            success: false, 
+            message: error.message || "Internal Server Error" 
+        });
+    }
+};
 module.exports = { 
     getPharmacyProfile, 
     updatePharmacyProfile, 
     changePharmacyPassword,
+    getPharmacyBasicDetails,
 
     getMyMedicines,
     getLatestPharmacyProfileRequest

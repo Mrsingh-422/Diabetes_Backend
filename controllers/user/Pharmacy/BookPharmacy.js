@@ -461,88 +461,141 @@ const getMedicineSuggestions = async (req, res) => {
 
 // --- API 2: GET FULL MEDICINE DETAILS (Click karne par) ---
 // GET /user/pharmacy/full-details/:id
-const getMedicineFullDetails = async (req, res) => {
-    try {
-        const medicineId = req.params.id || req.params.medicineId;
-        const medicine = await Medicine.findById(medicineId).lean();
-        if (!medicine) return res.status(404).json({ success: false, message: "Medicine not found" });
+// const getMedicineFullDetails = async (req, res) => {
+//     try {
+//         const medicineId = req.params.id || req.params.medicineId;
+//         const medicine = await Medicine.findById(medicineId).lean();
+//         if (!medicine) return res.status(404).json({ success: false, message: "Medicine not found" });
 
-        // Dynamic Alternate Brands
-        if (medicine.salt_composition) {
-            const similarMeds = await Medicine.find({
-                salt_composition: medicine.salt_composition,
-                _id: { $ne: medicine._id }
-            }).select('name manufacturers mrp best_price discont_percent').limit(6).lean();
+//         // Dynamic Alternate Brands
+//         if (medicine.salt_composition) {
+//             const similarMeds = await Medicine.find({
+//                 salt_composition: medicine.salt_composition,
+//                 _id: { $ne: medicine._id }
+//             }).select('name manufacturers mrp best_price discont_percent').limit(6).lean();
 
-            if (similarMeds.length > 0) {
-                const formattedAlts = similarMeds.map(med => {
-                    const price = med.best_price || med.mrp || "0";
-                    const discount = med.discont_percent && med.discont_percent !== "0%" 
-                        ? `save ${med.discont_percent}` 
-                        : "same price";
-                    return `${med.name} :: ${med.manufacturers || 'N/A'} :: ${price}/Tablet :: ${discount}`;
-                }).join(' | ');
+//             if (similarMeds.length > 0) {
+//                 const formattedAlts = similarMeds.map(med => {
+//                     const price = med.best_price || med.mrp || "0";
+//                     const discount = med.discont_percent && med.discont_percent !== "0%" 
+//                         ? `save ${med.discont_percent}` 
+//                         : "same price";
+//                     return `${med.name} :: ${med.manufacturers || 'N/A'} :: ${price}/Tablet :: ${discount}`;
+//                 }).join(' | ');
 
-                medicine.alternate_brand = formattedAlts;
-            }
-        }
+//                 medicine.alternate_brand = formattedAlts;
+//             }
+//         }
 
-        const bestOffer = await MedicineInventory.findOne({ medicineId: medicine._id, is_available: true, stock_quantity: { $gt: 0 } })
-            .sort({ vendor_price: 1 })
-            .lean();
+//         // 🌟 1. Fetch cheapest active batch & populate pharmacy store details
+//         const bestOffer = await MedicineInventory.findOne({ 
+//             medicineId: medicine._id, 
+//             is_available: true, 
+//             stock_quantity: { $gt: 0 } 
+//         })
+//         .populate('pharmacyId', 'name city state rating profileImage phone isHomeDeliveryAvailable is24x7')
+//         .sort({ vendor_price: 1 })
+//         .lean();
 
-        // 🚨 Dynamic Admin Return Policy Days Lookup
-        const PharmacyReturnConfig = require('../../../models/PharmacyReturnConfig');
-        let returnConfig = await PharmacyReturnConfig.findOne({ vendorType: 'Pharmacy' });
-        const adminWindowDays = returnConfig?.returnWindowDays || 3;
+//         // 🚨 Dynamic Admin Return Policy Days Lookup
+//         const PharmacyReturnConfig = require('../../../models/PharmacyReturnConfig');
+//         let returnConfig = await PharmacyReturnConfig.findOne({ vendorType: 'Pharmacy' });
+//         const adminWindowDays = returnConfig?.returnWindowDays || 3;
 
-        const lowestPrice = bestOffer ? bestOffer.vendor_price : null;
-        const batchMrp = bestOffer ? Number(bestOffer.mrp || 0) : Number(medicine.mrp || 0);
+//         const lowestPrice = bestOffer ? bestOffer.vendor_price : null;
+//         const batchMrp = bestOffer ? Number(bestOffer.mrp || 0) : Number(medicine.mrp || 0);
 
-        if (lowestPrice !== null) {
-            medicine.mrp = batchMrp.toString();
-            medicine.best_price = lowestPrice.toString();
-            if (batchMrp > 0) {
-                medicine.discont_percent = `${Math.round(((batchMrp - lowestPrice) / batchMrp) * 100)}%`;
-            }
+//         if (lowestPrice !== null) {
+//             medicine.mrp = batchMrp.toString();
+//             medicine.best_price = lowestPrice.toString();
+//             medicine.vendor_price = lowestPrice;
+
+//             if (batchMrp > 0) {
+//                 medicine.discont_percent = `${Math.round(((batchMrp - lowestPrice) / batchMrp) * 100)}%`;
+//             }
             
-            medicine.isReturnAllowed = Boolean(bestOffer.isReturnAllowed);
-            medicine.isReplacementAllowed = Boolean(bestOffer.isReplacementAllowed);
-            medicine.returnWindowDays = adminWindowDays; // 👈 Dynamic Days Number
-            // 🚨 FULLY DYNAMIC TEMPLATE STRING
-            medicine.returnPolicyText = medicine.isReturnAllowed 
-                ? `${adminWindowDays} Days Return/Replacement Available` 
-                : "Non-Returnable Product";
-        } else {
-            medicine.isReturnAllowed = false;
-            medicine.isReplacementAllowed = false;
-            medicine.returnWindowDays = adminWindowDays;
-            medicine.returnPolicyText = "Non-Returnable Product";
-        }
+//             // =========================================================================
+//             // 📦 NEW: INVENTORY & BATCH DETAILS MAPPED FROM MONGO (Matching Screenshot)
+//             // =========================================================================
+//             medicine.inventoryId = bestOffer._id;
+//             medicine.batch_number = bestOffer.batch_number || null;
+//             medicine.hsn_number = bestOffer.hsn_number || null;
+//             medicine.stock_quantity = bestOffer.stock_quantity || 0;
+            
+//             // Raw Dates
+//             medicine.manufacturing_date = bestOffer.manufacturing_date || null;
+//             medicine.expiry_date = bestOffer.expiry_date || null;
 
-        const substitutes = await Medicine.find({ 
-            salt_composition: medicine.salt_composition, 
-            _id: { $ne: medicine._id } 
-        }).limit(3).lean();
+//             // Formatted UI Friendly Dates (e.g., "10/2026", "10/2029")
+//             medicine.mfg_formatted = bestOffer.manufacturing_date ? moment(bestOffer.manufacturing_date).format('MM/YYYY') : "N/A";
+//             medicine.exp_formatted = bestOffer.expiry_date ? moment(bestOffer.expiry_date).format('MM/YYYY') : "N/A";
 
-        const frequentlyBought = await Medicine.find({ 
-            bread_crumb: medicine.bread_crumb, 
-            _id: { $ne: medicine._id } 
-        }).limit(4).lean();
+//             // Pharmacy Details (Store Offering this Batch)
+//             medicine.pharmacyId = bestOffer.pharmacyId?._id || bestOffer.pharmacyId || null;
+//             medicine.pharmacyName = bestOffer.pharmacyId?.name || null;
+//             medicine.pharmacy = bestOffer.pharmacyId ? {
+//                 id: bestOffer.pharmacyId._id,
+//                 name: bestOffer.pharmacyId.name,
+//                 city: bestOffer.pharmacyId.city,
+//                 state: bestOffer.pharmacyId.state,
+//                 rating: bestOffer.pharmacyId.rating,
+//                 profileImage: bestOffer.pharmacyId.profileImage,
+//                 isHomeDeliveryAvailable: bestOffer.pharmacyId.isHomeDeliveryAvailable,
+//                 is24x7: bestOffer.pharmacyId.is24x7
+//             } : null;
 
-        res.json({
-            success: true,
-            data: {
-                details: medicine, 
-                frequentlyBought,
-                substitutes,
-                isAvailable: lowestPrice !== null
-            }
-        });
-    } catch (error) { 
-        res.status(500).json({ success: false, message: error.message }); 
-    }
-};
+//             // Return & Replacement policy permissions
+//             medicine.isReturnAllowed = Boolean(bestOffer.isReturnAllowed);
+//             medicine.isReplacementAllowed = Boolean(bestOffer.isReplacementAllowed);
+//             medicine.returnWindowDays = adminWindowDays; // 👈 Dynamic Days Number
+            
+//             // Dynamic Policy text for UI Badge
+//             medicine.returnPolicyText = medicine.isReturnAllowed 
+//                 ? `${adminWindowDays} Days Return/Replacement Available` 
+//                 : "Non-Returnable Product";
+//         } else {
+//             // Safe fallback agar stock available na ho
+//             medicine.inventoryId = null;
+//             medicine.batch_number = null;
+//             medicine.hsn_number = null;
+//             medicine.stock_quantity = 0;
+//             medicine.manufacturing_date = null;
+//             medicine.expiry_date = null;
+//             medicine.mfg_formatted = "N/A";
+//             medicine.exp_formatted = "N/A";
+//             medicine.pharmacyId = null;
+//             medicine.pharmacyName = null;
+//             medicine.pharmacy = null;
+//             medicine.vendor_price = null;
+//             medicine.isReturnAllowed = false;
+//             medicine.isReplacementAllowed = false;
+//             medicine.returnWindowDays = adminWindowDays;
+//             medicine.returnPolicyText = "Non-Returnable Product";
+//         }
+
+//         const substitutes = await Medicine.find({ 
+//             salt_composition: medicine.salt_composition, 
+//             _id: { $ne: medicine._id } 
+//         }).limit(3).lean();
+
+//         const frequentlyBought = await Medicine.find({ 
+//             bread_crumb: medicine.bread_crumb, 
+//             _id: { $ne: medicine._id } 
+//         }).limit(4).lean();
+
+//         res.json({
+//             success: true,
+//             data: {
+//                 details: medicine, 
+//                 frequentlyBought,
+//                 substitutes,
+//                 isAvailable: lowestPrice !== null
+//             }
+//         });
+//     } catch (error) { 
+//         res.status(500).json({ success: false, message: error.message }); 
+//     }
+// };
 
 
 const getMedicineCategories = async (req, res) => {
@@ -1062,8 +1115,10 @@ const parseNumericPrice = (rawPrice) => {
     }
     return 0;
 };
-// GET STANDARD MEDICINE CATALOG (With Robust MRP Sanitization, Active Vendor MinPrice & Fallbacks)
-// endpoint: GET /user/pharmacy/standard-list?page=1&limit=20&search=...&category=...
+// =========================================================================
+//  GET STANDARD MEDICINE CATALOG (In-Stock First, Out-of-Stock Last)
+// Endpoint: GET /user/pharmacy/standard-list?page=1&limit=20&search=...&category=...
+// =========================================================================
 const getStandardMedicineCatalog = async (req, res) => {
     try {
         const page = Math.max(1, parseInt(req.query.page) || 1);
@@ -1078,7 +1133,7 @@ const getStandardMedicineCatalog = async (req, res) => {
             query.bread_crumb = { $regex: new RegExp("^" + category.trim(), "i") };
         }
 
-        // 2. Search Keyword Filter
+        // 2. Search Keyword Filter (Regex safe)
         if (search && search.trim() !== "") {
             const cleanSearch = search.trim().replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
             query.$or = [
@@ -1090,16 +1145,57 @@ const getStandardMedicineCatalog = async (req, res) => {
 
         const total = await Medicine.countDocuments(query);
 
-        // Fetch master medicines
-        const medicines = await Medicine.find(query)
-            .sort({ name: 1 })
-            .skip(skip)
-            .limit(limit)
-            .lean();
+        // 3. 🔍 Find All Medicine IDs Currently IN-STOCK in Approved Active Pharmacies
+        const PharmacyModel = mongoose.models.Pharmacy || require('../../../models/Pharmacy');
+        const activePharmacies = await PharmacyModel.find({ 
+            isActive: true, 
+            profileStatus: 'Approved' 
+        }).select('_id').lean();
 
-        // 3. High-Performance Inventory & Price Resolver
+        const activePharmacyIds = activePharmacies.map(p => p._id);
+
+        const inStockMedicineIds = await MedicineInventory.find({
+            pharmacyId: { $in: activePharmacyIds },
+            is_available: true,
+            stock_quantity: { $gt: 0 }
+        }).distinct('medicineId');
+
+        // 4. 🚀 Aggregation Pipeline: In-Stock Medicines First (1), Out-of-Stock Later (0)
+        const pipeline = [
+            { $match: query },
+            {
+                $addFields: {
+                    inStockPriority: {
+                        $cond: {
+                            if: { $in: ["$_id", inStockMedicineIds] },
+                            then: 1, // In-Stock items get top priority
+                            else: 0  // Out-of-Stock items get lower priority
+                        }
+                    }
+                }
+            },
+            {
+                $sort: {
+                    inStockPriority: -1, // 👈 1 (In-Stock) pehle aayenge, 0 (Out-of-Stock) baad mein
+                    name: 1              // A-Z alphabetical secondary sort
+                }
+            },
+            { $skip: skip },
+            { $limit: limit }
+        ];
+
+        const medicines = await Medicine.aggregate(pipeline);
+
+        // Helper function for price sanitization fallback
+        const parsePrice = (val) => {
+            if (!val) return 0;
+            if (typeof val === 'number') return val;
+            const cleaned = String(val).replace(/[^0-9.]/g, '');
+            return parseFloat(cleaned) || 0;
+        };
+
+        // 5. Batch Inventory & Price Resolver for the Paginated 20 Items
         const enrichedMedicines = await Promise.all(medicines.map(async (med) => {
-            // Find active stock batches across all approved pharmacies
             const activeBatches = await MedicineInventory.find({
                 medicineId: med._id,
                 is_available: true,
@@ -1114,9 +1210,8 @@ const getStandardMedicineCatalog = async (req, res) => {
                 b => b.pharmacyId && b.pharmacyId.isActive !== false && b.pharmacyId.profileStatus === 'Approved'
             );
 
-            // 🚨 MULTI-TIER MRP RESOLUTION (Guarantees MRP is NEVER 0 or null)
-            let masterMrp = parseNumericPrice(med.mrp);
-            let masterBestPrice = parseNumericPrice(med.best_price);
+            let masterMrp = typeof parseNumericPrice === 'function' ? parseNumericPrice(med.mrp) : parsePrice(med.mrp);
+            let masterBestPrice = typeof parseNumericPrice === 'function' ? parseNumericPrice(med.best_price) : parsePrice(med.best_price);
             let lowestVendorPrice = null;
             let batchMrp = 0;
             let lowestBatch = null;
@@ -1124,30 +1219,25 @@ const getStandardMedicineCatalog = async (req, res) => {
             if (validBatches.length > 0) {
                 lowestBatch = validBatches[0];
                 lowestVendorPrice = Number(lowestBatch.vendor_price || 0);
-                batchMrp = parseNumericPrice(lowestBatch.mrp);
+                batchMrp = typeof parseNumericPrice === 'function' ? parseNumericPrice(lowestBatch.mrp) : parsePrice(lowestBatch.mrp);
             }
 
-            // Fallback hierarchy:
-            // 1. Batch MRP (Real printed price entered by vendor)
-            // 2. Master Catalog MRP
-            // 3. Master Best Price / Selling Price
+            // Fallback hierarchy: Batch MRP -> Master MRP -> Best Price -> Vendor Price -> 50
             let finalMrp = batchMrp > 0 ? batchMrp : (masterMrp > 0 ? masterMrp : (masterBestPrice > 0 ? masterBestPrice : (lowestVendorPrice || 50)));
-            
-            // Final Selling Price (minPrice)
             let finalSellingPrice = lowestVendorPrice !== null && lowestVendorPrice > 0 
                 ? lowestVendorPrice 
                 : (masterBestPrice > 0 ? masterBestPrice : finalMrp);
 
-            // If selling price exceeds MRP, adjust MRP upward for consistency
             if (finalSellingPrice > finalMrp) {
                 finalMrp = finalSellingPrice;
             }
 
-            // Calculate Discount Percentage
             let discountPercentage = 0;
             if (finalMrp > 0 && finalSellingPrice < finalMrp) {
                 discountPercentage = Math.round(((finalMrp - finalSellingPrice) / finalMrp) * 100);
             }
+
+            const isAvailable = validBatches.length > 0;
 
             return {
                 _id: med._id,
@@ -1160,15 +1250,15 @@ const getStandardMedicineCatalog = async (req, res) => {
                 isRxRequired: String(med.prescription_required).toUpperCase() === 'YES',
                 bread_crumb: med.bread_crumb || "",
                 
-                // 💰 100% SANITIZED & SYNCHRONIZED PRICING FIELDS
-                mrp: Number(finalMrp.toFixed(2)),                        // 👈 Clean Numeric MRP (e.g. 120.00)
-                minPrice: Number(finalSellingPrice.toFixed(2)),           // 👈 Clean Numeric Selling Price (e.g. 95.00)
-                best_price: Number(finalSellingPrice.toFixed(2)).toString(), // String alias for backward compatibility
-                discountPercentage: discountPercentage,                   // 👈 Numeric Percentage (e.g. 21)
-                discont_percent: `${discountPercentage}% OFF`,            // String alias (e.g. "21% OFF")
+                // Pricing
+                mrp: Number(finalMrp.toFixed(2)),
+                minPrice: Number(finalSellingPrice.toFixed(2)),
+                best_price: Number(finalSellingPrice.toFixed(2)).toString(),
+                discountPercentage: discountPercentage,
+                discont_percent: `${discountPercentage}% OFF`,
                 
-                // Inventory & Seller metadata
-                isAvailable: validBatches.length > 0,
+                // Availability Status
+                isAvailable: isAvailable,
                 availableSellersCount: validBatches.length,
                 cheapestSeller: lowestBatch ? {
                     pharmacyId: lowestBatch.pharmacyId._id,
@@ -1179,6 +1269,12 @@ const getStandardMedicineCatalog = async (req, res) => {
                 } : null
             };
         }));
+
+        // 6. Strict Array-Level In-Stock Sorting
+        enrichedMedicines.sort((a, b) => {
+            if (a.isAvailable === b.isAvailable) return 0;
+            return a.isAvailable ? -1 : 1;
+        });
 
         res.status(200).json({
             success: true,
@@ -1207,16 +1303,21 @@ const getMedicineVendors = async (req, res) => {
         const { medicineId } = req.params;
         const today = new Date();
         
+        // Check karein kya user ne real GPS coordinates bheje hain
+        const hasUserGPS = Boolean((req?.body?.lat || req?.query?.lat) && (req?.body?.lng || req?.query?.lng));
         const filterLat = req?.body?.lat || req?.query?.lat || DEFAULT_LAT;
         const filterLng = req?.body?.lng || req?.query?.lng || DEFAULT_LNG;
 
-        const medObjectId = new mongoose.Types.ObjectId(medicineId);
+        const medObjectId = mongoose.isValidObjectId(medicineId) 
+            ? new mongoose.Types.ObjectId(medicineId) 
+            : medicineId;
+
         const masterMedicine = await Medicine.findById(medObjectId).lean();
         if (!masterMedicine) return res.status(404).json({ success: false, message: "Medicine not found" });
 
         const isPharmacyCodAvailable = await isCodEnabled('Pharmacy', req?.user ? req.user.id : null);
 
-        // Dynamic Alternate Brands Enrichment
+        // Dynamic Alternate Brands Enrichment (Intact)
         if (masterMedicine.salt_composition) {
             const similarMeds = await Medicine.find({
                 salt_composition: masterMedicine.salt_composition,
@@ -1239,14 +1340,18 @@ const getMedicineVendors = async (req, res) => {
         const limitConfig = await VendorKMLimit.findOne({ vendorType: 'Pharmacy', isActive: true });
         const maxRadius = limitConfig ? limitConfig.kmLimit : 100;
 
+        // 🛡️ CRASH-PROOF QUERY: Supports both ObjectId & String IDs
         const inventoryRecords = await MedicineInventory.find({
-            $or: [{ medicineId: medObjectId }, { name: masterMedicine.name }],
+            $or: [
+                { medicineId: medObjectId },
+                { medicineId: String(medicineId) },
+                { name: masterMedicine.name }
+            ],
             stock_quantity: { $gt: 0 },
             is_available: true
         })
         .populate({
             path: 'pharmacyId',
-            match: { profileStatus: 'Approved', isActive: true },
             select: 'name profileImage rating totalReviews location city state address isHomeDeliveryAvailable is24x7 profileStatus isActive'
         })
         .lean();
@@ -1257,24 +1362,40 @@ const getMedicineVendors = async (req, res) => {
 
         for (let item of inventoryRecords) {
             if (!item.pharmacyId) continue;
+            
+            // Inactive pharmacies ko filter karein (Rejected ko chhod kar active allow karein)
+            if (item.pharmacyId.isActive === false || item.pharmacyId.profileStatus === 'Rejected') {
+                continue;
+            }
 
             const pharmacy = item.pharmacyId;
             const pharmacyIdStr = pharmacy._id.toString();
+            
             let distance = null;
+            const pharmLat = Number(pharmacy.location?.lat || 0);
+            const pharmLng = Number(pharmacy.location?.lng || 0);
 
-            if (pharmacy.location && typeof pharmacy.location.lat !== 'undefined') {
+            // Sirf tab distance nikalein jab user ka GPS ho aur pharmacy ke non-zero coordinates hon
+            if (hasUserGPS && pharmLat !== 0 && pharmLng !== 0) {
                 distance = await getDistance(
                     parseFloat(filterLat), 
                     parseFloat(filterLng), 
-                    parseFloat(pharmacy.location.lat), 
-                    parseFloat(pharmacy.location.lng)
+                    pharmLat, 
+                    pharmLng
                 );
             }
 
-            if (distance !== null && distance <= maxRadius) {
+            // 🌟 SMART DISTANCE LOGIC:
+            // Agar user ne GPS nahi bheja ya pharmacy default (0,0) par hai, toh block mat karo!
+            const isWithinRadius = (distance !== null && distance <= maxRadius);
+            const shouldInclude = !hasUserGPS || (pharmLat === 0 && pharmLng === 0) || isWithinRadius;
+
+            if (shouldInclude) {
                 if (minPriceFound === null || item.vendor_price < minPriceFound) {
                     minPriceFound = item.vendor_price;
                 }
+
+                const batchMrp = item.mrp || Number(masterMedicine.mrp || 0);
 
                 if (pharmacyMap.has(pharmacyIdStr)) {
                     const existingIndex = pharmacyMap.get(pharmacyIdStr);
@@ -1282,18 +1403,29 @@ const getMedicineVendors = async (req, res) => {
                     
                     if (item.vendor_price < existingItem.price) {
                         existingItem.price = item.vendor_price;
+                        existingItem.vendor_price = item.vendor_price;
                         existingItem.mrp = item.mrp || existingItem.mrp;
                         existingItem.inventoryId = item._id;
                         existingItem.stock = item.stock_quantity;
+                        existingItem.stock_quantity = item.stock_quantity;
                         existingItem.discount = existingItem.mrp > item.vendor_price ? 
                             Math.round(((existingItem.mrp - item.vendor_price) / existingItem.mrp) * 100) : 0;
                         
+                        // 📦 Mongo Inventory Fields
+                        existingItem.batch_number = item.batch_number || existingItem.batch_number || null;
+                        existingItem.hsn_number = item.hsn_number || existingItem.hsn_number || null;
+                        existingItem.is_available = item.is_available ?? true;
+                        existingItem.manufacturing_date = item.manufacturing_date || item.mfg_date || null;
+                        existingItem.expiry_date = item.expiry_date || null;
+
                         existingItem.manufacturingDate = (item.manufacturing_date || item.mfg_date)
                             ? moment(item.manufacturing_date || item.mfg_date).format('MM/YYYY') 
                             : "N/A";
                         existingItem.expiryDate = item.expiry_date 
                             ? moment(item.expiry_date).format('MM/YYYY') 
                             : "N/A";
+                        existingItem.mfg_formatted = existingItem.manufacturingDate;
+                        existingItem.exp_formatted = existingItem.expiryDate;
 
                         existingItem.isReturnAllowed = Boolean(item.isReturnAllowed);
                         existingItem.isReplacementAllowed = Boolean(item.isReplacementAllowed);
@@ -1309,7 +1441,12 @@ const getMedicineVendors = async (req, res) => {
                         expiryDate: { $gte: today }
                     }).lean();
 
-                    const batchMrp = item.mrp || Number(masterMedicine.mrp || 0);
+                    const mfgFormatted = (item.manufacturing_date || item.mfg_date)
+                        ? moment(item.manufacturing_date || item.mfg_date).format('MM/YYYY') 
+                        : "N/A";
+                    const expFormatted = item.expiry_date 
+                        ? moment(item.expiry_date).format('MM/YYYY') 
+                        : "N/A";
 
                     availableInPharmacies.push({
                         pharmacyId: pharmacy._id,
@@ -1317,22 +1454,33 @@ const getMedicineVendors = async (req, res) => {
                         image: pharmacy.profileImage,
                         rating: pharmacy.rating,
                         totalReviews: pharmacy.totalReviews,
-                        address: `${pharmacy.city}, ${pharmacy.state}`,
-                        distance: distance.toFixed(1),
+                        address: `${pharmacy.city || ''}, ${pharmacy.state || ''}`.trim().replace(/^,|,$/g, ''),
+                        distance: distance !== null ? distance.toFixed(1) : "N/A",
                         price: item.vendor_price,
+                        vendor_price: item.vendor_price,
                         mrp: batchMrp,
                         discount: batchMrp > item.vendor_price ? 
                             Math.round(((batchMrp - item.vendor_price) / batchMrp) * 100) : 0,
                         stock: item.stock_quantity,
+                        stock_quantity: item.stock_quantity,
                         isHomeDelivery: pharmacy.isHomeDeliveryAvailable,
                         isOpen: pharmacy.is24x7 ? "Open 24/7" : "Open Now",
                         inventoryId: item._id,
-                        manufacturingDate: (item.manufacturing_date || item.mfg_date)
-                            ? moment(item.manufacturing_date || item.mfg_date).format('MM/YYYY') 
-                            : "N/A",
-                        expiryDate: item.expiry_date 
-                            ? moment(item.expiry_date).format('MM/YYYY') 
-                            : "N/A",
+
+                        // =====================================================================
+                        // 📦 MONGO INVENTORY FIELDS (From Screenshot)
+                        // =====================================================================
+                        batch_number: item.batch_number || null,
+                        hsn_number: item.hsn_number || null,
+                        is_available: item.is_available ?? true,
+                        manufacturing_date: item.manufacturing_date || item.mfg_date || null,
+                        expiry_date: item.expiry_date || null,
+                        
+                        manufacturingDate: mfgFormatted,
+                        expiryDate: expFormatted,
+                        mfg_formatted: mfgFormatted,
+                        exp_formatted: expFormatted,
+
                         isReturnAllowed: Boolean(item.isReturnAllowed),
                         isReplacementAllowed: Boolean(item.isReplacementAllowed),
                         comboOffer: activePromo ? {
@@ -1347,6 +1495,13 @@ const getMedicineVendors = async (req, res) => {
             }
         }
 
+        // Distance Sort (Jo "N/A" hain wo end me aayenge)
+        availableInPharmacies.sort((a, b) => {
+            if (a.distance === "N/A") return 1;
+            if (b.distance === "N/A") return -1;
+            return parseFloat(a.distance) - parseFloat(b.distance);
+        });
+
         if (minPriceFound !== null) {
             masterMedicine.best_price = minPriceFound.toString();
             const mrpNum = Number(masterMedicine.mrp || 0);
@@ -1355,9 +1510,6 @@ const getMedicineVendors = async (req, res) => {
             }
         }
 
-        availableInPharmacies.sort((a, b) => parseFloat(a.distance) - parseFloat(b.distance));
-
-        // 🚨 DYNAMIC ADMIN RETURN DAYS LOOKUP
         const PharmacyReturnConfig = require('../../../models/PharmacyReturnConfig');
         let returnConfig = await PharmacyReturnConfig.findOne({ vendorType: 'Pharmacy' });
         const adminWindowDays = returnConfig?.returnWindowDays || 3;
@@ -1365,15 +1517,26 @@ const getMedicineVendors = async (req, res) => {
         let isReturnAllowedSummary = false;
         let isReplacementAllowedSummary = false;
 
+        // Top seller batch details enrichment into medicineDetails
         if (availableInPharmacies.length > 0) {
-            isReturnAllowedSummary = availableInPharmacies[0].isReturnAllowed;
-            isReplacementAllowedSummary = availableInPharmacies[0].isReplacementAllowed;
+            const topSeller = availableInPharmacies[0];
+            isReturnAllowedSummary = topSeller.isReturnAllowed;
+            isReplacementAllowedSummary = topSeller.isReplacementAllowed;
+
+            masterMedicine.inventoryId = topSeller.inventoryId;
+            masterMedicine.batch_number = topSeller.batch_number;
+            masterMedicine.hsn_number = topSeller.hsn_number;
+            masterMedicine.stock_quantity = topSeller.stock_quantity;
+            masterMedicine.manufacturing_date = topSeller.manufacturing_date;
+            masterMedicine.expiry_date = topSeller.expiry_date;
+            masterMedicine.mfg_formatted = topSeller.mfg_formatted;
+            masterMedicine.exp_formatted = topSeller.exp_formatted;
+            masterMedicine.vendor_price = topSeller.vendor_price;
         }
 
         masterMedicine.isReturnAllowed = isReturnAllowedSummary;
         masterMedicine.isReplacementAllowed = isReplacementAllowedSummary;
-        masterMedicine.returnWindowDays = adminWindowDays; // 👈 Dynamic Number
-        // 🚨 FULLY DYNAMIC TEMPLATE STRING
+        masterMedicine.returnWindowDays = adminWindowDays;
         masterMedicine.returnPolicyText = isReturnAllowedSummary 
             ? `${adminWindowDays} Days Return/Replacement Available` 
             : "Non-Returnable Product";
@@ -1381,7 +1544,7 @@ const getMedicineVendors = async (req, res) => {
         res.json({
             success: true,
             maxRadius: `${maxRadius} km`,
-            locationApplied: (req?.body?.lat || req?.query?.lat) ? "User GPS" : "Delhi (Default)",
+            locationApplied: hasUserGPS ? "User GPS" : "All Locations (No GPS Provided)",
             count: availableInPharmacies.length,
             isCodAvailable: isPharmacyCodAvailable,
             data: { 
@@ -4565,7 +4728,9 @@ const retryPharmacyPayment = async (req, res) => {
 
 
 module.exports = {
-    scanPrescription, getMedicineSuggestions, getMedicineFullDetails, getMedicineCategories, getPharmacySubCategories, getMedicineCategoryDetails, getPharmacySearchSuggestions, getPharmacyNameSuggestions, getPharmacies, getPharmacyDetails, searchAlternateBrand, getTrendingMedicinesNearUser, getStandardMedicineCatalog, getMedicineVendors,
+    scanPrescription, getMedicineSuggestions, 
+    // getMedicineFullDetails,
+     getMedicineCategories, getPharmacySubCategories, getMedicineCategoryDetails, getPharmacySearchSuggestions, getPharmacyNameSuggestions, getPharmacies, getPharmacyDetails, searchAlternateBrand, getTrendingMedicinesNearUser, getStandardMedicineCatalog, getMedicineVendors,
     getPharmacySlots, getPharmacyDeliveryCharges, checkoutMedicineOrder, getPharmacyAvailableCoupons, validateCoupon, uploadPrescription, cancelMedicineOrder, placeOrder, verifyPharmacyPayment, getOrderHistory, trackOrder,
     getLatestAddedMedicines, getNonPrescriptionMedicines, getHighestDiscountMedicines, getActiveStoreComboOffers,
 

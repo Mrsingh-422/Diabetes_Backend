@@ -13,7 +13,7 @@ const normalizeVendorType = (user) => {
         if (r === 'doctor' || r === 'clinic-doctor') return 'Doctor';
         if (r === 'food') return 'Food';
         if (r === 'lab') return 'Lab';
-        if (r === 'pharmacy') return 'Pharmacy';
+        if (r === 'pharmacy' || r === 'clinic-pharmacy') return 'Pharmacy';
         if (r === 'ambulance' || r === 'clinic-ambulance') return 'Ambulance';
     }
     return 'Clinic';
