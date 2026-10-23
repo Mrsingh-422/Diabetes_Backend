@@ -20,6 +20,11 @@ const deliveryChargeSchema = new mongoose.Schema({
     country: { type: String, default: 'India', trim: true },
     state: { type: String, default: null, trim: true },
     city: { type: String, default: null, trim: true },
+    
+    isCodAvailable: { 
+        type: Boolean, 
+        default: true 
+    },
 
     fixedPrice: { type: Number, default: 40 },
     fixedDistance: { type: Number, default: 5 },

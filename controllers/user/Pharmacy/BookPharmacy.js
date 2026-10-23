@@ -1711,6 +1711,10 @@ const getPharmacySlots = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+// ==========================================
+// GET PHARMACY DELIVERY CHARGES (With Live COD Status)
+// Endpoint: GET /user/pharmacy/delivery-charges
+// ==========================================
 const getPharmacyDeliveryCharges = async (req, res) => {
     try {
         const userId = req.user.id;
@@ -1725,27 +1729,49 @@ const getPharmacyDeliveryCharges = async (req, res) => {
 
         const pharmacyId = cart.pharmacyCart.pharmacyId;
 
-        // Pharmacy specific delivery charges
-        let charges = await DeliveryCharge.findOne({ vendorId: pharmacyId });
+        // 1. Fetch pharmacy delivery settings
+        let charges = await DeliveryCharge.findOne({ vendorId: pharmacyId }).lean();
+
+        // 2. Check Admin Global Policy & User Subscription COD Guarantee
+        const isPlatformCodEnabled = await isCodEnabled('Pharmacy', userId);
+
+        // 3. Vendor Store Level COD Check (Default true agar vendor ne set nahi kiya)
+        const isStoreCodEnabled = charges ? (charges.isCodAvailable !== false) : true;
+
+        // Final Decision: Dono true hone chahiye
+        const finalCodStatus = Boolean(isPlatformCodEnabled && isStoreCodEnabled);
 
         if (!charges) {
             return res.json({
                 success: true,
                 isDefault: true,
                 data: {
-                    fixedPrice: 40,           // Standard Delivery Fee
-                    fastDeliveryExtra: 29,    // Rapid 1-hour delivery extra
-                    minOrderForFreeDelivery: 500
+                    fixedPrice: 40,
+                    fastDeliveryExtra: 29,
+                    freeDeliveryThreshold: 500,
+                    isRapidAvailable: true,
+                    // 🌟 Frontend Compatibility Keys (Dono formats added)
+                    isCodAvailable: finalCodStatus,
+                    isCODAvailable: finalCodStatus
                 }
             });
         }
 
-        res.json({ success: true, data: charges });
+        // Return charges with both casing formats for frontend safety
+        res.json({ 
+            success: true, 
+            data: {
+                ...charges,
+                isCodAvailable: finalCodStatus,
+                isCODAvailable: finalCodStatus // 👈 Frontend ke liye added
+            } 
+        });
 
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
 const getPharmacyAvailableCoupons = async (req, res) => {
     try {
         const userId = req.user.id;
@@ -4731,7 +4757,7 @@ module.exports = {
     scanPrescription, getMedicineSuggestions, 
     // getMedicineFullDetails,
      getMedicineCategories, getPharmacySubCategories, getMedicineCategoryDetails, getPharmacySearchSuggestions, getPharmacyNameSuggestions, getPharmacies, getPharmacyDetails, searchAlternateBrand, getTrendingMedicinesNearUser, getStandardMedicineCatalog, getMedicineVendors,
-    getPharmacySlots, getPharmacyDeliveryCharges, checkoutMedicineOrder, getPharmacyAvailableCoupons, validateCoupon, uploadPrescription, cancelMedicineOrder, placeOrder, verifyPharmacyPayment, getOrderHistory, trackOrder,
+    getPharmacySlots, getPharmacyDeliveryCharges, checkoutMedicineOrder, getPharmacyAvailableCoupons, validateCoupon, uploadPrescription,  placeOrder, verifyPharmacyPayment, cancelMedicineOrder,getOrderHistory, trackOrder,
     getLatestAddedMedicines, getNonPrescriptionMedicines, getHighestDiscountMedicines, getActiveStoreComboOffers,
 
     createPrescriptionRequest, payAndConfirmOrder, verifyPrescriptionRequestPayment, getUserPrescriptionRequests, getUserPrescriptionRequestDetails, estimateRxPrices,

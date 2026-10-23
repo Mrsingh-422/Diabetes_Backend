@@ -241,9 +241,218 @@ const getCalculatedDelivery = (distance, orderTotal, charges, isRapidSelected = 
     };
 };
 
+
+
+// =========================================================================
+// 🌟 NEW DEDICATED APIS FOR LAB & PHARMACY ONLY (No Admin Allowed)
+// =========================================================================
+
+// Helper to strictly restrict & normalize Lab/Pharmacy
+const resolveStoreVendorType = (role) => {
+    if (!role) return null;
+    const r = role.toLowerCase();
+    if (r === 'pharmacy' || r === 'clinic-pharmacy') return 'Pharmacy';
+    if (r === 'lab' || r === 'clinic-lab') return 'Lab';
+    return null;
+};
+
+// ==========================================
+// 1. LAB & PHARMACY: SAVE / CREATE CHARGES
+// Endpoint: POST /provider/delivery-charges/store/save
+// ==========================================
+const saveStoreDeliveryCharges = async (req, res) => {
+    try {
+        const vendorId = req.user.id;
+        const vendorType = resolveStoreVendorType(req.user.role);
+
+        if (!vendorType) {
+            return res.status(403).json({
+                success: false,
+                message: "Access Denied: This endpoint is strictly reserved for Lab and Pharmacy vendors."
+            });
+        }
+
+        const {
+            fixedPrice,
+            fixedDistance,
+            pricePerKM,
+            fastDeliveryExtra,
+            rapidCharge,
+            isRapidAvailable,
+            isCodAvailable,
+            isCODAvailable, // Frontend casing support
+            packagingCharge,
+            freeDeliveryThreshold,
+            taxPercentage,
+            city,
+            state,
+            country
+        } = req.body;
+
+        // 🌟 Safe Boolean Parsing (handles true, 'true', false, 'false')
+        const rapidBool = isRapidAvailable !== undefined 
+            ? (isRapidAvailable === true || isRapidAvailable === 'true') 
+            : true;
+
+        const codInput = isCodAvailable !== undefined ? isCodAvailable : isCODAvailable;
+        const codBool = codInput !== undefined 
+            ? (codInput === true || codInput === 'true') 
+            : true;
+
+        const payload = {
+            vendorId,
+            vendorType,
+            isAdminGlobal: false,
+            country: country || req.user.country || 'India',
+            state: state || req.user.state || null,
+            city: city || req.user.city || null,
+            fixedPrice: fixedPrice !== undefined ? Number(fixedPrice) : 40,
+            fixedDistance: fixedDistance !== undefined ? Number(fixedDistance) : 5,
+            pricePerKM: pricePerKM !== undefined ? Number(pricePerKM) : 10,
+            fastDeliveryExtra: fastDeliveryExtra !== undefined ? Number(fastDeliveryExtra) : (rapidCharge !== undefined ? Number(rapidCharge) : 25),
+            rapidCharge: rapidCharge !== undefined ? Number(rapidCharge) : (fastDeliveryExtra !== undefined ? Number(fastDeliveryExtra) : 25),
+            isRapidAvailable: rapidBool,
+            isCodAvailable: codBool, // 👈 Correctly mapped
+            packagingCharge: packagingCharge !== undefined ? Number(packagingCharge) : 15,
+            freeDeliveryThreshold: freeDeliveryThreshold !== undefined ? Number(freeDeliveryThreshold) : 500,
+            taxPercentage: taxPercentage !== undefined ? Number(taxPercentage) : 5
+        };
+
+        const charges = await DeliveryCharge.findOneAndUpdate(
+            { vendorId },
+            { $set: payload },
+            { upsert: true, new: true, runValidators: true }
+        );
+
+        res.status(200).json({
+            success: true,
+            message: `${vendorType} delivery configuration saved successfully!`,
+            data: charges
+        });
+    } catch (error) {
+        console.error("saveStoreDeliveryCharges Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// ==========================================
+// 2. LAB & PHARMACY: UPDATE CHARGES
+// Endpoint: PUT /provider/delivery-charges/store/update
+// ==========================================
+const updateStoreDeliveryCharges = async (req, res) => {
+    try {
+        const vendorId = req.user.id;
+        const vendorType = resolveStoreVendorType(req.user.role);
+
+        if (!vendorType) {
+            return res.status(403).json({
+                success: false,
+                message: "Access Denied: This endpoint is strictly reserved for Lab and Pharmacy vendors."
+            });
+        }
+
+        const updateData = {};
+        const numericFields = [
+            'fixedPrice', 'fixedDistance', 'pricePerKM',
+            'fastDeliveryExtra', 'rapidCharge', 'packagingCharge',
+            'freeDeliveryThreshold', 'taxPercentage', 'taxInRupees'
+        ];
+
+        numericFields.forEach(field => {
+            if (req.body[field] !== undefined) {
+                updateData[field] = Number(req.body[field]);
+            }
+        });
+
+        // 🌟 Rapid Delivery Toggle Update
+        if (req.body.isRapidAvailable !== undefined) {
+            updateData.isRapidAvailable = Boolean(req.body.isRapidAvailable === true || req.body.isRapidAvailable === 'true');
+        }
+
+        // 🌟 COD Availability Toggle Update (Fixed syntax & Independent Check)
+        if (req.body.isCodAvailable !== undefined || req.body.isCODAvailable !== undefined) {
+            const codInput = req.body.isCodAvailable !== undefined ? req.body.isCodAvailable : req.body.isCODAvailable;
+            updateData.isCodAvailable = Boolean(codInput === true || codInput === 'true');
+        }
+
+        if (req.body.city !== undefined) updateData.city = req.body.city;
+        if (req.body.state !== undefined) updateData.state = req.body.state;
+        if (req.body.country !== undefined) updateData.country = req.body.country;
+
+        updateData.vendorType = vendorType;
+
+        const updated = await DeliveryCharge.findOneAndUpdate(
+            { vendorId },
+            { $set: updateData },
+            { new: true, upsert: true, runValidators: true }
+        );
+
+        res.status(200).json({
+            success: true,
+            message: `${vendorType} delivery charges updated successfully!`,
+            data: updated
+        });
+    } catch (error) {
+        console.error("updateStoreDeliveryCharges Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// 3. LAB & PHARMACY: GET MY STORE CHARGES
+// Endpoint: GET /provider/delivery-charges/store/my-charges
+const getStoreDeliveryCharges = async (req, res) => {
+    try {
+        const vendorId = req.user.id;
+        const vendorType = resolveStoreVendorType(req.user.role);
+
+        if (!vendorType) {
+            return res.status(403).json({
+                success: false,
+                message: "Access Denied: This endpoint is strictly reserved for Lab and Pharmacy vendors."
+            });
+        }
+
+        const charges = await DeliveryCharge.findOne({ vendorId }).lean();
+
+        if (!charges) {
+            return res.status(200).json({
+                success: true,
+                isDefault: true,
+                message: "Default platform delivery rates applied.",
+                data: {
+                    vendorId,
+                    vendorType,
+                    fixedPrice: 40,
+                    fixedDistance: 5,
+                    pricePerKM: 10,
+                    fastDeliveryExtra: 25,
+                    rapidCharge: 25,
+                    isRapidAvailable: true,
+                    packagingCharge: 15,
+                    freeDeliveryThreshold: 500,
+                    taxPercentage: 5,
+                    isAdminGlobal: false
+                }
+            });
+        }
+
+        res.status(200).json({
+            success: true,
+            isDefault: false,
+            data: charges
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
 module.exports = { 
     saveDeliveryCharges, 
     getMyDeliveryCharges, 
     updateDeliveryCharges, 
-    getCalculatedDelivery 
+    getCalculatedDelivery ,
+
+    // Naye dedicated exports (Lab & Pharmacy)
+    saveStoreDeliveryCharges,
+    updateStoreDeliveryCharges,
+    getStoreDeliveryCharges
 };
