@@ -4,6 +4,8 @@ const { protect } = require('../../../middleware/authMiddleware');
 const { 
     getPharmacyDashboardStats,
     getPharmacyOrders, 
+    getPharmacyRapidOrders,
+    getPharmacyOrderDetails,
     getAvailableDrivers, 
     assignDriverManual , reassignDriverManual,updateOrderStatus,
     submitPharmacistReview,getProviderPrescriptionRequests, getProviderPrescriptionRequestDetails, startPrescriptionReview,rejectPrescriptionRequest, trackPharmacyDrivers,
@@ -14,6 +16,12 @@ const {
 
 router.get('/dashboard-stats', protect('pharmacy'), getPharmacyDashboardStats);
 router.get('/list', protect('pharmacy'), getPharmacyOrders);
+
+//  2. NEW: Rapid Orders Only (isRapid == true)
+router.get('/rapid-list', protect('pharmacy'), getPharmacyRapidOrders);
+// 🌟 3. Complete Order Details API (For Both Regular & Rapid Orders)
+router.get('/details/:orderId', protect('pharmacy'), getPharmacyOrderDetails);
+
 router.get('/available-drivers', protect('pharmacy'), getAvailableDrivers);
 router.post('/assign-manual', protect('pharmacy'), assignDriverManual);
 router.post('/reassign', protect('pharmacy'), reassignDriverManual);

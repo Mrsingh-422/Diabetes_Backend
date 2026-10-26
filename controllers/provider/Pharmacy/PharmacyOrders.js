@@ -102,67 +102,280 @@ const getPharmacyDashboardStats = async (req, res) => {
     }
 };
 
-
+// =========================================================================
+// 1. GET NORMAL PHARMACY ORDERS (Lightweight Main Info - Excludes Rapid)
 // Endpoint: GET /provider/pharmacy/orders/list
-// Endpoint: GET /provider/pharmacy/orders/list?returnStatus=Requested
+// =========================================================================
 const getPharmacyOrders = async (req, res) => {
     try {
-        const { orderType, status, isPriority, returnStatus } = req.query; 
-        let query = { pharmacyId: req.user.id };
+        const { orderType, status, returnStatus, page = 1, limit = 20 } = req.query; 
+        const skip = (parseInt(page) - 1) * parseInt(limit);
+
+        let query = { 
+            pharmacyId: req.user.id,
+            isRapid: { $ne: true } // Excludes Rapid orders
+        };
         
         if (orderType) query.orderType = orderType;
         if (status) query.status = status;
 
-        if (isPriority === 'true') {
-            query['billSummary.rapidDeliveryCharge'] = { $gt: 0 };
-        } else if (isPriority === 'false') {
-            query['billSummary.rapidDeliveryCharge'] = 0;
-        }
-
-        // 🚨 1. NEW: RETURN / REPLACEMENT FILTER
-        // returnStatus = 'Requested' (Pending returns), 'Approved', 'Rejected', ya 'All'
         if (returnStatus) {
             if (returnStatus === 'All') {
-                query['returnDetails.status'] = { $ne: 'None' }; // Sabhi return wale orders
+                query['returnDetails.status'] = { $ne: 'None' };
             } else {
-                query['returnDetails.status'] = returnStatus; // e.g. 'Requested'
+                query['returnDetails.status'] = returnStatus;
             }
         }
 
+        const total = await PharmacyBooking.countDocuments(query);
         const orders = await PharmacyBooking.find(query)
-            .select('-deliveryOTP -paymentDetails.razorpaySignature -paymentDetails.razorpayOrderId -rejectedBy -__v')
             .populate('userId', 'name phone')
-            .populate('driverId', 'name phone profilePic vehicleNumber')
-            .populate({
-                path: 'pharmacyId',
-                select: 'name documents.cinNumber documents.gstNumber documents.drugLicenseNumber documents.signatureImage'
-            })
-            .populate({
-                path: 'items.comboOfferId',
-                select: 'campaignDisplayName buyQty getFreeQty projectedPromoMargin'
-            })
+            .populate('driverId', 'name phone vehicleNumber')
             .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(parseInt(limit))
             .lean();
 
-        // Add root-level helper flags for frontend badge rendering
-        const enrichedOrders = orders.map(order => {
-            const hasComboApplied = order.items.some(item => item.isComboApplied === true);
-            const isReturnRequested = order.returnDetails && order.returnDetails.status === 'Requested';
-            
-            return {
-                ...order,
-                hasComboApplied,
-                isReturnRequested // 👈 Helper: True if pending return action required
-            };
-        });
+        // 🌟 MAIN-MAIN ESSENTIAL SUMMARY FOR LIST VIEW
+        const trimmedOrders = orders.map(order => ({
+            _id: order._id,
+            orderId: order.orderId,
+            orderType: order.orderType || 'General',
+            status: order.status,
+            deliveryStatus: order.deliveryStatus,
+            isRapid: false,
+            customer: {
+                id: order.userId?._id || null,
+                name: order.userId?.name || order.address?.name || "Customer",
+                phone: order.userId?.phone || order.address?.phone || ""
+            },
+            timing: {
+                appointmentDate: order.appointmentDate,
+                appointmentTime: order.appointmentTime || "Standard Delivery (3 Hours)"
+            },
+            deliveryCity: order.address?.city || "",
+            paymentMethod: order.paymentMethod,
+            paymentStatus: order.paymentStatus,
+            totalAmount: order.billSummary?.totalAmount || 0,
+            itemsCount: order.items?.length || 0,
+            itemsSummary: (order.items || []).map(i => ({
+                name: i.name,
+                quantity: i.quantity,
+                price: i.price
+            })),
+            assignedDriver: order.driverId ? {
+                id: order.driverId._id,
+                name: order.driverId.name,
+                phone: order.driverId.phone,
+                vehicleNumber: order.driverId.vehicleNumber
+            } : null,
+            createdAt: order.createdAt,
+            isReturnRequested: order.returnDetails && order.returnDetails.status === 'Requested'
+        }));
 
         res.json({ 
             success: true, 
-            count: enrichedOrders.length,
-            data: enrichedOrders 
+            total,
+            count: trimmedOrders.length,
+            currentPage: parseInt(page),
+            totalPages: Math.ceil(total / parseInt(limit)),
+            data: trimmedOrders 
         });
     } catch (error) { 
-        res.status(500).json({ message: error.message }); 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
+};
+
+// =========================================================================
+// 2. GET RAPID ORDERS (Lightweight Main Info - isRapid == true Only)
+// Endpoint: GET /provider/pharmacy/orders/rapid-list
+// =========================================================================
+const getPharmacyRapidOrders = async (req, res) => {
+    try {
+        const { orderType, status, returnStatus, page = 1, limit = 20 } = req.query; 
+        const skip = (parseInt(page) - 1) * parseInt(limit);
+
+        let query = { 
+            pharmacyId: req.user.id,
+            isRapid: true // Strictly Rapid Orders
+        };
+        
+        if (orderType) query.orderType = orderType;
+        if (status) query.status = status;
+
+        if (returnStatus) {
+            if (returnStatus === 'All') {
+                query['returnDetails.status'] = { $ne: 'None' };
+            } else {
+                query['returnDetails.status'] = returnStatus;
+            }
+        }
+
+        const total = await PharmacyBooking.countDocuments(query);
+        const rapidOrders = await PharmacyBooking.find(query)
+            .populate('userId', 'name phone')
+            .populate('driverId', 'name phone vehicleNumber')
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(parseInt(limit))
+            .lean();
+
+        // 🌟 MAIN-MAIN ESSENTIAL SUMMARY FOR RAPID LIST VIEW
+        const trimmedRapidOrders = rapidOrders.map(order => ({
+            _id: order._id,
+            orderId: order.orderId,
+            orderType: order.orderType || 'General',
+            status: order.status,
+            deliveryStatus: order.deliveryStatus,
+            isRapid: true,
+            isRapidOrder: true,
+            customer: {
+                id: order.userId?._id || null,
+                name: order.userId?.name || order.address?.name || "Customer",
+                phone: order.userId?.phone || order.address?.phone || ""
+            },
+            timing: {
+                appointmentDate: order.appointmentDate,
+                appointmentTime: order.appointmentTime || "Immediate (1 Hour Express)"
+            },
+            deliveryCity: order.address?.city || "",
+            paymentMethod: order.paymentMethod,
+            paymentStatus: order.paymentStatus,
+            totalAmount: order.billSummary?.totalAmount || 0,
+            rapidCharge: order.billSummary?.rapidDeliveryCharge || 0,
+            itemsCount: order.items?.length || 0,
+            itemsSummary: (order.items || []).map(i => ({
+                name: i.name,
+                quantity: i.quantity,
+                price: i.price
+            })),
+            assignedDriver: order.driverId ? {
+                id: order.driverId._id,
+                name: order.driverId.name,
+                phone: order.driverId.phone,
+                vehicleNumber: order.driverId.vehicleNumber
+            } : null,
+            createdAt: order.createdAt,
+            isReturnRequested: order.returnDetails && order.returnDetails.status === 'Requested'
+        }));
+
+        res.json({ 
+            success: true, 
+            total,
+            count: trimmedRapidOrders.length,
+            currentPage: parseInt(page),
+            totalPages: Math.ceil(total / parseInt(limit)),
+            data: trimmedRapidOrders 
+        });
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
+};
+
+// =========================================================================
+// 🌟 3. NEW: GET COMPLETE PHARMACY ORDER DETAILS (Full Info for Regular & Rapid)
+// Endpoint: GET /provider/pharmacy/orders/details/:orderId
+// =========================================================================
+const getPharmacyOrderDetails = async (req, res) => {
+    try {
+        const { orderId } = req.params;
+        const pharmacyId = req.user.id;
+
+        const isObjectId = mongoose.isValidObjectId(orderId);
+        const query = {
+            pharmacyId,
+            $or: [
+                { _id: isObjectId ? new mongoose.Types.ObjectId(orderId) : new mongoose.Types.ObjectId() },
+                { orderId: String(orderId).trim() }
+            ]
+        };
+
+        const order = await PharmacyBooking.findOne(query)
+            .populate('userId', 'name phone email profilePic gender age dob')
+            .populate('driverId', 'name phone vehicleNumber vehicleType profilePic status location')
+            .populate({
+                path: 'items.comboOfferId',
+                select: 'campaignDisplayName buyQty getFreeQty'
+            })
+            .lean();
+
+        if (!order) {
+            return res.status(404).json({
+                success: false,
+                message: "Order details not found or unauthorized access."
+            });
+        }
+
+        // Return 100% Complete Details
+        res.json({
+            success: true,
+            data: {
+                _id: order._id,
+                orderId: order.orderId,
+                orderType: order.orderType || 'General',
+                status: order.status,
+                deliveryStatus: order.deliveryStatus,
+                isRapid: order.isRapid || false,
+                collectionType: order.collectionType,
+                appointmentDate: order.appointmentDate,
+                appointmentTime: order.appointmentTime,
+                deliveryOTP: order.deliveryOTP || null, // 👈 Store can view/verify OTP
+
+                // 👤 Customer Full Info
+                customer: order.userId ? {
+                    id: order.userId._id,
+                    name: order.userId.name,
+                    phone: order.userId.phone,
+                    email: order.userId.email,
+                    gender: order.userId.gender,
+                    age: order.userId.age || null
+                } : null,
+
+                // 📍 Full Delivery Address
+                deliveryAddress: order.address,
+
+                // 💰 Complete Financial & GST Summary
+                billSummary: order.billSummary,
+
+                // 💳 Payment Breakdown
+                paymentMethod: order.paymentMethod,
+                paymentStatus: order.paymentStatus,
+                paymentDetails: order.paymentDetails,
+
+                // 📦 Complete Items List with Taxes & Batches
+                itemsCount: order.items?.length || 0,
+                items: order.items,
+
+                // 📄 Uploaded Prescription Files
+                prescriptionImages: order.prescriptionImages || [],
+
+                // 🚗 Full Driver Details (if assigned)
+                assignedDriver: order.driverId ? {
+                    id: order.driverId._id,
+                    name: order.driverId.name,
+                    phone: order.driverId.phone,
+                    vehicleNumber: order.driverId.vehicleNumber,
+                    vehicleType: order.driverId.vehicleType,
+                    status: order.driverId.status,
+                    currentLocation: order.driverId.location || { lat: 0, lng: 0 }
+                } : null,
+
+                // 🔄 Full Return / Replacement Lifecycle
+                returnDetails: order.returnDetails || null,
+
+                // ⏱️ Timestamps
+                timestamps: {
+                    createdAt: order.createdAt,
+                    updatedAt: order.updatedAt,
+                    startedAt: order.startedAt || null,
+                    arrivedAt: order.arrivedAt || null,
+                    deliveredAt: order.deliveredAt || null
+                }
+            }
+        });
+    } catch (error) {
+        console.error("getPharmacyOrderDetails Error:", error);
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 
@@ -1108,7 +1321,7 @@ const confirmStoreReturnReceipt = async (req, res) => {
 
 
 
-module.exports = { getPharmacyDashboardStats, getPharmacyOrders, getAvailableDrivers, assignDriverManual, triggerAutoAssignment,reassignDriverManual,updateOrderStatus,
+module.exports = { getPharmacyDashboardStats, getPharmacyOrders,getPharmacyRapidOrders, getAvailableDrivers,getPharmacyOrderDetails, assignDriverManual, triggerAutoAssignment,reassignDriverManual,updateOrderStatus,
 
     submitPharmacistReview,getProviderPrescriptionRequests, getProviderPrescriptionRequestDetails, startPrescriptionReview,rejectPrescriptionRequest, trackPharmacyDrivers, getPharmacyOrderInvoiceDetails,
      handleReturnRequestAction,approveReturnAndAssignDriver, rejectReturnRequest,confirmStoreReturnReceipt

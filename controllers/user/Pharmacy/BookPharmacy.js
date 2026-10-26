@@ -79,10 +79,10 @@ const calculatePharmacyBillHelper = async (pharmacyId, items, patientsCount, col
     for (const item of items) {
         const rawPrice = item.price ?? item.pricePerUnit ?? 0;
         const pricePerUnit = (!isNaN(Number(rawPrice)) && rawPrice !== null && rawPrice !== "") ? Number(rawPrice) : 0;
-        
+
         const rawQty = item.quantity ?? 1;
         const orderedQty = (!isNaN(Number(rawQty)) && rawQty !== null && rawQty !== "") ? Math.max(1, Number(rawQty)) : 1;
-        
+
         const medicineId = item.medicineId?._id || item.medicineId;
 
         const activeBatch = await MedicineInventory.findOne({
@@ -269,30 +269,30 @@ async function mapPatients(userId, pids) {
 
         return parsedPids.map(id => {
             if (id === 'Self' || String(id).toLowerCase() === 'self') {
-                return { 
-                    patientId: 'Self', 
-                    name: user ? user.name : "Self", 
-                    age: user?.age || 25, 
-                    gender: user?.gender || 'Male', 
-                    relation: 'Self' 
+                return {
+                    patientId: 'Self',
+                    name: user ? user.name : "Self",
+                    age: user?.age || 25,
+                    gender: user?.gender || 'Male',
+                    relation: 'Self'
                 };
             }
             const m = user?.familyMember ? user.familyMember.id(id) : null;
             if (m) {
-                return { 
-                    patientId: id, 
-                    name: m.memberName, 
-                    age: m.age || 25, 
-                    gender: m.gender || 'Other', 
-                    relation: m.relation || 'Family' 
+                return {
+                    patientId: id,
+                    name: m.memberName,
+                    age: m.age || 25,
+                    gender: m.gender || 'Other',
+                    relation: m.relation || 'Family'
                 };
             }
-            return { 
-                patientId: id, 
-                name: user ? user.name : "Patient", 
-                age: 25, 
-                gender: 'Other', 
-                relation: 'Self' 
+            return {
+                patientId: id,
+                name: user ? user.name : "Patient",
+                age: 25,
+                gender: 'Other',
+                relation: 'Self'
             };
         });
     } catch (err) {
@@ -513,7 +513,7 @@ const getMedicineSuggestions = async (req, res) => {
 //             if (batchMrp > 0) {
 //                 medicine.discont_percent = `${Math.round(((batchMrp - lowestPrice) / batchMrp) * 100)}%`;
 //             }
-            
+
 //             // =========================================================================
 //             // 📦 NEW: INVENTORY & BATCH DETAILS MAPPED FROM MONGO (Matching Screenshot)
 //             // =========================================================================
@@ -521,7 +521,7 @@ const getMedicineSuggestions = async (req, res) => {
 //             medicine.batch_number = bestOffer.batch_number || null;
 //             medicine.hsn_number = bestOffer.hsn_number || null;
 //             medicine.stock_quantity = bestOffer.stock_quantity || 0;
-            
+
 //             // Raw Dates
 //             medicine.manufacturing_date = bestOffer.manufacturing_date || null;
 //             medicine.expiry_date = bestOffer.expiry_date || null;
@@ -548,7 +548,7 @@ const getMedicineSuggestions = async (req, res) => {
 //             medicine.isReturnAllowed = Boolean(bestOffer.isReturnAllowed);
 //             medicine.isReplacementAllowed = Boolean(bestOffer.isReplacementAllowed);
 //             medicine.returnWindowDays = adminWindowDays; // 👈 Dynamic Days Number
-            
+
 //             // Dynamic Policy text for UI Badge
 //             medicine.returnPolicyText = medicine.isReturnAllowed 
 //                 ? `${adminWindowDays} Days Return/Replacement Available` 
@@ -1104,7 +1104,7 @@ const getTrendingMedicinesNearUser = async (req, res) => {
 const parseNumericPrice = (rawPrice) => {
     if (rawPrice === undefined || rawPrice === null) return 0;
     if (typeof rawPrice === 'number') return isNaN(rawPrice) ? 0 : rawPrice;
-    
+
     // Remove symbols: ₹, Rs, Rs., commas, spaces
     const cleanStr = String(rawPrice).replace(/[₹,Rs\s]/gi, '').trim();
     // Match the first valid decimal/integer number
@@ -1147,9 +1147,9 @@ const getStandardMedicineCatalog = async (req, res) => {
 
         // 3. 🔍 Find All Medicine IDs Currently IN-STOCK in Approved Active Pharmacies
         const PharmacyModel = mongoose.models.Pharmacy || require('../../../models/Pharmacy');
-        const activePharmacies = await PharmacyModel.find({ 
-            isActive: true, 
-            profileStatus: 'Approved' 
+        const activePharmacies = await PharmacyModel.find({
+            isActive: true,
+            profileStatus: 'Approved'
         }).select('_id').lean();
 
         const activePharmacyIds = activePharmacies.map(p => p._id);
@@ -1201,9 +1201,9 @@ const getStandardMedicineCatalog = async (req, res) => {
                 is_available: true,
                 stock_quantity: { $gt: 0 }
             })
-            .populate('pharmacyId', 'name rating profileImage city isActive profileStatus')
-            .sort({ vendor_price: 1 })
-            .lean();
+                .populate('pharmacyId', 'name rating profileImage city isActive profileStatus')
+                .sort({ vendor_price: 1 })
+                .lean();
 
             // Filter approved pharmacies only
             const validBatches = activeBatches.filter(
@@ -1224,8 +1224,8 @@ const getStandardMedicineCatalog = async (req, res) => {
 
             // Fallback hierarchy: Batch MRP -> Master MRP -> Best Price -> Vendor Price -> 50
             let finalMrp = batchMrp > 0 ? batchMrp : (masterMrp > 0 ? masterMrp : (masterBestPrice > 0 ? masterBestPrice : (lowestVendorPrice || 50)));
-            let finalSellingPrice = lowestVendorPrice !== null && lowestVendorPrice > 0 
-                ? lowestVendorPrice 
+            let finalSellingPrice = lowestVendorPrice !== null && lowestVendorPrice > 0
+                ? lowestVendorPrice
                 : (masterBestPrice > 0 ? masterBestPrice : finalMrp);
 
             if (finalSellingPrice > finalMrp) {
@@ -1249,14 +1249,14 @@ const getStandardMedicineCatalog = async (req, res) => {
                 prescription_required: med.prescription_required || "No",
                 isRxRequired: String(med.prescription_required).toUpperCase() === 'YES',
                 bread_crumb: med.bread_crumb || "",
-                
+
                 // Pricing
                 mrp: Number(finalMrp.toFixed(2)),
                 minPrice: Number(finalSellingPrice.toFixed(2)),
                 best_price: Number(finalSellingPrice.toFixed(2)).toString(),
                 discountPercentage: discountPercentage,
                 discont_percent: `${discountPercentage}% OFF`,
-                
+
                 // Availability Status
                 isAvailable: isAvailable,
                 availableSellersCount: validBatches.length,
@@ -1302,14 +1302,14 @@ const getMedicineVendors = async (req, res) => {
     try {
         const { medicineId } = req.params;
         const today = new Date();
-        
+
         // Check karein kya user ne real GPS coordinates bheje hain
         const hasUserGPS = Boolean((req?.body?.lat || req?.query?.lat) && (req?.body?.lng || req?.query?.lng));
         const filterLat = req?.body?.lat || req?.query?.lat || DEFAULT_LAT;
         const filterLng = req?.body?.lng || req?.query?.lng || DEFAULT_LNG;
 
-        const medObjectId = mongoose.isValidObjectId(medicineId) 
-            ? new mongoose.Types.ObjectId(medicineId) 
+        const medObjectId = mongoose.isValidObjectId(medicineId)
+            ? new mongoose.Types.ObjectId(medicineId)
             : medicineId;
 
         const masterMedicine = await Medicine.findById(medObjectId).lean();
@@ -1327,8 +1327,8 @@ const getMedicineVendors = async (req, res) => {
             if (similarMeds.length > 0) {
                 const formattedAlts = similarMeds.map(med => {
                     const price = med.best_price || med.mrp || "0";
-                    const discount = med.discont_percent && med.discont_percent !== "0%" 
-                        ? `save ${med.discont_percent}` 
+                    const discount = med.discont_percent && med.discont_percent !== "0%"
+                        ? `save ${med.discont_percent}`
                         : "same price";
                     return `${med.name} :: ${med.manufacturers || 'N/A'} :: ${price}/Tablet :: ${discount}`;
                 }).join(' | ');
@@ -1350,11 +1350,11 @@ const getMedicineVendors = async (req, res) => {
             stock_quantity: { $gt: 0 },
             is_available: true
         })
-        .populate({
-            path: 'pharmacyId',
-            select: 'name profileImage rating totalReviews location city state address isHomeDeliveryAvailable is24x7 profileStatus isActive'
-        })
-        .lean();
+            .populate({
+                path: 'pharmacyId',
+                select: 'name profileImage rating totalReviews location city state address isHomeDeliveryAvailable is24x7 profileStatus isActive'
+            })
+            .lean();
 
         const availableInPharmacies = [];
         const pharmacyMap = new Map();
@@ -1362,7 +1362,7 @@ const getMedicineVendors = async (req, res) => {
 
         for (let item of inventoryRecords) {
             if (!item.pharmacyId) continue;
-            
+
             // Inactive pharmacies ko filter karein (Rejected ko chhod kar active allow karein)
             if (item.pharmacyId.isActive === false || item.pharmacyId.profileStatus === 'Rejected') {
                 continue;
@@ -1370,7 +1370,7 @@ const getMedicineVendors = async (req, res) => {
 
             const pharmacy = item.pharmacyId;
             const pharmacyIdStr = pharmacy._id.toString();
-            
+
             let distance = null;
             const pharmLat = Number(pharmacy.location?.lat || 0);
             const pharmLng = Number(pharmacy.location?.lng || 0);
@@ -1378,9 +1378,9 @@ const getMedicineVendors = async (req, res) => {
             // Sirf tab distance nikalein jab user ka GPS ho aur pharmacy ke non-zero coordinates hon
             if (hasUserGPS && pharmLat !== 0 && pharmLng !== 0) {
                 distance = await getDistance(
-                    parseFloat(filterLat), 
-                    parseFloat(filterLng), 
-                    pharmLat, 
+                    parseFloat(filterLat),
+                    parseFloat(filterLng),
+                    pharmLat,
                     pharmLng
                 );
             }
@@ -1400,7 +1400,7 @@ const getMedicineVendors = async (req, res) => {
                 if (pharmacyMap.has(pharmacyIdStr)) {
                     const existingIndex = pharmacyMap.get(pharmacyIdStr);
                     const existingItem = availableInPharmacies[existingIndex];
-                    
+
                     if (item.vendor_price < existingItem.price) {
                         existingItem.price = item.vendor_price;
                         existingItem.vendor_price = item.vendor_price;
@@ -1408,9 +1408,9 @@ const getMedicineVendors = async (req, res) => {
                         existingItem.inventoryId = item._id;
                         existingItem.stock = item.stock_quantity;
                         existingItem.stock_quantity = item.stock_quantity;
-                        existingItem.discount = existingItem.mrp > item.vendor_price ? 
+                        existingItem.discount = existingItem.mrp > item.vendor_price ?
                             Math.round(((existingItem.mrp - item.vendor_price) / existingItem.mrp) * 100) : 0;
-                        
+
                         // 📦 Mongo Inventory Fields
                         existingItem.batch_number = item.batch_number || existingItem.batch_number || null;
                         existingItem.hsn_number = item.hsn_number || existingItem.hsn_number || null;
@@ -1419,10 +1419,10 @@ const getMedicineVendors = async (req, res) => {
                         existingItem.expiry_date = item.expiry_date || null;
 
                         existingItem.manufacturingDate = (item.manufacturing_date || item.mfg_date)
-                            ? moment(item.manufacturing_date || item.mfg_date).format('MM/YYYY') 
+                            ? moment(item.manufacturing_date || item.mfg_date).format('MM/YYYY')
                             : "N/A";
-                        existingItem.expiryDate = item.expiry_date 
-                            ? moment(item.expiry_date).format('MM/YYYY') 
+                        existingItem.expiryDate = item.expiry_date
+                            ? moment(item.expiry_date).format('MM/YYYY')
                             : "N/A";
                         existingItem.mfg_formatted = existingItem.manufacturingDate;
                         existingItem.exp_formatted = existingItem.expiryDate;
@@ -1442,10 +1442,10 @@ const getMedicineVendors = async (req, res) => {
                     }).lean();
 
                     const mfgFormatted = (item.manufacturing_date || item.mfg_date)
-                        ? moment(item.manufacturing_date || item.mfg_date).format('MM/YYYY') 
+                        ? moment(item.manufacturing_date || item.mfg_date).format('MM/YYYY')
                         : "N/A";
-                    const expFormatted = item.expiry_date 
-                        ? moment(item.expiry_date).format('MM/YYYY') 
+                    const expFormatted = item.expiry_date
+                        ? moment(item.expiry_date).format('MM/YYYY')
                         : "N/A";
 
                     availableInPharmacies.push({
@@ -1459,7 +1459,7 @@ const getMedicineVendors = async (req, res) => {
                         price: item.vendor_price,
                         vendor_price: item.vendor_price,
                         mrp: batchMrp,
-                        discount: batchMrp > item.vendor_price ? 
+                        discount: batchMrp > item.vendor_price ?
                             Math.round(((batchMrp - item.vendor_price) / batchMrp) * 100) : 0,
                         stock: item.stock_quantity,
                         stock_quantity: item.stock_quantity,
@@ -1475,7 +1475,7 @@ const getMedicineVendors = async (req, res) => {
                         is_available: item.is_available ?? true,
                         manufacturing_date: item.manufacturing_date || item.mfg_date || null,
                         expiry_date: item.expiry_date || null,
-                        
+
                         manufacturingDate: mfgFormatted,
                         expiryDate: expFormatted,
                         mfg_formatted: mfgFormatted,
@@ -1537,8 +1537,8 @@ const getMedicineVendors = async (req, res) => {
         masterMedicine.isReturnAllowed = isReturnAllowedSummary;
         masterMedicine.isReplacementAllowed = isReplacementAllowedSummary;
         masterMedicine.returnWindowDays = adminWindowDays;
-        masterMedicine.returnPolicyText = isReturnAllowedSummary 
-            ? `${adminWindowDays} Days Return/Replacement Available` 
+        masterMedicine.returnPolicyText = isReturnAllowedSummary
+            ? `${adminWindowDays} Days Return/Replacement Available`
             : "Non-Returnable Product";
 
         res.json({
@@ -1547,20 +1547,20 @@ const getMedicineVendors = async (req, res) => {
             locationApplied: hasUserGPS ? "User GPS" : "All Locations (No GPS Provided)",
             count: availableInPharmacies.length,
             isCodAvailable: isPharmacyCodAvailable,
-            data: { 
-                medicineDetails: { 
-                    ...masterMedicine, 
+            data: {
+                medicineDetails: {
+                    ...masterMedicine,
                     minPrice: minPriceFound,
                     totalSellers: availableInPharmacies.length,
                     isCodAvailable: isPharmacyCodAvailable
-                }, 
-                availableInPharmacies: availableInPharmacies 
+                },
+                availableInPharmacies: availableInPharmacies
             }
         });
 
-    } catch (error) { 
+    } catch (error) {
         console.error("Crash Error:", error.message);
-        res.status(500).json({ success: false, message: error.message }); 
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 
@@ -1758,13 +1758,13 @@ const getPharmacyDeliveryCharges = async (req, res) => {
         }
 
         // Return charges with both casing formats for frontend safety
-        res.json({ 
-            success: true, 
+        res.json({
+            success: true,
             data: {
                 ...charges,
                 isCodAvailable: finalCodStatus,
                 isCODAvailable: finalCodStatus // 👈 Frontend ke liye added
-            } 
+            }
         });
 
     } catch (error) {
@@ -1886,12 +1886,12 @@ const validateCoupon = async (req, res) => {
 const checkoutMedicineOrder = async (req, res) => {
     try {
         const userId = req.user.id;
-        const { 
-            collectionType = 'Home Delivery', 
-            isRapid = false, 
+        const {
+            collectionType = 'Home Delivery',
+            isRapid = false,
             isSlotSelected = false,
             appointmentTime,
-            couponCode 
+            couponCode
         } = req.body;
 
         const cart = await Cart.findOne({ userId }).populate('pharmacyCart.items.medicineId');
@@ -1944,14 +1944,14 @@ const checkoutMedicineOrder = async (req, res) => {
 
         const isRapidDelivery = String(isRapid) === 'true';
         const isCustomSlot = String(isSlotSelected) === 'true' || (
-            appointmentTime && 
-            !['Immediate', 'Immediate (1 Hour)', 'Standard Delivery', 'undefined', 'null'].includes(appointmentTime) && 
+            appointmentTime &&
+            !['Immediate', 'Immediate (1 Hour)', 'Standard Delivery', 'undefined', 'null'].includes(appointmentTime) &&
             appointmentTime.trim() !== ''
         );
 
         if (collectionType === 'Home Delivery') {
             const deliveryConfig = await DeliveryCharge.findOne({ vendorId: pharmacyId, vendorType: 'Pharmacy' });
-            
+
             const baseFee = Number(deliveryConfig?.fixedPrice !== undefined ? deliveryConfig.fixedPrice : 50);
             const freeThreshold = Number(deliveryConfig?.freeDeliveryThreshold || 0);
             const fastFee = Number(deliveryConfig?.fastDeliveryExtra !== undefined ? deliveryConfig.fastDeliveryExtra : 100);
@@ -1965,7 +1965,7 @@ const checkoutMedicineOrder = async (req, res) => {
                 const availabilityConfig = await Availability.findOne({ vendorId: pharmacyId, vendorType: 'Pharmacy' });
                 if (availabilityConfig && availabilityConfig.premiumSlots && availabilityConfig.premiumSlots.length > 0) {
                     const cleanTime = String(appointmentTime).trim();
-                    const matchedSlot = availabilityConfig.premiumSlots.find(ps => 
+                    const matchedSlot = availabilityConfig.premiumSlots.find(ps =>
                         ps.time && (cleanTime.includes(ps.time) || ps.time.includes(cleanTime.split(' ')[0]))
                     );
                     if (matchedSlot) {
@@ -2008,8 +2008,8 @@ const checkoutMedicineOrder = async (req, res) => {
 
         if (couponCode && typeof couponCode === 'string' && couponCode.trim() !== '' && couponCode !== 'undefined') {
             const cleanCode = couponCode.trim().toUpperCase();
-            const coupon = await Coupon.findOne({ 
-                couponName: cleanCode, 
+            const coupon = await Coupon.findOne({
+                couponName: cleanCode,
                 isActive: true,
                 expiryDate: { $gte: new Date() }
             });
@@ -2076,10 +2076,10 @@ const placeOrder = async (req, res) => {
         // 1. Fetch Cart
         const cart = await Cart.findOne({ userId }).populate('pharmacyCart.items.medicineId');
         if (!cart || !cart.pharmacyCart || !cart.pharmacyCart.items || cart.pharmacyCart.items.length === 0) {
-            return res.status(400).json({ 
-                success: false, 
+            return res.status(400).json({
+                success: false,
                 errorStep: "CART_EMPTY",
-                message: "Your pharmacy cart is empty. Please add medicines before checkout." 
+                message: "Your pharmacy cart is empty. Please add medicines before checkout."
             });
         }
 
@@ -2210,8 +2210,8 @@ const placeOrder = async (req, res) => {
 
         const isRapidDelivery = String(req.body.isRapid) === 'true';
         const isCustomSlot = String(req.body.isSlotSelected) === 'true' || (
-            req.body.appointmentTime && 
-            !['Immediate', 'Immediate (1 Hour Express)', 'Immediate (1 Hour)', 'Standard Delivery', 'Standard Delivery (3 Hours)', 'undefined', 'null'].includes(req.body.appointmentTime) && 
+            req.body.appointmentTime &&
+            !['Immediate', 'Immediate (1 Hour Express)', 'Immediate (1 Hour)', 'Standard Delivery', 'Standard Delivery (3 Hours)', 'undefined', 'null'].includes(req.body.appointmentTime) &&
             req.body.appointmentTime.trim() !== ''
         );
 
@@ -2228,7 +2228,7 @@ const placeOrder = async (req, res) => {
                 const availabilityConfig = await Availability.findOne({ vendorId: pharmacyId, vendorType: 'Pharmacy' });
                 if (availabilityConfig && availabilityConfig.premiumSlots && availabilityConfig.premiumSlots.length > 0) {
                     const cleanTime = String(req.body.appointmentTime).trim();
-                    const matchedSlot = availabilityConfig.premiumSlots.find(ps => 
+                    const matchedSlot = availabilityConfig.premiumSlots.find(ps =>
                         ps.time && (cleanTime.includes(ps.time) || ps.time.includes(cleanTime.split(' ')[0]))
                     );
                     if (matchedSlot) {
@@ -2297,7 +2297,7 @@ const placeOrder = async (req, res) => {
             }
         }
 
-        const orderId = `HK-MED-${Date.now().toString().slice(-6)}${Math.floor(100 + Math.random() * 900)}`;
+        const orderId = `DW-MED-${Date.now().toString().slice(-6)}${Math.floor(100 + Math.random() * 900)}`;
 
         let finalAppointmentDate = new Date();
         if (req.body.appointmentDate && req.body.appointmentDate !== 'undefined' && req.body.appointmentDate !== 'null') {
@@ -2305,7 +2305,7 @@ const placeOrder = async (req, res) => {
             if (!isNaN(parsedD.getTime())) finalAppointmentDate = parsedD;
         }
 
-        let finalAppointmentTime = isCustomSlot 
+        let finalAppointmentTime = isCustomSlot
             ? req.body.appointmentTime.trim()
             : (isRapidDelivery ? "Immediate (1 Hour Express)" : "Standard Delivery (3 Hours)");
 
@@ -2376,7 +2376,7 @@ const placeOrder = async (req, res) => {
                     `Order #${orderId} received for ₹${totalAmount}. Schedule: ${finalAppointmentTime}.`,
                     { orderId: newBooking._id.toString(), type: 'new_pharmacy_order' }
                 );
-            } catch (e) {}
+            } catch (e) { }
 
             return res.status(201).json({
                 success: true,
@@ -2402,9 +2402,9 @@ const placeOrder = async (req, res) => {
 
     } catch (error) {
         console.error("placeOrder Error:", error);
-        return res.status(500).json({ 
-            success: false, 
-            message: error.message || "Internal Server Error in placeOrder." 
+        return res.status(500).json({
+            success: false,
+            message: error.message || "Internal Server Error in placeOrder."
         });
     }
 };
@@ -2422,7 +2422,7 @@ const verifyPharmacyPayment = async (req, res) => {
         // Universal Payload Resolver
         let body = req.body || {};
         if (typeof body === 'string') {
-            try { body = JSON.parse(body); } catch (e) {}
+            try { body = JSON.parse(body); } catch (e) { }
         }
         if (body.response && typeof body.response === 'object') {
             body = { ...body, ...body.response };
@@ -2441,10 +2441,10 @@ const verifyPharmacyPayment = async (req, res) => {
         const targetOrderId = body.orderId || body.bookingId || body.id || body._id;
 
         if (!rzpPaymentId) {
-            return res.status(400).json({ 
-                success: false, 
+            return res.status(400).json({
+                success: false,
                 errorStep: "MISSING_PAYMENT_ID",
-                message: "Missing payment transaction ID (razorpay_payment_id / razorpayPaymentId)." 
+                message: "Missing payment transaction ID (razorpay_payment_id / razorpayPaymentId)."
             });
         }
 
@@ -2470,10 +2470,10 @@ const verifyPharmacyPayment = async (req, res) => {
         }
 
         if (!booking) {
-            return res.status(404).json({ 
-                success: false, 
+            return res.status(404).json({
+                success: false,
                 errorStep: "ORDER_NOT_FOUND",
-                message: "Pharmacy order record not found for verification." 
+                message: "Pharmacy order record not found for verification."
             });
         }
 
@@ -2491,10 +2491,10 @@ const verifyPharmacyPayment = async (req, res) => {
             booking.paymentStatus = 'Failed';
             booking.status = 'Cancelled';
             await booking.save();
-            return res.status(400).json({ 
-                success: false, 
+            return res.status(400).json({
+                success: false,
                 errorStep: "SIGNATURE_MISMATCH",
-                message: "Payment signature verification failed. Order marked as Failed." 
+                message: "Payment signature verification failed. Order marked as Failed."
             });
         }
 
@@ -2504,7 +2504,7 @@ const verifyPharmacyPayment = async (req, res) => {
             if (rzpSignature) {
                 paymentRecord = await fetchAndMapRazorpayPayment(rzpPaymentId, rzpSignature);
             }
-        } catch (e) {}
+        } catch (e) { }
 
         if (!paymentRecord) {
             paymentRecord = {
@@ -2565,7 +2565,7 @@ const verifyPharmacyPayment = async (req, res) => {
                 `Order #${booking.orderId} for ₹${booking.billSummary.totalAmount} has been paid online and confirmed.`,
                 { orderId: booking._id.toString(), type: 'new_pharmacy_order' }
             );
-        } catch (e) {}
+        } catch (e) { }
 
         return res.status(200).json({
             success: true,
@@ -2577,9 +2577,9 @@ const verifyPharmacyPayment = async (req, res) => {
 
     } catch (error) {
         console.error("verifyPharmacyPayment Error:", error);
-        return res.status(500).json({ 
-            success: false, 
-            message: error.message || "Internal Server Error in pharmacy payment verification." 
+        return res.status(500).json({
+            success: false,
+            message: error.message || "Internal Server Error in pharmacy payment verification."
         });
     }
 };
@@ -2587,7 +2587,7 @@ const verifyPharmacyPayment = async (req, res) => {
 const uploadPrescription = async (req, res) => {
     try {
         const { address, pharmacyId, collectionType } = req.body;
-        
+
         let images = [];
         if (req.files) {
             if (Array.isArray(req.files)) {
@@ -2660,7 +2660,10 @@ const uploadPrescription = async (req, res) => {
 };
 
 // CANCEL MEDICINE ORDER (With Automatic Inventory Stock Restoration & Refund Policy)
-// endpoint: POST /user/pharmacy/cancel-order
+// =========================================================================
+// 3. CANCEL MEDICINE ORDER (Strict: Out For Delivery Restriction)
+// Endpoint: POST /user/pharmacy/cancel-order
+// =========================================================================
 const cancelMedicineOrder = async (req, res) => {
     try {
         const { orderId, reason } = req.body;
@@ -2679,19 +2682,24 @@ const cancelMedicineOrder = async (req, res) => {
             return res.status(404).json({ success: false, message: "Order not found or unauthorized." });
         }
 
-        // Restrict cancellation if order is already out for delivery or delivered
-        const nonCancellableStatuses = ['Delivered', 'Cancelled', 'OutForDelivery', 'ReachedLocation'];
-        if (nonCancellableStatuses.includes(order.status) || nonCancellableStatuses.includes(order.deliveryStatus)) {
+        // 🚨 STRICT CHECK: Block cancellation if order is Out For Delivery, Shipped, or Delivered!
+        const nonCancellableDeliveryStatuses = ['OutForDelivery', 'ReachedLocation', 'Delivered', 'PickedUp'];
+        const nonCancellableOrderStatuses = ['Delivered', 'Cancelled', 'Shipped'];
+
+        if (
+            nonCancellableDeliveryStatuses.includes(order.deliveryStatus) ||
+            nonCancellableOrderStatuses.includes(order.status)
+        ) {
             return res.status(400).json({
                 success: false,
-                message: `Cannot cancel order in '${order.deliveryStatus || order.status}' state.`
+                message: `Order cannot be cancelled: Your order is already ${order.deliveryStatus === 'OutForDelivery' ? 'out for delivery' : (order.status === 'Shipped' ? 'shipped' : order.status)}. You can refuse the parcel at your doorstep.`
             });
         }
 
         // 1. Calculate Cancellation policy & refund
         const policyResult = await processCancellationRefund(order, 'Pharmacy');
 
-        // 2. 🚨 INVENTORY RESTOCK ENGINE: Restore reserved medicine quantities back to inventory
+        // 2. Restore reserved medicine quantities back to inventory
         if (order.items && order.items.length > 0) {
             for (const item of order.items) {
                 if (item.medicineId) {
@@ -2709,7 +2717,6 @@ const cancelMedicineOrder = async (req, res) => {
 
         // 3. Release Driver if assigned
         if (order.driverId) {
-            const Driver = require('../../../models/Driver');
             await Driver.findByIdAndUpdate(order.driverId, { $set: { status: 'Available' } });
         }
 
@@ -2718,14 +2725,12 @@ const cancelMedicineOrder = async (req, res) => {
         order.cancelReason = reason || "Cancelled by customer";
         order.billSummary.cancellationFeeApplied = policyResult.cancellationFee;
 
-        // Queue refund if paid online
         if (order.paymentStatus === 'Paid') {
             order.paymentStatus = 'Refund-Initiated';
         }
 
         await order.save();
 
-        // Notify Pharmacy
         try {
             await sendPushNotification(
                 order.pharmacyId,
@@ -2738,7 +2743,7 @@ const cancelMedicineOrder = async (req, res) => {
 
         res.json({
             success: true,
-            message: "Order cancelled successfully. Items restored to inventory and refund initiated.",
+            message: "Order cancelled successfully. Items restored to inventory.",
             data: {
                 orderId: order.orderId,
                 status: order.status,
@@ -2752,12 +2757,10 @@ const cancelMedicineOrder = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
-
-// --- GET ORDER HISTORY (With canRetryPayment Flag for Failed/Pending Orders) ---
+// =========================================================================
+// 1. GET ORDER HISTORY (Lightweight Order List for History Screen)
 // Endpoint: GET /user/pharmacy/order-history
-// @desc    Get User Pharmacy Orders History with Full Delivery Mode, Slots, COD & Bill Details
-// @route   GET /user/pharmacy/order-history
-// @access  Private (User)
+// =========================================================================
 const getOrderHistory = async (req, res) => {
     try {
         const userId = req.user?.id || req.user?._id;
@@ -2773,8 +2776,7 @@ const getOrderHistory = async (req, res) => {
         const orders = await PharmacyBooking.find(query)
             .populate('pharmacyId', 'name address phone city profileImage rating')
             .populate('driverId', 'name phone vehicleNumber profilePic vehicleType')
-            .populate('items.medicineId', 'name packaging image_url manufacturers salt_composition')
-            .populate('items.comboOfferId', 'campaignDisplayName buyQty getFreeQty')
+            .populate('items.medicineId', 'name')
             .sort({ createdAt: -1 })
             .skip(skip)
             .limit(parseInt(limit))
@@ -2803,6 +2805,13 @@ const getOrderHistory = async (req, res) => {
                 deliveryModeType = "SLOT";
             }
 
+            // Clean Image Path helper
+            let pharmacyImage = order.pharmacyId?.profileImage || null;
+            if (pharmacyImage) {
+                pharmacyImage = pharmacyImage.replace(/\\/g, "/").replace(/^public\//, "");
+                if (!pharmacyImage.startsWith("/")) pharmacyImage = "/" + pharmacyImage;
+            }
+
             return {
                 _id: order._id,
                 orderId: order.orderId,
@@ -2811,88 +2820,42 @@ const getOrderHistory = async (req, res) => {
                 orderType: order.orderType || 'General',
                 createdAt: order.createdAt,
                 formattedDate: moment(order.createdAt).format('DD MMM YYYY, hh:mm A'),
-
-                // 1. Delivery & Mode Metadata
                 collectionType: order.collectionType,
                 deliveryMode: {
-                    type: deliveryModeType, // 'STANDARD' | 'EXPRESS' | 'SLOT' | 'PICKUP'
+                    type: deliveryModeType,
                     label: deliveryModeLabel,
                     isRapid: isRapid,
-                    rapidCharge: order.billSummary?.rapidDeliveryCharge || 0,
-                    isSlotDelivery: hasSlot || hasPremiumSlot,
-                    isPremiumSlot: hasPremiumSlot,
-                    slotCharge: order.billSummary?.slotCharge || 0
+                    isSlotDelivery: hasSlot || hasPremiumSlot
                 },
-
-                // 2. Slot Schedule Timings
                 slotSchedule: {
                     date: order.appointmentDate ? moment(order.appointmentDate).format('YYYY-MM-DD') : null,
                     formattedDate: order.appointmentDate ? moment(order.appointmentDate).format('DD MMM YYYY') : null,
-                    timeSlot: order.appointmentTime || (isRapid ? "Immediate (1 Hour Express)" : "Standard Delivery (3 Hours)"),
-                    isCustomTime: hasSlot
+                    timeSlot: order.appointmentTime || "Standard Delivery (3 Hours)"
                 },
-
-                // 3. Payment Badge & Status
                 paymentInfo: {
                     method: order.paymentMethod || 'COD',
                     status: order.paymentStatus || 'Pending',
-                    isCod: (order.paymentMethod === 'COD'),
-                    transactionId: order.paymentDetails?.razorpayPaymentId || order.transactionId || null
+                    isCod: (order.paymentMethod === 'COD')
                 },
-
-                // 4. Complete Bill Summary
+                // 🌟 Only Total Amount in Bill Summary
                 billSummary: {
-                    itemTotal: Number(order.billSummary?.itemTotal || 0),
-                    originalItemTotal: Number(order.billSummary?.originalItemTotal || order.billSummary?.itemTotal || 0),
-                    comboSavings: Number(order.billSummary?.comboSavings || 0),
-                    couponDiscount: Number(order.billSummary?.couponDiscount || 0),
-                    deliveryCharge: Number(order.billSummary?.deliveryCharge || 0),
-                    rapidDeliveryCharge: Number(order.billSummary?.rapidDeliveryCharge || 0),
-                    slotCharge: Number(order.billSummary?.slotCharge || 0),
                     totalAmount: Number(order.billSummary?.totalAmount || 0)
                 },
-
-                // 5. Pharmacy Details
                 pharmacy: {
                     id: order.pharmacyId?._id || null,
                     name: order.pharmacyId?.name || "Pharmacy Partner",
-                    address: order.pharmacyId?.address || "",
                     city: order.pharmacyId?.city || "",
                     phone: order.pharmacyId?.phone || "",
-                    image: order.pharmacyId?.profileImage || null,
+                    image: pharmacyImage,
                     rating: order.pharmacyId?.rating || 4.5
                 },
-
-                // 6. Assigned Delivery Partner
-                deliveryPartner: order.driverId ? {
-                    id: order.driverId._id,
-                    name: order.driverId.name,
-                    phone: order.driverId.phone,
-                    vehicleNumber: order.driverId.vehicleNumber,
-                    vehicleType: order.driverId.vehicleType,
-                    profilePic: order.driverId.profilePic
-                } : null,
-
-                // 7. Ordered Items List
+                // 🌟 Lightweight Items: Only Name, Quantity & Total Items Count
                 itemsCount: order.items?.length || 0,
                 items: (order.items || []).map(item => ({
-                    medicineId: item.medicineId?._id || item.medicineId,
-                    name: item.name || item.medicineId?.name,
-                    image: item.medicineId?.image_url?.[0] || null,
-                    packaging: item.medicineId?.packaging || "10 tablets",
-                    price: Number(item.price || 0),
-                    mrp: Number(item.mrp || item.price || 0),
-                    quantity: Number(item.quantity || 1),
-                    duration: item.duration || "Full Course",
-                    isComboApplied: item.isComboApplied || false,
-                    freeQuantity: Number(item.freeQuantity || 0),
-                    isReturnAllowed: item.isReturnAllowed || false,
-                    isReplacementAllowed: item.isReplacementAllowed || false
-                })),
-
-                deliveryAddress: order.address,
-                deliveryOTP: order.deliveryOTP || null,
-                returnDetails: order.returnDetails || null
+                    name: item.name || item.medicineId?.name || "Medicine",
+                    quantity: Number(item.quantity || 1)
+                }))
+                // ❌ 'returnDetails' and 'deliveryAddress' are completely removed from list!
             };
         });
 
@@ -2906,14 +2869,15 @@ const getOrderHistory = async (req, res) => {
 
     } catch (error) {
         console.error("getOrderHistory Error:", error);
-        res.status(500).json({ success: false, message: error.message || "Internal Server Error in order history." });
+        res.status(500).json({ success: false, message: error.message || "Internal Server Error" });
     }
 };
 
-// @desc    Get Detailed Live Order Tracking, Real-Time Timeline & Delivery Slot Breakdown
-// @route   GET /user/pharmacy/track-order/:orderId
-// @access  Private (User)
-const trackOrder = async (req, res) => {
+// =========================================================================
+// 2. GET ORDER DETAILS (Full Order Info, Address, Items, OTP, Return & Live Tracking)
+// Endpoint: GET /user/pharmacy/order-details/:orderId
+// =========================================================================
+const getOrderDetails = async (req, res) => {
     try {
         const { orderId } = req.params;
         const userId = req.user?.id || req.user?._id;
@@ -2928,6 +2892,7 @@ const trackOrder = async (req, res) => {
         };
 
         const order = await PharmacyBooking.findOne(query)
+            .populate('userId', 'name phone email profilePic gender age dob')
             .populate('pharmacyId', 'name address phone city profileImage rating location')
             .populate('driverId', 'name phone vehicleNumber profilePic vehicleType location')
             .populate('items.medicineId', 'name packaging image_url manufacturers salt_composition')
@@ -2935,7 +2900,7 @@ const trackOrder = async (req, res) => {
             .lean();
 
         if (!order) {
-            return res.status(404).json({ success: false, message: "Order not found." });
+            return res.status(404).json({ success: false, message: "Order details not found." });
         }
 
         const isRapid = order.isRapid === true;
@@ -2981,7 +2946,7 @@ const trackOrder = async (req, res) => {
             {
                 step: 3,
                 title: isRapid ? "Express 1-Hour Delivery On The Way" : (hasSlot ? `Out for Delivery (${order.appointmentTime})` : "Out for Delivery"),
-                description: order.driverId ? `Delivery partner ${order.driverId.name} is on the way` : "Delivery partner assigning",
+                description: order.driverId ? `Delivery partner ${order.driverId.name} is on the way` : "Delivery partner assignment in progress",
                 time: order.startedAt || null,
                 isCompleted: ['Delivered'].includes(order.status) || order.deliveryStatus === 'Delivered',
                 isCurrent: ['OutForDelivery', 'ReachedLocation'].includes(order.deliveryStatus) || (order.status === 'Shipped' && order.deliveryStatus !== 'Delivered')
@@ -2996,6 +2961,13 @@ const trackOrder = async (req, res) => {
             }
         ];
 
+        // Clean Image Paths
+        let pharmacyImage = order.pharmacyId?.profileImage || null;
+        if (pharmacyImage) {
+            pharmacyImage = pharmacyImage.replace(/\\/g, "/").replace(/^public\//, "");
+            if (!pharmacyImage.startsWith("/")) pharmacyImage = "/" + pharmacyImage;
+        }
+
         res.status(200).json({
             success: true,
             data: {
@@ -3007,7 +2979,8 @@ const trackOrder = async (req, res) => {
                 createdAt: order.createdAt,
                 formattedDate: moment(order.createdAt).format('DD MMM YYYY, hh:mm A'),
 
-                // Delivery Mode Metadata
+                // 🌟 Full Delivery Details
+                collectionType: order.collectionType,
                 deliveryMode: {
                     type: deliveryModeType,
                     label: deliveryModeLabel,
@@ -3017,24 +2990,20 @@ const trackOrder = async (req, res) => {
                     isPremiumSlot: hasPremiumSlot,
                     slotCharge: order.billSummary?.slotCharge || 0
                 },
-
-                // Slot Schedule Details
                 slotSchedule: {
                     date: order.appointmentDate ? moment(order.appointmentDate).format('YYYY-MM-DD') : null,
                     formattedDate: order.appointmentDate ? moment(order.appointmentDate).format('DD MMM YYYY') : null,
-                    timeSlot: order.appointmentTime || (isRapid ? "Immediate (1 Hour Express)" : "Standard Delivery (3 Hours)"),
+                    timeSlot: order.appointmentTime || "Standard Delivery (3 Hours)",
                     isCustomTime: hasSlot
                 },
-
-                // Payment Info
                 paymentInfo: {
                     method: order.paymentMethod || 'COD',
                     status: order.paymentStatus || 'Pending',
                     isCod: (order.paymentMethod === 'COD'),
-                    transactionId: order.paymentDetails?.razorpayPaymentId || order.transactionId || null
+                    transactionId: order.paymentDetails?.razorpayPaymentId || null
                 },
 
-                // Bill Breakdown
+                // 🌟 Full Bill Summary
                 billSummary: {
                     itemTotal: Number(order.billSummary?.itemTotal || 0),
                     originalItemTotal: Number(order.billSummary?.originalItemTotal || order.billSummary?.itemTotal || 0),
@@ -3046,19 +3015,17 @@ const trackOrder = async (req, res) => {
                     totalAmount: Number(order.billSummary?.totalAmount || 0)
                 },
 
-                // Store Details
                 pharmacy: {
                     id: order.pharmacyId?._id || null,
                     name: order.pharmacyId?.name || "Pharmacy Partner",
                     address: order.pharmacyId?.address || "",
                     city: order.pharmacyId?.city || "",
                     phone: order.pharmacyId?.phone || "",
-                    image: order.pharmacyId?.profileImage || null,
+                    image: pharmacyImage,
                     rating: order.pharmacyId?.rating || 4.5,
                     location: order.pharmacyId?.location || { lat: 0, lng: 0 }
                 },
 
-                // Assigned Driver Details
                 deliveryPartner: order.driverId ? {
                     id: order.driverId._id,
                     name: order.driverId.name,
@@ -3069,13 +3036,17 @@ const trackOrder = async (req, res) => {
                     currentLocation: order.driverId.location || { lat: 0, lng: 0 }
                 } : null,
 
-                deliveryOTP: order.deliveryOTP || null,
+                // 🌟 Full Address & OTP
                 deliveryAddress: order.address,
+                deliveryOTP: order.deliveryOTP || null,
+
+                // 🌟 Complete Detailed Items
+                itemsCount: order.items?.length || 0,
                 items: (order.items || []).map(item => ({
                     medicineId: item.medicineId?._id || item.medicineId,
                     name: item.name || item.medicineId?.name,
                     image: item.medicineId?.image_url?.[0] || null,
-                    packaging: item.medicineId?.packaging || "10 tablets",
+                    packaging: item.medicineId?.packaging || "10 tablets in 1 strip",
                     price: Number(item.price || 0),
                     mrp: Number(item.mrp || item.price || 0),
                     quantity: Number(item.quantity || 1),
@@ -3085,14 +3056,16 @@ const trackOrder = async (req, res) => {
                     isReturnAllowed: item.isReturnAllowed || false,
                     isReplacementAllowed: item.isReplacementAllowed || false
                 })),
+
+                // 🌟 Full Return & Tracking Timeline
                 trackingTimeline,
                 returnDetails: order.returnDetails || null
             }
         });
 
     } catch (error) {
-        console.error("trackOrder Error:", error);
-        res.status(500).json({ success: false, message: error.message || "Internal Server Error in order tracking." });
+        console.error("getOrderDetails Error:", error);
+        res.status(500).json({ success: false, message: error.message || "Internal Server Error" });
     }
 };
 
@@ -3310,7 +3283,7 @@ const getNonPrescriptionMedicines = async (req, res) => {
                 bread_crumb: med.bread_crumb || "",
                 primary_use: med.primary_use || "",
                 description: med.description || "",
-                
+
                 // Inventory Snapshot
                 isAvailable: lowestPrice !== null,
                 availableStock: bestOffer ? bestOffer.stock_quantity : 0,
@@ -3932,7 +3905,7 @@ const verifyPrescriptionRequestPayment = async (req, res) => {
         // 1. Resolve Body Payload
         let body = req.body || {};
         if (typeof body === 'string') {
-            try { body = JSON.parse(body); } catch (e) {}
+            try { body = JSON.parse(body); } catch (e) { }
         }
         if (body.response && typeof body.response === 'object') {
             body = { ...body, ...body.response };
@@ -3941,28 +3914,28 @@ const verifyPrescriptionRequestPayment = async (req, res) => {
             body = { ...body, ...body.data };
         }
 
-        const rzpPaymentId = body.razorpay_payment_id || 
-                             body.razorpayPaymentId || 
-                             body.paymentId || 
-                             body.payment_id;
+        const rzpPaymentId = body.razorpay_payment_id ||
+            body.razorpayPaymentId ||
+            body.paymentId ||
+            body.payment_id;
 
-        const rzpOrderId = body.razorpay_order_id || 
-                           body.razorpayOrderId || 
-                           body.orderId || 
-                           body.order_id;
+        const rzpOrderId = body.razorpay_order_id ||
+            body.razorpayOrderId ||
+            body.orderId ||
+            body.order_id;
 
-        const rzpSignature = body.razorpay_signature || 
-                             body.razorpaySignature || 
-                             body.signature;
+        const rzpSignature = body.razorpay_signature ||
+            body.razorpaySignature ||
+            body.signature;
 
-        const targetRequestId = body.requestId || 
-                                body.requestMongoId || 
-                                body.id;
+        const targetRequestId = body.requestId ||
+            body.requestMongoId ||
+            body.id;
 
         if (!rzpPaymentId) {
-            return res.status(400).json({ 
-                success: false, 
-                message: "Missing razorpayPaymentId / razorpay_payment_id parameter." 
+            return res.status(400).json({
+                success: false,
+                message: "Missing razorpayPaymentId / razorpay_payment_id parameter."
             });
         }
 
@@ -3978,9 +3951,9 @@ const verifyPrescriptionRequestPayment = async (req, res) => {
         }
 
         if (!isVerified && process.env.NODE_ENV === 'production') {
-            return res.status(400).json({ 
-                success: false, 
-                message: "Signature verification failed. Invalid transaction signature." 
+            return res.status(400).json({
+                success: false,
+                message: "Signature verification failed. Invalid transaction signature."
             });
         }
 
@@ -3995,9 +3968,9 @@ const verifyPrescriptionRequestPayment = async (req, res) => {
 
         let request = null;
         if (searchConditions.length > 0) {
-            request = await PharmacyPrescriptionRequest.findOne({ 
-                userId, 
-                $or: searchConditions 
+            request = await PharmacyPrescriptionRequest.findOne({
+                userId,
+                $or: searchConditions
             });
         }
 
@@ -4009,9 +3982,9 @@ const verifyPrescriptionRequestPayment = async (req, res) => {
         }
 
         if (!request) {
-            return res.status(404).json({ 
-                success: false, 
-                message: "Prescription request record not found or access denied." 
+            return res.status(404).json({
+                success: false,
+                message: "Prescription request record not found or access denied."
             });
         }
 
@@ -4021,7 +3994,7 @@ const verifyPrescriptionRequestPayment = async (req, res) => {
             if (rzpSignature) {
                 rzpDetails = await fetchAndMapRazorpayPayment(rzpPaymentId, rzpSignature);
             }
-        } catch (fetchErr) {}
+        } catch (fetchErr) { }
 
         if (!rzpDetails) {
             rzpDetails = {
@@ -4046,9 +4019,9 @@ const verifyPrescriptionRequestPayment = async (req, res) => {
                     );
 
                     // Update availability flag if depleted
-                    const updatedInv = await MedicineInventory.findOne({ 
-                        pharmacyId: request.pharmacyId, 
-                        medicineId: item.medicineId 
+                    const updatedInv = await MedicineInventory.findOne({
+                        pharmacyId: request.pharmacyId,
+                        medicineId: item.medicineId
                     });
                     if (updatedInv && updatedInv.stock_quantity <= 0) {
                         updatedInv.is_available = false;
@@ -4110,7 +4083,7 @@ const verifyPrescriptionRequestPayment = async (req, res) => {
                 `Prescription Order #${customOrderId} is paid. Please pack medicines for courier dispatch.`,
                 { orderId: booking._id.toString(), type: 'new_prescription_order' }
             );
-        } catch (e) {}
+        } catch (e) { }
 
         res.status(200).json({
             success: true,
@@ -4522,7 +4495,7 @@ const getSimilarInStockMedicines = async (req, res) => {
 const requestPharmacyOrderReturn = async (req, res) => {
     try {
         const { orderId } = req.params;
-        const { requestType, reason, userComments } = req.body; 
+        const { requestType, reason, userComments } = req.body;
         const userId = req.user.id;
 
         const order = await PharmacyBooking.findOne({
@@ -4559,9 +4532,9 @@ const requestPharmacyOrderReturn = async (req, res) => {
         const daysPassed = moment().diff(moment(deliveryDate), 'days');
 
         if (daysPassed > config.returnWindowDays) {
-            return res.status(400).json({ 
-                success: false, 
-                message: `Return window expired: Requests were only allowed within ${config.returnWindowDays} days.` 
+            return res.status(400).json({
+                success: false,
+                message: `Return window expired: Requests were only allowed within ${config.returnWindowDays} days.`
             });
         }
 
@@ -4682,23 +4655,23 @@ const retryPharmacyPayment = async (req, res) => {
 
         // 2. Validate Payment Eligibility
         if (order.paymentMethod !== 'Online') {
-            return res.status(400).json({ 
-                success: false, 
-                message: "Retry Payment is only available for Online orders. This order is marked as " + order.paymentMethod 
+            return res.status(400).json({
+                success: false,
+                message: "Retry Payment is only available for Online orders. This order is marked as " + order.paymentMethod
             });
         }
 
         if (order.paymentStatus === 'Paid') {
-            return res.status(400).json({ 
-                success: false, 
-                message: "This order has already been paid for and confirmed." 
+            return res.status(400).json({
+                success: false,
+                message: "This order has already been paid for and confirmed."
             });
         }
 
         if (order.status !== 'Pending') {
-            return res.status(400).json({ 
-                success: false, 
-                message: `Cannot retry payment: Order is currently in '${order.status}' status.` 
+            return res.status(400).json({
+                success: false,
+                message: `Cannot retry payment: Order is currently in '${order.status}' status.`
             });
         }
 
@@ -4754,10 +4727,10 @@ const retryPharmacyPayment = async (req, res) => {
 
 
 module.exports = {
-    scanPrescription, getMedicineSuggestions, 
+    scanPrescription, getMedicineSuggestions,
     // getMedicineFullDetails,
-     getMedicineCategories, getPharmacySubCategories, getMedicineCategoryDetails, getPharmacySearchSuggestions, getPharmacyNameSuggestions, getPharmacies, getPharmacyDetails, searchAlternateBrand, getTrendingMedicinesNearUser, getStandardMedicineCatalog, getMedicineVendors,
-    getPharmacySlots, getPharmacyDeliveryCharges, checkoutMedicineOrder, getPharmacyAvailableCoupons, validateCoupon, uploadPrescription,  placeOrder, verifyPharmacyPayment, cancelMedicineOrder,getOrderHistory, trackOrder,
+    getMedicineCategories, getPharmacySubCategories, getMedicineCategoryDetails, getPharmacySearchSuggestions, getPharmacyNameSuggestions, getPharmacies, getPharmacyDetails, searchAlternateBrand, getTrendingMedicinesNearUser, getStandardMedicineCatalog, getMedicineVendors,
+    getPharmacySlots, getPharmacyDeliveryCharges, checkoutMedicineOrder, getPharmacyAvailableCoupons, validateCoupon, uploadPrescription, placeOrder, verifyPharmacyPayment, cancelMedicineOrder, getOrderHistory, getOrderDetails,
     getLatestAddedMedicines, getNonPrescriptionMedicines, getHighestDiscountMedicines, getActiveStoreComboOffers,
 
     createPrescriptionRequest, payAndConfirmOrder, verifyPrescriptionRequestPayment, getUserPrescriptionRequests, getUserPrescriptionRequestDetails, estimateRxPrices,

@@ -5,7 +5,7 @@ const { pharmacyPrescriptionUploads,pharmacyReturnProofUploads } = require('../.
 const { scanPrescription,getMedicineSuggestions,
     // getMedicineFullDetails,
      getMedicineCategories,getPharmacySubCategories,getMedicineCategoryDetails,getPharmacySearchSuggestions,getPharmacyNameSuggestions, getPharmacies, getPharmacyDetails,searchAlternateBrand,getTrendingMedicinesNearUser,getStandardMedicineCatalog,getMedicineVendors,
-    getPharmacySlots,getPharmacyDeliveryCharges,checkoutMedicineOrder,getPharmacyAvailableCoupons,validateCoupon,uploadPrescription,cancelMedicineOrder, placeOrder,verifyPharmacyPayment,getOrderHistory,trackOrder,
+    getPharmacySlots,getPharmacyDeliveryCharges,checkoutMedicineOrder,getPharmacyAvailableCoupons,validateCoupon,uploadPrescription,cancelMedicineOrder, placeOrder,verifyPharmacyPayment,getOrderHistory,getOrderDetails,
 getLatestAddedMedicines,getNonPrescriptionMedicines,getHighestDiscountMedicines,
 
 createPrescriptionRequest,payAndConfirmOrder,verifyPrescriptionRequestPayment,
@@ -64,7 +64,7 @@ router.post('/place-order', pharmacyPrescriptionUploads.fields([{ name: 'prescri
 router.post('/verify-payment',protect('user'),verifyPharmacyPayment);
 
 router.get('/order-history',protect('user'),getOrderHistory);
-router.get('/track-order/:orderId',protect('user'),trackOrder);
+router.get('/order-details/:orderId',protect('user'),getOrderDetails);
 
 router.get('/latest-added-medicines',getLatestAddedMedicines);
 router.get('/non-prescription-list', getNonPrescriptionMedicines);
