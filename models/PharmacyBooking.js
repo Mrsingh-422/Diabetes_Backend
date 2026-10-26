@@ -130,6 +130,10 @@ const pharmacyBookingSchema = new mongoose.Schema({
 
     // 🌟 Figma Screen 13 (Return Details)
     returnReason: { type: String, default: null },
+    anyIntruction: { 
+        type: String, 
+        default: "" 
+    },
 
     // Live trip tracking timestamps
     startedAt: { type: Date, default: null },

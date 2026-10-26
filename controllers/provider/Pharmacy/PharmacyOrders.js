@@ -273,7 +273,7 @@ const getPharmacyRapidOrders = async (req, res) => {
 };
 
 // =========================================================================
-// 🌟 3. NEW: GET COMPLETE PHARMACY ORDER DETAILS (Full Info for Regular & Rapid)
+// GET COMPLETE PHARMACY ORDER DETAILS (Vendor View)
 // Endpoint: GET /provider/pharmacy/orders/details/:orderId
 // =========================================================================
 const getPharmacyOrderDetails = async (req, res) => {
@@ -306,7 +306,6 @@ const getPharmacyOrderDetails = async (req, res) => {
             });
         }
 
-        // Return 100% Complete Details
         res.json({
             success: true,
             data: {
@@ -319,9 +318,9 @@ const getPharmacyOrderDetails = async (req, res) => {
                 collectionType: order.collectionType,
                 appointmentDate: order.appointmentDate,
                 appointmentTime: order.appointmentTime,
-                deliveryOTP: order.deliveryOTP || null, // 👈 Store can view/verify OTP
+                deliveryOTP: order.deliveryOTP || null,
+                anyIntruction: order.anyIntruction || "", // 👈 Pharmacist can read customer note
 
-                // 👤 Customer Full Info
                 customer: order.userId ? {
                     id: order.userId._id,
                     name: order.userId.name,
@@ -331,25 +330,16 @@ const getPharmacyOrderDetails = async (req, res) => {
                     age: order.userId.age || null
                 } : null,
 
-                // 📍 Full Delivery Address
                 deliveryAddress: order.address,
-
-                // 💰 Complete Financial & GST Summary
                 billSummary: order.billSummary,
-
-                // 💳 Payment Breakdown
                 paymentMethod: order.paymentMethod,
                 paymentStatus: order.paymentStatus,
                 paymentDetails: order.paymentDetails,
 
-                // 📦 Complete Items List with Taxes & Batches
                 itemsCount: order.items?.length || 0,
                 items: order.items,
-
-                // 📄 Uploaded Prescription Files
                 prescriptionImages: order.prescriptionImages || [],
 
-                // 🚗 Full Driver Details (if assigned)
                 assignedDriver: order.driverId ? {
                     id: order.driverId._id,
                     name: order.driverId.name,
@@ -360,10 +350,8 @@ const getPharmacyOrderDetails = async (req, res) => {
                     currentLocation: order.driverId.location || { lat: 0, lng: 0 }
                 } : null,
 
-                // 🔄 Full Return / Replacement Lifecycle
                 returnDetails: order.returnDetails || null,
 
-                // ⏱️ Timestamps
                 timestamps: {
                     createdAt: order.createdAt,
                     updatedAt: order.updatedAt,
@@ -378,7 +366,6 @@ const getPharmacyOrderDetails = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
-
 // 2. GET AVAILABLE DRIVERS (Figma: Assign Delivery Boy list)
 // Endpoint: GET /provider/pharmacy/orders/available-drivers
 const getAvailableDrivers = async (req, res) => {

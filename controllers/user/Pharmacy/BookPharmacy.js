@@ -2063,7 +2063,7 @@ const checkoutMedicineOrder = async (req, res) => {
     }
 };
 
-// @desc    Place Pharmacy Medicine Order (Sets 'Pending' for Online until Payment Verified)
+// @desc    Place Pharmacy Medicine Order
 // @route   POST /user/pharmacy/place-order
 // @access  Private (User)
 const placeOrder = async (req, res) => {
@@ -2076,10 +2076,10 @@ const placeOrder = async (req, res) => {
         // 1. Fetch Cart
         const cart = await Cart.findOne({ userId }).populate('pharmacyCart.items.medicineId');
         if (!cart || !cart.pharmacyCart || !cart.pharmacyCart.items || cart.pharmacyCart.items.length === 0) {
-            return res.status(400).json({
-                success: false,
+            return res.status(400).json({ 
+                success: false, 
                 errorStep: "CART_EMPTY",
-                message: "Your pharmacy cart is empty. Please add medicines before checkout."
+                message: "Your pharmacy cart is empty. Please add medicines before checkout." 
             });
         }
 
@@ -2210,8 +2210,8 @@ const placeOrder = async (req, res) => {
 
         const isRapidDelivery = String(req.body.isRapid) === 'true';
         const isCustomSlot = String(req.body.isSlotSelected) === 'true' || (
-            req.body.appointmentTime &&
-            !['Immediate', 'Immediate (1 Hour Express)', 'Immediate (1 Hour)', 'Standard Delivery', 'Standard Delivery (3 Hours)', 'undefined', 'null'].includes(req.body.appointmentTime) &&
+            req.body.appointmentTime && 
+            !['Immediate', 'Immediate (1 Hour Express)', 'Immediate (1 Hour)', 'Standard Delivery', 'Standard Delivery (3 Hours)', 'undefined', 'null'].includes(req.body.appointmentTime) && 
             req.body.appointmentTime.trim() !== ''
         );
 
@@ -2228,7 +2228,7 @@ const placeOrder = async (req, res) => {
                 const availabilityConfig = await Availability.findOne({ vendorId: pharmacyId, vendorType: 'Pharmacy' });
                 if (availabilityConfig && availabilityConfig.premiumSlots && availabilityConfig.premiumSlots.length > 0) {
                     const cleanTime = String(req.body.appointmentTime).trim();
-                    const matchedSlot = availabilityConfig.premiumSlots.find(ps =>
+                    const matchedSlot = availabilityConfig.premiumSlots.find(ps => 
                         ps.time && (cleanTime.includes(ps.time) || ps.time.includes(cleanTime.split(' ')[0]))
                     );
                     if (matchedSlot) {
@@ -2297,6 +2297,7 @@ const placeOrder = async (req, res) => {
             }
         }
 
+        // DW Prefix branding
         const orderId = `DW-MED-${Date.now().toString().slice(-6)}${Math.floor(100 + Math.random() * 900)}`;
 
         let finalAppointmentDate = new Date();
@@ -2305,7 +2306,7 @@ const placeOrder = async (req, res) => {
             if (!isNaN(parsedD.getTime())) finalAppointmentDate = parsedD;
         }
 
-        let finalAppointmentTime = isCustomSlot
+        let finalAppointmentTime = isCustomSlot 
             ? req.body.appointmentTime.trim()
             : (isRapidDelivery ? "Immediate (1 Hour Express)" : "Standard Delivery (3 Hours)");
 
@@ -2315,21 +2316,24 @@ const placeOrder = async (req, res) => {
             rzpOrder = await createRazorpayOrder(totalAmount, `rcpt_${orderId}`);
         }
 
-        // =========================================================================
-        // 🚨 9. STATUS LOGIC FIX: Online = 'Pending' / COD = 'Placed'
-        // =========================================================================
         const initialStatus = isCod ? 'Placed' : 'Pending';
+        const mappedPatients = await mapPatients(userId, req.body.patientIds || req.body.patients || ['Self']);
+
+        // 🌟 User Instructions (Single Key)
+        const anyIntruction = req.body.anyIntruction ? String(req.body.anyIntruction).trim() : "";
 
         const newBooking = await PharmacyBooking.create({
             userId,
             pharmacyId,
             orderId,
+            patients: mappedPatients,
             items: processedItems,
             collectionType,
             appointmentDate: finalAppointmentDate,
             appointmentTime: finalAppointmentTime,
             isRapid: isRapidDelivery,
             address: parsedAddress || {},
+            anyIntruction, // 👈 Single Key Saved
             billSummary: {
                 itemTotal: Math.round(itemTotal),
                 originalItemTotal: Math.round(originalItemTotal),
@@ -2343,8 +2347,8 @@ const placeOrder = async (req, res) => {
             },
             paymentMethod,
             paymentStatus: 'Pending',
-            status: initialStatus, // 👈 Online stays 'Pending' until payment verification!
-            deliveryStatus: isCod ? 'PendingAssignment' : 'PendingAssignment',
+            status: initialStatus,
+            deliveryStatus: 'PendingAssignment',
             orderType: rxRequired ? 'Prescription' : 'General',
             prescriptionImages: uploadedRxPaths,
             deliveryOTP: Math.floor(1000 + Math.random() * 9000).toString()
@@ -2376,7 +2380,7 @@ const placeOrder = async (req, res) => {
                     `Order #${orderId} received for ₹${totalAmount}. Schedule: ${finalAppointmentTime}.`,
                     { orderId: newBooking._id.toString(), type: 'new_pharmacy_order' }
                 );
-            } catch (e) { }
+            } catch (e) {}
 
             return res.status(201).json({
                 success: true,
@@ -2387,7 +2391,7 @@ const placeOrder = async (req, res) => {
             });
         }
 
-        // 11. For Online: Return Razorpay Order (Do NOT deduct stock or clear cart yet)
+        // 11. For Online: Return Razorpay Order
         return res.status(201).json({
             success: true,
             message: "Razorpay order initialized. Complete payment to confirm order.",
@@ -2396,15 +2400,15 @@ const placeOrder = async (req, res) => {
             razorpayOrderId: rzpOrder.id,
             orderId: newBooking.orderId,
             bookingId: newBooking._id,
-            status: "Pending", // 👈 Signals frontend that payment is awaiting
+            status: "Pending",
             data: newBooking
         });
 
     } catch (error) {
         console.error("placeOrder Error:", error);
-        return res.status(500).json({
-            success: false,
-            message: error.message || "Internal Server Error in placeOrder."
+        return res.status(500).json({ 
+            success: false, 
+            message: error.message || "Internal Server Error in placeOrder." 
         });
     }
 };
@@ -2874,7 +2878,7 @@ const getOrderHistory = async (req, res) => {
 };
 
 // =========================================================================
-// 2. GET ORDER DETAILS (Full Order Info, Address, Items, OTP, Return & Live Tracking)
+// 2. GET ORDER DETAILS (Full Order Info, Address, Items, OTP & Live Tracking)
 // Endpoint: GET /user/pharmacy/order-details/:orderId
 // =========================================================================
 const getOrderDetails = async (req, res) => {
@@ -2925,7 +2929,6 @@ const getOrderDetails = async (req, res) => {
             deliveryModeType = "SLOT";
         }
 
-        // Live Dynamic Status Timeline
         const trackingTimeline = [
             {
                 step: 1,
@@ -2961,7 +2964,6 @@ const getOrderDetails = async (req, res) => {
             }
         ];
 
-        // Clean Image Paths
         let pharmacyImage = order.pharmacyId?.profileImage || null;
         if (pharmacyImage) {
             pharmacyImage = pharmacyImage.replace(/\\/g, "/").replace(/^public\//, "");
@@ -2978,8 +2980,8 @@ const getOrderDetails = async (req, res) => {
                 orderType: order.orderType || 'General',
                 createdAt: order.createdAt,
                 formattedDate: moment(order.createdAt).format('DD MMM YYYY, hh:mm A'),
+                anyIntruction: order.anyIntruction || "", // 👈 Returned to User
 
-                // 🌟 Full Delivery Details
                 collectionType: order.collectionType,
                 deliveryMode: {
                     type: deliveryModeType,
@@ -3003,7 +3005,6 @@ const getOrderDetails = async (req, res) => {
                     transactionId: order.paymentDetails?.razorpayPaymentId || null
                 },
 
-                // 🌟 Full Bill Summary
                 billSummary: {
                     itemTotal: Number(order.billSummary?.itemTotal || 0),
                     originalItemTotal: Number(order.billSummary?.originalItemTotal || order.billSummary?.itemTotal || 0),
@@ -3036,11 +3037,9 @@ const getOrderDetails = async (req, res) => {
                     currentLocation: order.driverId.location || { lat: 0, lng: 0 }
                 } : null,
 
-                // 🌟 Full Address & OTP
                 deliveryAddress: order.address,
                 deliveryOTP: order.deliveryOTP || null,
 
-                // 🌟 Complete Detailed Items
                 itemsCount: order.items?.length || 0,
                 items: (order.items || []).map(item => ({
                     medicineId: item.medicineId?._id || item.medicineId,
@@ -3057,7 +3056,6 @@ const getOrderDetails = async (req, res) => {
                     isReplacementAllowed: item.isReplacementAllowed || false
                 })),
 
-                // 🌟 Full Return & Tracking Timeline
                 trackingTimeline,
                 returnDetails: order.returnDetails || null
             }
