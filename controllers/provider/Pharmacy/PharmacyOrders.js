@@ -103,40 +103,63 @@ const getPharmacyDashboardStats = async (req, res) => {
 };
 
 // =========================================================================
-// 1. GET NORMAL PHARMACY ORDERS (Lightweight Main Info - Excludes Rapid)
+// 1. GET NORMAL PHARMACY ORDERS (Active on Top, Delivered at the Bottom)
 // Endpoint: GET /provider/pharmacy/orders/list
 // =========================================================================
 const getPharmacyOrders = async (req, res) => {
     try {
         const { orderType, status, returnStatus, page = 1, limit = 20 } = req.query; 
         const skip = (parseInt(page) - 1) * parseInt(limit);
+        const limitVal = parseInt(limit);
 
-        let query = { 
-            pharmacyId: req.user.id,
+        let matchQuery = { 
+            pharmacyId: new mongoose.Types.ObjectId(req.user.id),
             isRapid: { $ne: true } // Excludes Rapid orders
         };
         
-        if (orderType) query.orderType = orderType;
-        if (status) query.status = status;
+        if (orderType) matchQuery.orderType = orderType;
+        if (status) matchQuery.status = status;
 
         if (returnStatus) {
             if (returnStatus === 'All') {
-                query['returnDetails.status'] = { $ne: 'None' };
+                matchQuery['returnDetails.status'] = { $ne: 'None' };
             } else {
-                query['returnDetails.status'] = returnStatus;
+                matchQuery['returnDetails.status'] = returnStatus;
             }
         }
 
-        const total = await PharmacyBooking.countDocuments(query);
-        const orders = await PharmacyBooking.find(query)
-            .populate('userId', 'name phone')
-            .populate('driverId', 'name phone vehicleNumber')
-            .sort({ createdAt: -1 })
-            .skip(skip)
-            .limit(parseInt(limit))
-            .lean();
+        const total = await PharmacyBooking.countDocuments(matchQuery);
 
-        // 🌟 MAIN-MAIN ESSENTIAL SUMMARY FOR LIST VIEW
+        // 🌟 AGGREGATION: Active Orders Top par, Delivered Orders Sabse Last mein
+        const pipeline = [
+            { $match: matchQuery },
+            {
+                $addFields: {
+                    deliveryPriority: {
+                        $cond: {
+                            if: { $in: ["$status", ["Delivered", "Completed"]] },
+                            then: 1, // 1 = Delivered (Pushed to bottom)
+                            else: 0  // 0 = Active/Placed/Packed/Shipped (Top)
+                        }
+                    }
+                }
+            },
+            {
+                $sort: {
+                    deliveryPriority: 1, // 0 pehle aayenge (Active), 1 sabse last mein (Delivered)
+                    createdAt: -1        // Newest orders pehle
+                }
+            },
+            { $skip: skip },
+            { $limit: limitVal }
+        ];
+
+        let orders = await PharmacyBooking.aggregate(pipeline);
+        orders = await PharmacyBooking.populate(orders, [
+            { path: 'userId', select: 'name phone' },
+            { path: 'driverId', select: 'name phone vehicleNumber' }
+        ]);
+
         const trimmedOrders = orders.map(order => ({
             _id: order._id,
             orderId: order.orderId,
@@ -178,49 +201,73 @@ const getPharmacyOrders = async (req, res) => {
             total,
             count: trimmedOrders.length,
             currentPage: parseInt(page),
-            totalPages: Math.ceil(total / parseInt(limit)),
+            totalPages: Math.ceil(total / limitVal),
             data: trimmedOrders 
         });
     } catch (error) { 
+        console.error("getPharmacyOrders Error:", error);
         res.status(500).json({ success: false, message: error.message }); 
     }
 };
 
 // =========================================================================
-// 2. GET RAPID ORDERS (Lightweight Main Info - isRapid == true Only)
+// 2. GET RAPID ORDERS (Active on Top, Delivered at the Bottom)
 // Endpoint: GET /provider/pharmacy/orders/rapid-list
 // =========================================================================
 const getPharmacyRapidOrders = async (req, res) => {
     try {
         const { orderType, status, returnStatus, page = 1, limit = 20 } = req.query; 
         const skip = (parseInt(page) - 1) * parseInt(limit);
+        const limitVal = parseInt(limit);
 
-        let query = { 
-            pharmacyId: req.user.id,
+        let matchQuery = { 
+            pharmacyId: new mongoose.Types.ObjectId(req.user.id),
             isRapid: true // Strictly Rapid Orders
         };
         
-        if (orderType) query.orderType = orderType;
-        if (status) query.status = status;
+        if (orderType) matchQuery.orderType = orderType;
+        if (status) matchQuery.status = status;
 
         if (returnStatus) {
             if (returnStatus === 'All') {
-                query['returnDetails.status'] = { $ne: 'None' };
+                matchQuery['returnDetails.status'] = { $ne: 'None' };
             } else {
-                query['returnDetails.status'] = returnStatus;
+                matchQuery['returnDetails.status'] = returnStatus;
             }
         }
 
-        const total = await PharmacyBooking.countDocuments(query);
-        const rapidOrders = await PharmacyBooking.find(query)
-            .populate('userId', 'name phone')
-            .populate('driverId', 'name phone vehicleNumber')
-            .sort({ createdAt: -1 })
-            .skip(skip)
-            .limit(parseInt(limit))
-            .lean();
+        const total = await PharmacyBooking.countDocuments(matchQuery);
 
-        // 🌟 MAIN-MAIN ESSENTIAL SUMMARY FOR RAPID LIST VIEW
+        // 🌟 AGGREGATION: Active Rapid Orders Top par, Delivered Rapid Orders Sabse Last mein
+        const pipeline = [
+            { $match: matchQuery },
+            {
+                $addFields: {
+                    deliveryPriority: {
+                        $cond: {
+                            if: { $in: ["$status", ["Delivered", "Completed"]] },
+                            then: 1, // 1 = Delivered (Pushed to bottom)
+                            else: 0  // 0 = Active/Pending Rapid Orders (Top)
+                        }
+                    }
+                }
+            },
+            {
+                $sort: {
+                    deliveryPriority: 1, // Active orders pehle, Delivered orders sabse last
+                    createdAt: -1        // Latest orders pehle
+                }
+            },
+            { $skip: skip },
+            { $limit: limitVal }
+        ];
+
+        let rapidOrders = await PharmacyBooking.aggregate(pipeline);
+        rapidOrders = await PharmacyBooking.populate(rapidOrders, [
+            { path: 'userId', select: 'name phone' },
+            { path: 'driverId', select: 'name phone vehicleNumber' }
+        ]);
+
         const trimmedRapidOrders = rapidOrders.map(order => ({
             _id: order._id,
             orderId: order.orderId,
@@ -264,10 +311,11 @@ const getPharmacyRapidOrders = async (req, res) => {
             total,
             count: trimmedRapidOrders.length,
             currentPage: parseInt(page),
-            totalPages: Math.ceil(total / parseInt(limit)),
+            totalPages: Math.ceil(total / limitVal),
             data: trimmedRapidOrders 
         });
     } catch (error) { 
+        console.error("getPharmacyRapidOrders Error:", error);
         res.status(500).json({ success: false, message: error.message }); 
     }
 };
@@ -507,16 +555,15 @@ const reassignDriverManual = async (req, res) => {
     }
 };
 
-// UPDATE ORDER STATUS (e.g. Packed, Shipped, Delivered, Cancelled)
+// =========================================================================
+// UPDATE ORDER STATUS & AUTO-FREE DRIVER
 // Endpoint: PATCH /provider/pharmacy/orders/status/:orderId
+// =========================================================================
 const updateOrderStatus = async (req, res) => {
     try {
         const { orderId } = req.params;
         const { status, deliveryStatus } = req.body;
         const pharmacyId = req.user.id;
-
-        // 🔍 DEBUG LOG: API triggers parameters printing
-        console.log(`\x1b[36m[DEBUG] updateOrderStatus: Deployed for orderId: "${orderId}", status: "${status}", deliveryStatus: "${deliveryStatus}"\x1b[0m`);
 
         // Coordinate dynamic checks
         const isObjectId = mongoose.Types.ObjectId.isValid(orderId.trim());
@@ -530,40 +577,56 @@ const updateOrderStatus = async (req, res) => {
 
         const order = await PharmacyBooking.findOne(query);
         if (!order) {
-            console.warn(`\x1b[33m[DEBUG] updateOrderStatus: Order not found in DB with query:`, query, `\x1b[0m`);
             return res.status(400).json({ 
                 success: false, 
-                message: `Business Error: Order not found or unauthorized to update status for order: '${orderId}'` 
+                message: `Order not found or unauthorized to update status for order: '${orderId}'` 
             });
         }
 
-        // Apply fields dynamically if present in request body
-        if (status) order.status = status;
+        // Support both 'Completed' and 'Delivered' (Schema Enum normalization)
+        let normalizedStatus = status;
+        if (normalizedStatus === 'Completed') {
+            normalizedStatus = 'Delivered';
+        }
+
+        if (normalizedStatus) order.status = normalizedStatus;
         if (deliveryStatus) order.deliveryStatus = deliveryStatus;
+
+        // 🌟 1. Check if Order is Delivered / Completed
+        const isDelivered = order.status === 'Delivered' || order.deliveryStatus === 'Delivered';
+        const isCancelled = order.status === 'Cancelled' || order.deliveryStatus === 'CancelledByDriver' || order.deliveryStatus === 'UserRefused';
+
+        if (isDelivered) {
+            order.status = 'Delivered';
+            order.deliveryStatus = 'Delivered';
+            if (!order.deliveredAt) order.deliveredAt = new Date();
+        }
+
+        // 🌟 2. FREE THE DRIVER: Jab order Delivered ya Cancel ho jaye
+        if ((isDelivered || isCancelled) && order.driverId) {
+            await Driver.findByIdAndUpdate(
+                order.driverId,
+                { $set: { status: 'Available' } } // 👈 Driver ab free ho jayega!
+            );
+            console.log(`[DRIVER SYNC]: Driver ${order.driverId} successfully freed and marked 'Available' for Order #${order.orderId}`);
+        }
 
         // Save order changes
         await order.save();
-        console.log(`\x1b[32m[DEBUG] updateOrderStatus: Order status successfully saved to DB.\x1b[0m`);
 
         res.json({
             success: true,
-            message: `Order status successfully updated to '${order.status}'`,
+            message: `Order status successfully updated to '${order.status}' and driver freed.`,
             data: order
         });
     } catch (error) {
-        // 🚨 CRITICAL: Print exact error stack trace to your backend terminal
-        console.error("\x1b[31m[CRITICAL] updateOrderStatus Error Details:\x1b[0m", error);
-        
-        // If validation fails (e.g. invalid enum value), return 400 Bad Request
-        const statusCode = error.name === 'ValidationError' ? 400 : 500;
-        res.status(statusCode).json({ 
+        console.error("updateOrderStatus Error:", error);
+        res.status(500).json({ 
             success: false, 
-            errorName: error.name,
             message: error.message 
         });
     }
 };
-
 
 
 ////////////////////////////////////////////
