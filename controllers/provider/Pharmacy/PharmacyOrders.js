@@ -103,21 +103,22 @@ const getPharmacyDashboardStats = async (req, res) => {
 };
 
 // =========================================================================
-// 1. GET NORMAL PHARMACY ORDERS (Active on Top, Delivered at the Bottom)
+// 1. GET NORMAL PHARMACY ORDERS (Excludes Rapid & Excludes Prescription Orders)
 // Endpoint: GET /provider/pharmacy/orders/list
 // =========================================================================
 const getPharmacyOrders = async (req, res) => {
     try {
-        const { orderType, status, returnStatus, page = 1, limit = 20 } = req.query; 
+        const { status, returnStatus, page = 1, limit = 20 } = req.query; 
         const skip = (parseInt(page) - 1) * parseInt(limit);
         const limitVal = parseInt(limit);
 
+        // 🌟 STRICT QUERY: Rapid aur Prescription (Rx) dono orders ko filter out kar diya gaya hai
         let matchQuery = { 
             pharmacyId: new mongoose.Types.ObjectId(req.user.id),
-            isRapid: { $ne: true } // Excludes Rapid orders
+            isRapid: { $ne: true },               // 👈 Excludes Rapid Express orders
+            orderType: { $ne: 'Prescription' }     // 👈 Excludes Rx Prescription orders (Only General Orders)
         };
         
-        if (orderType) matchQuery.orderType = orderType;
         if (status) matchQuery.status = status;
 
         if (returnStatus) {
@@ -130,7 +131,7 @@ const getPharmacyOrders = async (req, res) => {
 
         const total = await PharmacyBooking.countDocuments(matchQuery);
 
-        // 🌟 AGGREGATION: Active Orders Top par, Delivered Orders Sabse Last mein
+        // Sorting: Active orders top par, Delivered orders sabse last mein
         const pipeline = [
             { $match: matchQuery },
             {
@@ -146,7 +147,7 @@ const getPharmacyOrders = async (req, res) => {
             },
             {
                 $sort: {
-                    deliveryPriority: 1, // 0 pehle aayenge (Active), 1 sabse last mein (Delivered)
+                    deliveryPriority: 1, // Active orders pehle, Delivered sabse last mein
                     createdAt: -1        // Newest orders pehle
                 }
             },
