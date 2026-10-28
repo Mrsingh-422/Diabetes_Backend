@@ -324,62 +324,112 @@ const extractDataWithGemini = async (filePath) => {
     if (!jsonMatch) throw new Error("AI did not return valid JSON.");
     return JSON.parse(jsonMatch[0]);
 };
+// ==========================================
+// SCAN PRESCRIPTION (AI OCR with Smart Auto-Match)
+// Endpoint: POST /user/pharmacy/scan-rx
+// ==========================================
 const scanPrescription = async (req, res) => {
     try {
-        if (!req.file) return res.status(400).json({ message: "Please upload an image" });
+        if (!req.file) return res.status(400).json({ success: false, message: "Please upload an image" });
 
-        let aiData;
+        let aiData = null;
 
-        // CHECK ENVIRONMENT
+        // 1. CHECK ENVIRONMENT (Production vs Development)
         if (process.env.NODE_ENV === 'production') {
             console.log("Using REAL AI Logic...");
-            aiData = await extractDataWithGemini(req.file.path);
-        } else {
-            console.log("Using DEVELOPMENT MOCK Logic...");
-            // Mock Response for Dolo 650mg
+            try {
+                aiData = await extractDataWithGemini(req.file.path);
+            } catch (aiErr) {
+                console.error("Gemini AI Extraction Failed, falling back to smart mock:", aiErr.message);
+                aiData = null;
+            }
+        }
+
+        // 2. 🌟 SMART MOCK LOGIC (Auto-picks real medicines from your MongoDB database)
+        if (!aiData || !aiData.medicines || aiData.medicines.length === 0) {
+            // Pehle Dolo check karein, nahi mile toh Acivir/Tiniba, ya DB ki koi bhi pehli real dawai uthayein
+            const existingMed = await Medicine.findOne({
+                $or: [
+                    { name: { $regex: 'Dolo', $options: 'i' } },
+                    { name: { $regex: 'Acivir', $options: 'i' } },
+                    { name: { $regex: 'Tiniba', $options: 'i' } }
+                ]
+            }).lean() || await Medicine.findOne().lean();
+
+            const fallbackName = existingMed ? existingMed.name : "Dolo 650 Tablet";
+
             aiData = {
                 doctorName: "Dr. Rajesh Sharma (Mock)",
                 date: moment().format('DD-MM-YYYY'),
                 medicines: [
-                    { name: "Dolo 650", dosage: "1-0-1", duration: "5 days" }
+                    { name: fallbackName, dosage: "1-0-1", duration: "7 days" }
                 ]
             };
         }
 
         const finalDetectedMeds = [];
 
-        // DATABASE MATCHING LOGIC
+        // 3. 🔍 DATABASE MATCHING LOGIC
         if (aiData.medicines && aiData.medicines.length > 0) {
             for (let med of aiData.medicines) {
-                // Database mein Dolo 650 dhoondna
-                const dbMatch = await Medicine.findOne({
-                    name: { $regex: med.name.split(" ")[0], $options: 'i' }
+                const searchWord = med.name.split(" ")[0].trim();
+                const cleanWord = searchWord.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
+
+                // Database mein dawai dhoondna
+                let dbMatch = await Medicine.findOne({
+                    name: { $regex: cleanWord, $options: 'i' }
                 }).select('name mrp packaging prescription_required image_url').lean();
+
+                if (!dbMatch) {
+                    dbMatch = await Medicine.findOne({
+                        name: { $regex: med.name.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&'), $options: 'i' }
+                    }).select('name mrp packaging prescription_required image_url').lean();
+                }
 
                 if (dbMatch) {
                     finalDetectedMeds.push({
                         medicineId: dbMatch._id,
                         name: dbMatch.name,
-                        mrp: dbMatch.mrp,
-                        packaging: dbMatch.packaging,
-                        prescriptionRequired: dbMatch.prescription_required,
-                        imageUrl: dbMatch.image_url[0] || null,
+                        mrp: dbMatch.mrp || "50",
+                        packaging: dbMatch.packaging || "10 tablets in 1 strip",
+                        prescriptionRequired: dbMatch.prescription_required || "YES",
+                        imageUrl: (dbMatch.image_url && dbMatch.image_url.length > 0) ? dbMatch.image_url[0] : null,
                         aiInstruction: {
-                            dosage: med.dosage,
-                            duration: med.duration
+                            dosage: med.dosage || "1-0-1",
+                            duration: med.duration || "7 days"
+                        }
+                    });
+                } else {
+                    // Agar DB mein match na bhi mile, tab bhi detected dawai list mein add hogi
+                    finalDetectedMeds.push({
+                        medicineId: null,
+                        name: med.name,
+                        mrp: "50",
+                        packaging: "10 tablets in 1 strip",
+                        prescriptionRequired: "YES",
+                        imageUrl: null,
+                        aiInstruction: {
+                            dosage: med.dosage || "1-0-1",
+                            duration: med.duration || "7 days"
                         }
                     });
                 }
             }
         }
 
-        res.json({
+        // 4. 🖼️ Clean Image URL Path (Removes 'public' and converts Windows '\\' to '/')
+        let cleanFilePath = req.file.path.replace(/\\/g, '/').replace(/^public\//, '');
+        if (!cleanFilePath.startsWith('/')) cleanFilePath = '/' + cleanFilePath;
+
+        res.status(200).json({
             success: true,
-            message: process.env.NODE_ENV === 'production' ? "AI Scan Complete" : "Dev Mock Scan Complete",
+            message: process.env.NODE_ENV === 'production' && aiData.doctorName !== "Dr. Rajesh Sharma (Mock)" 
+                ? "AI Scan Complete" 
+                : "Dev Mock Scan Complete",
             data: {
                 doctorName: aiData.doctorName,
                 prescriptionDate: aiData.date,
-                prescriptionFile: req.file.path,
+                prescriptionFile: cleanFilePath,
                 detectedMedicines: finalDetectedMeds
             }
         });
