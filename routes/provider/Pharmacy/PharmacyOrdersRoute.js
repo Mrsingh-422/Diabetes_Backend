@@ -8,7 +8,7 @@ const {
     getPharmacyOrderDetails,
     getAvailableDrivers, 
     assignDriverManual , reassignDriverManual,updateOrderStatus,
-    submitPharmacistReview,getProviderPrescriptionRequests, getProviderPrescriptionRequestDetails, startPrescriptionReview,rejectPrescriptionRequest, trackPharmacyDrivers,
+    submitPharmacistReview,getProviderPrescriptionRequests, getProviderPrescriptionRequestDetails, startPrescriptionReview,rejectPrescriptionRequest,getCancelAndReturnOrders, trackPharmacyDrivers,
     getPharmacyOrderInvoiceDetails,handleReturnRequestAction,approveReturnAndAssignDriver, rejectReturnRequest,confirmStoreReturnReceipt
 } = require('../../../controllers/provider/Pharmacy/PharmacyOrders');
 
@@ -21,6 +21,8 @@ router.get('/list', protect('pharmacy'), getPharmacyOrders);
 router.get('/rapid-list', protect('pharmacy'), getPharmacyRapidOrders);
 // 🌟 3. Complete Order Details API (For Both Regular & Rapid Orders)
 router.get('/details/:orderId', protect('pharmacy'), getPharmacyOrderDetails);
+// 🌟 NEW: Cancelled & Returned Orders for Pharmacy Vendor
+router.get('/cancelled-and-returned', protect('pharmacy'), getCancelAndReturnOrders);
 
 router.get('/available-drivers', protect('pharmacy'), getAvailableDrivers);
 router.post('/assign-manual', protect('pharmacy'), assignDriverManual);

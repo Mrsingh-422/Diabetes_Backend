@@ -5,7 +5,7 @@ const mongoose = require('mongoose');
 const Medicine = require('../../../models/Medicine');
 const moment = require('moment');
 const Wallet = require('../../../models/Wallet');
-const HsnMaster = require('../../../models/HsnMaster'); // Import HSN Master model
+const HsnMaster = require('../../../models/HsnMaster'); 
 const MedicineInventory = require('../../../models/MedicineInventory');
 const { sendPushNotification } = require('../../../utils/notification');
 
@@ -39,6 +39,7 @@ const numberToWordsIndian = (num) => {
 
 // NEW: GET PHARMACY DASHBOARD STATS
 // Endpoint: GET /provider/pharmacy/orders/dashboard-stats
+
 const getPharmacyDashboardStats = async (req, res) => {
     try {
         const pharmacyId = req.user.id;
@@ -93,7 +94,7 @@ const getPharmacyDashboardStats = async (req, res) => {
                 completedOrders: result.completedOrders,
                 totalEarnings: result.totalEarnings,
                 walletBalance: wallet?.balance || 0,
-                pendingReturns: result.pendingReturns // 👈 Returns Tab Badge Counter
+                pendingReturns: result.pendingReturns 
             }
         });
 
@@ -634,7 +635,7 @@ const updateOrderStatus = async (req, res) => {
 ////// ai prescription requests ////////////
 ////////////////////////////////////////////
 
-// 1. GET PENDING REQUESTS FOR CURRENT PHARMACY (फार्मासिस्ट डैशबोर्ड के लिए)
+// 1. GET PENDING REQUESTS FOR CURRENT PHARMACY 
 const getProviderPrescriptionRequests = async (req, res) => {
     try {
         const pharmacyId = req.user.id; // Logged-in pharmacist/pharmacy
@@ -659,7 +660,7 @@ const getProviderPrescriptionRequests = async (req, res) => {
     }
 };
 
-// 2. GET SPECIFIC PRESCRIPTION REQUEST DETAILS (समीक्षा करने के लिए)
+// 2. GET SPECIFIC PRESCRIPTION REQUEST DETAILS 
 const getProviderPrescriptionRequestDetails = async (req, res) => {
     try {
         const { requestId } = req.params;
@@ -1370,10 +1371,146 @@ const confirmStoreReturnReceipt = async (req, res) => {
     }
 };
 
+// =========================================================================
+// GET CANCELLED AND RETURNED/REPLACEMENT ORDERS FOR PHARMACY VENDOR
+// Endpoint: GET /provider/pharmacy/orders/cancelled-and-returned?page=1&limit=20
+// =========================================================================
+const getCancelAndReturnOrders = async (req, res) => {
+    try {
+        const { type, page = 1, limit = 20 } = req.query; // type: 'Cancelled' | 'Return' | 'Replacement' | 'All'
+        const skip = (parseInt(page) - 1) * parseInt(limit);
+        const limitVal = parseInt(limit);
+
+        const pharmacyObjectId = new mongoose.Types.ObjectId(req.user.id);
+
+        // 🌟 Base Filter: Cancelled orders YA Return/Replacement wale orders
+        let matchQuery = {
+            pharmacyId: pharmacyObjectId,
+            $or: [
+                { status: 'Cancelled' },
+                { deliveryStatus: 'CancelledByDriver' },
+                { 'returnDetails.status': { $nin: ['None', null] } }
+            ]
+        };
+
+        // Optional filter agar vendor sirf Cancelled ya sirf Return dekhna chahe
+        if (type === 'Cancelled') {
+            matchQuery = {
+                pharmacyId: pharmacyObjectId,
+                $or: [
+                    { status: 'Cancelled' },
+                    { deliveryStatus: 'CancelledByDriver' }
+                ]
+            };
+        } else if (type === 'Return') {
+            matchQuery = {
+                pharmacyId: pharmacyObjectId,
+                'returnDetails.status': { $nin: ['None', null] },
+                'returnDetails.requestType': 'Return'
+            };
+        } else if (type === 'Replacement') {
+            matchQuery = {
+                pharmacyId: pharmacyObjectId,
+                'returnDetails.status': { $nin: ['None', null] },
+                'returnDetails.requestType': 'Replacement'
+            };
+        }
+
+        const total = await PharmacyBooking.countDocuments(matchQuery);
+
+        const orders = await PharmacyBooking.find(matchQuery)
+            .populate('userId', 'name phone email')
+            .populate('driverId', 'name phone vehicleNumber')
+            .populate('returnDetails.pickupDriverId', 'name phone vehicleNumber')
+            .sort({ updatedAt: -1 }) // Latest activity pehle
+            .skip(skip)
+            .limit(limitVal)
+            .lean();
+
+        const formattedOrders = orders.map(order => {
+            const isCancelled = order.status === 'Cancelled' || order.deliveryStatus === 'CancelledByDriver';
+            const isReturnOrReplacement = order.returnDetails && order.returnDetails.status !== 'None';
+
+            return {
+                _id: order._id,
+                orderId: order.orderId,
+                orderType: order.orderType || 'General',
+                status: order.status,
+                deliveryStatus: order.deliveryStatus,
+                isRapid: Boolean(order.isRapid),
+                
+                // Flag to identify ticket type in UI
+                category: isCancelled && !isReturnOrReplacement 
+                    ? 'Cancelled Order' 
+                    : (order.returnDetails?.requestType || 'Return/Replacement'),
+
+                customer: {
+                    id: order.userId?._id || null,
+                    name: order.userId?.name || order.address?.name || "Customer",
+                    phone: order.userId?.phone || order.address?.phone || ""
+                },
+
+                deliveryCity: order.address?.city || "",
+
+                // 🌟 Cancellation Info
+                isCancelled: isCancelled,
+                cancelReason: order.cancelReason || null,
+                cancellationFeeApplied: order.billSummary?.cancellationFeeApplied || 0,
+
+                // 🌟 Return / Replacement Info
+                isReturn: isReturnOrReplacement,
+                returnDetails: isReturnOrReplacement ? {
+                    requestType: order.returnDetails.requestType || 'Return',
+                    status: order.returnDetails.status, // 'Requested', 'Approved', 'CollectedByDriver', 'Completed', 'Rejected'
+                    reason: order.returnDetails.reason || "",
+                    userComments: order.returnDetails.userComments || "",
+                    proofImages: order.returnDetails.proofImages || [],
+                    refundAmount: order.returnDetails.refundAmount || 0,
+                    rejectionReason: order.returnDetails.rejectionReason || null,
+                    requestedAt: order.returnDetails.requestedAt || null,
+                    pickupDriver: order.returnDetails.pickupDriverId ? {
+                        id: order.returnDetails.pickupDriverId._id,
+                        name: order.returnDetails.pickupDriverId.name,
+                        phone: order.returnDetails.pickupDriverId.phone
+                    } : null
+                } : null,
+
+                // Financials
+                totalAmount: order.billSummary?.totalAmount || 0,
+                paymentMethod: order.paymentMethod,
+                paymentStatus: order.paymentStatus,
+
+                // Items Overview
+                itemsCount: order.items?.length || 0,
+                itemsSummary: (order.items || []).map(i => ({
+                    name: i.name,
+                    quantity: i.quantity,
+                    price: i.price
+                })),
+
+                updatedAt: order.updatedAt,
+                formattedDate: moment(order.updatedAt).format('DD MMM YYYY, hh:mm A')
+            };
+        });
+
+        res.status(200).json({
+            success: true,
+            total,
+            count: formattedOrders.length,
+            currentPage: parseInt(page),
+            totalPages: Math.ceil(total / limitVal),
+            data: formattedOrders
+        });
+
+    } catch (error) {
+        console.error("getCancelAndReturnOrders Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
 
 
 module.exports = { getPharmacyDashboardStats, getPharmacyOrders,getPharmacyRapidOrders, getAvailableDrivers,getPharmacyOrderDetails, assignDriverManual, triggerAutoAssignment,reassignDriverManual,updateOrderStatus,
 
-    submitPharmacistReview,getProviderPrescriptionRequests, getProviderPrescriptionRequestDetails, startPrescriptionReview,rejectPrescriptionRequest, trackPharmacyDrivers, getPharmacyOrderInvoiceDetails,
+    submitPharmacistReview,getProviderPrescriptionRequests, getProviderPrescriptionRequestDetails, startPrescriptionReview,rejectPrescriptionRequest,getCancelAndReturnOrders, trackPharmacyDrivers, getPharmacyOrderInvoiceDetails,
      handleReturnRequestAction,approveReturnAndAssignDriver, rejectReturnRequest,confirmStoreReturnReceipt
  };
