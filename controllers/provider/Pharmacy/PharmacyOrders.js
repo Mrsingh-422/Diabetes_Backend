@@ -431,31 +431,99 @@ const getAvailableDrivers = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// 3. MANUAL ASSIGN DRIVER
+// =========================================================================
+// 3. MANUAL ASSIGN DRIVER (Updates PharmacyBooking directly)
 // Endpoint: POST /provider/pharmacy/orders/assign-manual
+// =========================================================================
 const assignDriverManual = async (req, res) => {
     try {
         const { orderId, driverId } = req.body;
+        const pharmacyId = req.user.id;
+
+        if (!orderId || !driverId) {
+            return res.status(400).json({ success: false, message: "orderId and driverId are required." });
+        }
         
         const driver = await Driver.findById(driverId);
         if (!driver || driver.status !== 'Available') {
-            return res.status(400).json({ message: "Driver is no longer available" });
+            return res.status(400).json({ success: false, message: "Driver is no longer available" });
         }
 
-        const order = await PharmacyBooking.findByIdAndUpdate(orderId, {
-            driverId,
-            deliveryStatus: 'Assigned',
-            status: 'Shipped', // Jab driver assign ho jaye toh status Shipped kar sakte hain
-            assignedAt: new Date()
-        }, { new: true });
+        const isObjectId = mongoose.isValidObjectId(orderId);
+        const now = new Date();
 
-        // Driver ko Busy mark karein
-        await Driver.findByIdAndUpdate(driverId, { status: 'Busy' });
+        // 🌟 1. Find the REAL PharmacyBooking document (supports both _id and string orderId like 'ORD-RX-...')
+        let booking = await PharmacyBooking.findOne({
+            pharmacyId,
+            $or: [
+                ...(isObjectId ? [{ _id: new mongoose.Types.ObjectId(orderId) }] : []),
+                { orderId: String(orderId).trim() }
+            ]
+        });
 
-        res.json({ success: true, message: "Driver assigned successfully", data: order });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        // 🌟 2. Fallback: Agar frontend ne prescription request ID bhej diya ho, toh uski linked booking dhoondein
+        if (!booking) {
+            const PharmacyPrescriptionRequest = mongoose.models.PharmacyPrescriptionRequest || require('../../../models/PharmacyPrescriptionRequest');
+            const rxReq = await PharmacyPrescriptionRequest.findOne({
+                pharmacyId,
+                $or: [
+                    ...(isObjectId ? [{ _id: new mongoose.Types.ObjectId(orderId) }] : []),
+                    { requestId: String(orderId).trim() }
+                ]
+            });
+
+            if (rxReq) {
+                // User & file ke matching se PharmacyBooking dhoondein
+                booking = await PharmacyBooking.findOne({
+                    pharmacyId,
+                    userId: rxReq.userId,
+                    orderType: 'Prescription',
+                    status: { $in: ['Placed', 'Pending', 'Packed'] }
+                }).sort({ createdAt: -1 });
+            }
+        }
+
+        if (!booking) {
+            return res.status(404).json({ 
+                success: false, 
+                message: `Order booking not found for ID: '${orderId}'.` 
+            });
+        }
+
+        // 🌟 3. UPDATE THE REAL PHARMACYBOOKING DOCUMENT
+        booking.driverId = driverId;
+        booking.deliveryStatus = 'Assigned';
+        booking.status = 'Shipped';
+        booking.assignedAt = now;
+        await booking.save();
+
+        // 🌟 4. MARK DRIVER AS BUSY
+        await Driver.findByIdAndUpdate(driverId, { $set: { status: 'Busy' } });
+
+        // Driver ko notification bhejein
+        try {
+            await sendPushNotification(
+                driverId,
+                'driver',
+                "New Delivery Assigned! 📦",
+                `You have been assigned to deliver Prescription Order #${booking.orderId}.`,
+                { orderId: booking._id.toString(), type: 'delivery_assigned' }
+            );
+        } catch (e) {}
+
+        console.log(`[ASSIGN SUCCESS]: Driver ${driver.name} assigned to PharmacyBooking #${booking.orderId} (${booking._id})`);
+
+        res.json({ 
+            success: true, 
+            message: "Driver assigned successfully to order!", 
+            data: booking 
+        });
+
+    } catch (error) { 
+        console.error("assignDriverManual Error:", error);
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
-
 // 4. AUTO-ASSIGN LOGIC (Background Process)
 const triggerAutoAssignment = async (orderId) => {
     const order = await PharmacyBooking.findById(orderId);
@@ -660,28 +728,126 @@ const getProviderPrescriptionRequests = async (req, res) => {
     }
 };
 
-// 2. GET SPECIFIC PRESCRIPTION REQUEST DETAILS 
+// =========================================================================
+// 2. GET SPECIFIC PRESCRIPTION REQUEST DETAILS (Full Sync with Documentation)
+// Endpoint: GET /provider/pharmacy/orders/prescription-request/details/:requestId
+// =========================================================================
 const getProviderPrescriptionRequestDetails = async (req, res) => {
     try {
         const { requestId } = req.params;
         const pharmacyId = req.user.id;
 
-        const request = await PharmacyPrescriptionRequest.findOne({ requestId, pharmacyId })
-            .populate('userId', 'name phone email gender age');
-
-        if (!request) {
-            return res.status(404).json({ success: false, message: "Request not found" });
+        if (!requestId) {
+            return res.status(400).json({ success: false, message: "Request ID parameter is required." });
         }
 
-        res.json({
+        const isObjectId = mongoose.isValidObjectId(requestId);
+
+        // 1. Dhoondhein Prescription Request (chahe Mongo _id ho ya custom requestId jaise 'REQ-98320D')
+        const request = await PharmacyPrescriptionRequest.findOne({
+            pharmacyId,
+            $or: [
+                ...(isObjectId ? [{ _id: new mongoose.Types.ObjectId(requestId) }] : []),
+                { requestId: String(requestId).trim() }
+            ]
+        })
+        .populate('userId', 'name phone email gender age')
+        .lean();
+
+        if (!request) {
+            return res.status(404).json({ success: false, message: "Prescription request not found or unauthorized." });
+        }
+
+        // 2. 🔗 Dhoondhein Linked PharmacyBooking
+        // Pehle exact prescription image/path se dhoondhein, warna user + orderType se
+        let linkedBooking = null;
+
+        if (request.prescriptionImage) {
+            linkedBooking = await PharmacyBooking.findOne({
+                pharmacyId,
+                userId: request.userId?._id || request.userId,
+                $or: [
+                    { prescriptionFile: request.prescriptionImage },
+                    { prescriptionImages: request.prescriptionImage }
+                ]
+            })
+            .populate('driverId', 'name phone email vehicleNumber vehicleType profilePic status')
+            .sort({ createdAt: -1 })
+            .lean();
+        }
+
+        if (!linkedBooking) {
+            linkedBooking = await PharmacyBooking.findOne({
+                pharmacyId,
+                userId: request.userId?._id || request.userId,
+                orderType: 'Prescription'
+            })
+            .populate('driverId', 'name phone email vehicleNumber vehicleType profilePic status')
+            .sort({ createdAt: -1 })
+            .lean();
+        }
+
+        // 3. Status Synchronization: Agar linked booking mil gayi aur wo Paid/Placed hai
+        let resolvedStatus = request.status;
+        if (linkedBooking && (linkedBooking.paymentStatus === 'Paid' || ['Placed', 'Packed', 'Shipped', 'Delivered'].includes(linkedBooking.status))) {
+            resolvedStatus = 'Paid';
+        }
+
+        const isOrderPaid = (resolvedStatus?.toUpperCase() === 'PAID');
+        const hasDriver = Boolean(linkedBooking?.driverId);
+
+        // Driver details mapping as per Documentation (Page 3 & 6)
+        let driverData = null;
+        if (hasDriver && linkedBooking.driverId) {
+            const d = linkedBooking.driverId;
+            driverData = {
+                id: d._id?.toString() || d.id,
+                name: d.name || "",
+                phone: d.phone || "",
+                email: d.email || "",
+                vehicleNumber: d.vehicleNumber || "VB-010H",
+                vehicleType: d.vehicleType || "Bike",
+                profilePic: d.profilePic || null,
+                status: d.status || "Busy"
+            };
+        }
+
+        // 4. Boolean Control Flags for Frontend (Exact match with PDF Page 3)
+        const isDriverAssigned = isOrderPaid && hasDriver;
+        const canAssignDriver = isOrderPaid && !hasDriver;
+
+        const responseData = {
+            ...request,
+            _id: request._id,
+            mongoId: request._id,
+            requestId: request.requestId,
+            
+            // Status & Linked IDs
+            status: resolvedStatus,
+            bookingId: linkedBooking?._id || null,
+            bookingMongoId: linkedBooking?._id || null,
+            bookingOrderId: linkedBooking?.orderId || null,
+            
+            // Delivery info
+            deliveryStatus: linkedBooking?.deliveryStatus || "PendingAssignment",
+            deliveryOTP: linkedBooking?.deliveryOTP || null,
+
+            // 🌟 PDF Documentation Essential Keys:
+            isDriverAssigned: Boolean(isDriverAssigned),
+            canAssignDriver: Boolean(canAssignDriver),
+            driver: driverData
+        };
+
+        return res.status(200).json({
             success: true,
-            data: request
+            data: responseData
         });
+
     } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
+        console.error("getProviderPrescriptionRequestDetails Error:", error);
+        return res.status(500).json({ success: false, message: error.message });
     }
 };
-
 // 3. START REVIEW (स्टेटस को 'Pending Review' से 'Reviewing' में बदलने के लिए)
 const startPrescriptionReview = async (req, res) => {
     try {

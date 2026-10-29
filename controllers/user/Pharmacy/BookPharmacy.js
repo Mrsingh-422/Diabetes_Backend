@@ -2713,55 +2713,61 @@ const uploadPrescription = async (req, res) => {
     }
 };
 
-// CANCEL MEDICINE ORDER (With Automatic Inventory Stock Restoration & Refund Policy)
 // =========================================================================
-// 3. CANCEL MEDICINE ORDER (Strict: Out For Delivery Restriction)
+// CANCEL MEDICINE ORDER (Blocked if Out For Delivery / Shipped / Delivered)
 // Endpoint: POST /user/pharmacy/cancel-order
 // =========================================================================
 const cancelMedicineOrder = async (req, res) => {
     try {
         const { orderId, reason } = req.body;
-        const userId = req.user.id;
+        const userId = req.user?.id || req.user?._id;
 
         if (!orderId) {
             return res.status(400).json({ success: false, message: "orderId is required." });
         }
 
         const order = await PharmacyBooking.findOne({
-            $or: [{ _id: mongoose.isValidObjectId(orderId) ? orderId : new mongoose.Types.ObjectId() }, { orderId }],
+            $or: [
+                { _id: mongoose.isValidObjectId(orderId) ? new mongoose.Types.ObjectId(orderId) : new mongoose.Types.ObjectId() },
+                { orderId: String(orderId).trim() }
+            ],
             userId
         });
 
         if (!order) {
-            return res.status(404).json({ success: false, message: "Order not found or unauthorized." });
+            return res.status(404).json({ success: false, message: "Order not found or unauthorized access." });
         }
 
-        // 🚨 STRICT CHECK: Block cancellation if order is Out For Delivery, Shipped, or Delivered!
+        // 🚨 STRICT CHECK: Block cancellation if parcel is Out For Delivery, Reached, Shipped, or Delivered
         const nonCancellableDeliveryStatuses = ['OutForDelivery', 'ReachedLocation', 'Delivered', 'PickedUp'];
-        const nonCancellableOrderStatuses = ['Delivered', 'Cancelled', 'Shipped'];
+        const nonCancellableOrderStatuses = ['Shipped', 'Delivered', 'Cancelled'];
 
         if (
             nonCancellableDeliveryStatuses.includes(order.deliveryStatus) ||
             nonCancellableOrderStatuses.includes(order.status)
         ) {
+            const currentStage = order.deliveryStatus === 'OutForDelivery' 
+                ? 'Out For Delivery' 
+                : (order.status === 'Delivered' ? 'Delivered' : order.deliveryStatus || order.status);
+
             return res.status(400).json({
                 success: false,
-                message: `Order cannot be cancelled: Your order is already ${order.deliveryStatus === 'OutForDelivery' ? 'out for delivery' : (order.status === 'Shipped' ? 'shipped' : order.status)}. You can refuse the parcel at your doorstep.`
+                canReturnInstead: order.status === 'Delivered',
+                message: `Order cannot be cancelled: Parcel is currently '${currentStage}'. Once delivered, you can apply for return/replacement.`
             });
         }
 
-        // 1. Calculate Cancellation policy & refund
+        // 1. Calculate Cancellation deductions & refund
         const policyResult = await processCancellationRefund(order, 'Pharmacy');
 
-        // 2. Restore reserved medicine quantities back to inventory
+        // 2. Restore inventory quantities
         if (order.items && order.items.length > 0) {
             for (const item of order.items) {
                 if (item.medicineId) {
-                    const returnQty = Number(item.quantity || 1);
                     await MedicineInventory.findOneAndUpdate(
                         { pharmacyId: order.pharmacyId, medicineId: item.medicineId },
                         { 
-                            $inc: { stock_quantity: returnQty },
+                            $inc: { stock_quantity: Number(item.quantity || 1) },
                             $set: { is_available: true } 
                         }
                     );
@@ -2769,7 +2775,7 @@ const cancelMedicineOrder = async (req, res) => {
             }
         }
 
-        // 3. Release Driver if assigned
+        // 3. Free Driver if assigned
         if (order.driverId) {
             await Driver.findByIdAndUpdate(order.driverId, { $set: { status: 'Available' } });
         }
@@ -2790,14 +2796,14 @@ const cancelMedicineOrder = async (req, res) => {
                 order.pharmacyId,
                 'pharmacy',
                 "Order Cancelled by Customer",
-                `Order #${order.orderId} was cancelled. Stock has been restored to your inventory.`,
+                `Order #${order.orderId} was cancelled before dispatch. Stock restored to inventory.`,
                 { orderId: order._id.toString(), type: 'order_cancelled' }
             );
         } catch (e) {}
 
-        res.json({
+        return res.status(200).json({
             success: true,
-            message: "Order cancelled successfully. Items restored to inventory.",
+            message: "Order cancelled successfully. Stock has been restored to inventory.",
             data: {
                 orderId: order.orderId,
                 status: order.status,
@@ -2807,10 +2813,11 @@ const cancelMedicineOrder = async (req, res) => {
         });
 
     } catch (error) {
-        console.error("Cancel Medicine Order Error:", error);
-        res.status(500).json({ success: false, message: error.message });
+        console.error("cancelMedicineOrder Error:", error);
+        return res.status(500).json({ success: false, message: error.message });
     }
 };
+
 // =========================================================================
 // 1. GET ORDER HISTORY (Lightweight Order List for History Screen)
 // Endpoint: GET /user/pharmacy/order-history
@@ -2928,8 +2935,8 @@ const getOrderHistory = async (req, res) => {
 };
 
 // =========================================================================
-// 2. GET ORDER DETAILS (Full Order Info, Address, Items, OTP & Live Tracking)
-// Endpoint: GET /user/pharmacy/order-details/:orderId
+// GET ORDER DETAILS (Full Info, Driver Details & Live Tracking Timeline History)
+// Endpoint: GET /user/pharmacy/order-details/:orderId  
 // =========================================================================
 const getOrderDetails = async (req, res) => {
     try {
@@ -2948,7 +2955,7 @@ const getOrderDetails = async (req, res) => {
         const order = await PharmacyBooking.findOne(query)
             .populate('userId', 'name phone email profilePic gender age dob')
             .populate('pharmacyId', 'name address phone city profileImage rating location')
-            .populate('driverId', 'name phone vehicleNumber profilePic vehicleType location')
+            .populate('driverId', 'name phone vehicleNumber profilePic vehicleType location status')
             .populate('items.medicineId', 'name packaging image_url manufacturers salt_composition')
             .populate('items.comboOfferId', 'campaignDisplayName buyQty getFreeQty')
             .lean();
@@ -2979,46 +2986,149 @@ const getOrderDetails = async (req, res) => {
             deliveryModeType = "SLOT";
         }
 
-        const trackingTimeline = [
-            {
-                step: 1,
-                title: "Order Placed",
-                description: `Order placed via ${order.paymentMethod || 'COD'}`,
-                time: order.createdAt,
-                isCompleted: true,
-                isCurrent: order.status === 'Placed'
-            },
-            {
-                step: 2,
-                title: "Packed by Pharmacy",
-                description: "Medicines verified and packed in tamper-proof bag",
-                time: ['Packed', 'Shipped', 'Delivered'].includes(order.status) ? order.updatedAt : null,
-                isCompleted: ['Packed', 'Shipped', 'Delivered'].includes(order.status),
-                isCurrent: order.status === 'Packed'
-            },
-            {
-                step: 3,
-                title: isRapid ? "Express 1-Hour Delivery On The Way" : (hasSlot ? `Out for Delivery (${order.appointmentTime})` : "Out for Delivery"),
-                description: order.driverId ? `Delivery partner ${order.driverId.name} is on the way` : "Delivery partner assignment in progress",
-                time: order.startedAt || null,
-                isCompleted: ['Delivered'].includes(order.status) || order.deliveryStatus === 'Delivered',
-                isCurrent: ['OutForDelivery', 'ReachedLocation'].includes(order.deliveryStatus) || (order.status === 'Shipped' && order.deliveryStatus !== 'Delivered')
-            },
-            {
-                step: 4,
-                title: "Delivered",
-                description: "Handed over to customer",
-                time: order.deliveredAt || null,
-                isCompleted: order.status === 'Delivered',
-                isCurrent: order.status === 'Delivered'
-            }
-        ];
-
+        // Clean Image Paths
         let pharmacyImage = order.pharmacyId?.profileImage || null;
         if (pharmacyImage) {
             pharmacyImage = pharmacyImage.replace(/\\/g, "/").replace(/^public\//, "");
             if (!pharmacyImage.startsWith("/")) pharmacyImage = "/" + pharmacyImage;
         }
+
+        let driverPic = order.driverId?.profilePic || null;
+        if (driverPic) {
+            driverPic = driverPic.replace(/\\/g, "/").replace(/^public\//, "");
+            if (!driverPic.startsWith("/")) driverPic = "/" + driverPic;
+        }
+
+        // 🌟 1. FULL DRIVER DETAILS OBJECT
+        const driverDetails = order.driverId ? {
+            id: order.driverId._id,
+            name: order.driverId.name,
+            phone: order.driverId.phone,
+            vehicleNumber: order.driverId.vehicleNumber || "N/A",
+            vehicleType: order.driverId.vehicleType || "Bike",
+            profilePic: driverPic,
+            status: order.driverId.status || "Busy",
+            currentLocation: {
+                lat: Number(order.driverId.location?.lat || 0),
+                lng: Number(order.driverId.location?.lng || 0)
+            }
+        } : null;
+
+        // 🌟 2. STEP-BY-STEP TRACKING TIMELINE HISTORY (For Frontend Stepper / Tracking UI)
+        const trackingTimeline = [
+            {
+                step: 1,
+                key: "ORDER_PLACED",
+                title: "Order Placed",
+                description: order.paymentMethod === 'COD' 
+                    ? "Order confirmed via Cash on Delivery" 
+                    : "Payment received & order confirmed online",
+                timestamp: order.createdAt,
+                formattedTime: moment(order.createdAt).format('DD MMM YYYY, hh:mm A'),
+                isCompleted: true,
+                isCurrent: order.status === 'Placed' && (!order.driverId || order.deliveryStatus === 'PendingAssignment')
+            },
+            {
+                step: 2,
+                key: "ORDER_PACKED",
+                title: "Packed by Pharmacy",
+                description: "Medicines verified by licensed chemist and packed in tamper-proof bag",
+                timestamp: ['Packed', 'Shipped', 'Delivered'].includes(order.status) ? (order.updatedAt || order.createdAt) : null,
+                formattedTime: ['Packed', 'Shipped', 'Delivered'].includes(order.status) 
+                    ? moment(order.updatedAt || order.createdAt).format('DD MMM YYYY, hh:mm A') 
+                    : null,
+                isCompleted: ['Packed', 'Shipped', 'Delivered'].includes(order.status),
+                isCurrent: order.status === 'Packed' && !order.driverId
+            },
+            {
+                step: 3,
+                key: "DRIVER_ASSIGNED",
+                title: "Delivery Partner Assigned",
+                description: order.driverId 
+                    ? `Delivery partner ${order.driverId.name} (${order.driverId.vehicleNumber || 'Bike'}) assigned` 
+                    : "Pharmacy store is assigning a nearby delivery partner",
+                timestamp: order.assignedAt || (order.driverId ? order.updatedAt : null),
+                formattedTime: (order.assignedAt || (order.driverId ? order.updatedAt : null))
+                    ? moment(order.assignedAt || order.updatedAt).format('DD MMM YYYY, hh:mm A')
+                    : null,
+                isCompleted: Boolean(order.driverId),
+                isCurrent: Boolean(order.driverId) && ['Assigned', 'Accepted'].includes(order.deliveryStatus) && !order.startedAt
+            },
+            {
+                step: 4,
+                key: "OUT_FOR_DELIVERY",
+                title: isRapid ? "Express Delivery On The Way" : (hasSlot ? `Out for Delivery (${order.appointmentTime})` : "Out for Delivery"),
+                description: order.driverId 
+                    ? `${order.driverId.name} has picked up your parcel and is on the way` 
+                    : "Parcel will be out for delivery shortly",
+                timestamp: order.startedAt || null,
+                formattedTime: order.startedAt ? moment(order.startedAt).format('DD MMM YYYY, hh:mm A') : null,
+                isCompleted: ['OutForDelivery', 'ReachedLocation', 'Delivered'].includes(order.deliveryStatus) || order.status === 'Delivered',
+                isCurrent: ['OutForDelivery', 'PickedUp'].includes(order.deliveryStatus) || (order.status === 'Shipped' && order.deliveryStatus !== 'Delivered' && order.deliveryStatus !== 'ReachedLocation')
+            },
+            {
+                step: 5,
+                key: "REACHED_LOCATION",
+                title: "Reached Your Location",
+                description: "Delivery partner has reached your doorstep. Please share the delivery OTP to receive medicines.",
+                timestamp: order.arrivedAt || null,
+                formattedTime: order.arrivedAt ? moment(order.arrivedAt).format('DD MMM YYYY, hh:mm A') : null,
+                isCompleted: ['ReachedLocation', 'Delivered'].includes(order.deliveryStatus) || order.status === 'Delivered',
+                isCurrent: order.deliveryStatus === 'ReachedLocation'
+            },
+            {
+                step: 6,
+                key: "DELIVERED",
+                title: "Delivered Successfully",
+                description: "Medicines package safely handed over to customer",
+                timestamp: order.deliveredAt || null,
+                formattedTime: order.deliveredAt ? moment(order.deliveredAt).format('DD MMM YYYY, hh:mm A') : null,
+                isCompleted: order.status === 'Delivered' || order.deliveryStatus === 'Delivered',
+                isCurrent: order.status === 'Delivered' || order.deliveryStatus === 'Delivered'
+            }
+        ];
+
+        // Agar order Cancel ho gaya ho toh cancellation step append karein
+        if (order.status === 'Cancelled') {
+            trackingTimeline.push({
+                step: 7,
+                key: "CANCELLED",
+                title: "Order Cancelled",
+                description: order.cancelReason || "Order was cancelled",
+                timestamp: order.updatedAt,
+                formattedTime: moment(order.updatedAt).format('DD MMM YYYY, hh:mm A'),
+                isCompleted: true,
+                isCurrent: true
+            });
+        }
+
+        // 🌟 3. LIVE TRACKING QUICK SUMMARY (For Map, Progress Bar & Live Status Badge)
+        const liveTracking = {
+            currentStage: order.status === 'Delivered' 
+                ? 'DELIVERED' 
+                : (order.deliveryStatus === 'ReachedLocation' 
+                    ? 'REACHED_LOCATION' 
+                    : (order.deliveryStatus === 'OutForDelivery' 
+                        ? 'OUT_FOR_DELIVERY' 
+                        : (order.driverId ? 'DRIVER_ASSIGNED' : order.status.toUpperCase()))),
+            statusHeading: order.status === 'Delivered'
+                ? "Delivered Successfully"
+                : (order.deliveryStatus === 'ReachedLocation'
+                    ? "Driver Reached Doorstep"
+                    : (order.deliveryStatus === 'OutForDelivery'
+                        ? "Driver is on the way"
+                        : (order.driverId ? `Driver Assigned (${order.driverId.name})` : "Packing Medicines"))),
+            deliveryOTP: order.deliveryOTP || null,
+            isDriverAssigned: Boolean(order.driverId),
+            driverLocation: order.driverId?.location ? {
+                lat: Number(order.driverId.location.lat || 0),
+                lng: Number(order.driverId.location.lng || 0)
+            } : null,
+            pharmacyLocation: order.pharmacyId?.location ? {
+                lat: Number(order.pharmacyId.location.lat || 0),
+                lng: Number(order.pharmacyId.location.lng || 0)
+            } : null
+        };
 
         res.status(200).json({
             success: true,
@@ -3030,7 +3140,7 @@ const getOrderDetails = async (req, res) => {
                 orderType: order.orderType || 'General',
                 createdAt: order.createdAt,
                 formattedDate: moment(order.createdAt).format('DD MMM YYYY, hh:mm A'),
-                anyIntruction: order.anyIntruction || "", // 👈 Returned to User
+                anyIntruction: order.anyIntruction || "",
 
                 collectionType: order.collectionType,
                 deliveryMode: {
@@ -3077,15 +3187,9 @@ const getOrderDetails = async (req, res) => {
                     location: order.pharmacyId?.location || { lat: 0, lng: 0 }
                 },
 
-                deliveryPartner: order.driverId ? {
-                    id: order.driverId._id,
-                    name: order.driverId.name,
-                    phone: order.driverId.phone,
-                    vehicleNumber: order.driverId.vehicleNumber,
-                    vehicleType: order.driverId.vehicleType,
-                    profilePic: order.driverId.profilePic,
-                    currentLocation: order.driverId.location || { lat: 0, lng: 0 }
-                } : null,
+                // 🌟 Driver details exposed cleanly (accessible via both deliveryPartner and driver keys)
+                deliveryPartner: driverDetails,
+                driver: driverDetails,
 
                 deliveryAddress: order.address,
                 deliveryOTP: order.deliveryOTP || null,
@@ -3106,7 +3210,10 @@ const getOrderDetails = async (req, res) => {
                     isReplacementAllowed: item.isReplacementAllowed || false
                 })),
 
+                // 🌟 Complete Real-Time Tracking History & Quick Summary
+                liveTracking,
                 trackingTimeline,
+
                 returnDetails: order.returnDetails || null
             }
         });
@@ -3676,37 +3783,330 @@ const estimateRxPrices = async (req, res) => {
     }
 };
 
-// 2. GET SINGLE REQUEST DETAILS
+// =========================================================================
+// 2. GET SINGLE PRESCRIPTION REQUEST DETAILS (Strictly MongoDB _id Only)
+// Endpoint: GET /user/pharmacy/prescription-request/details/:requestId
+// =========================================================================
 const getUserPrescriptionRequestDetails = async (req, res) => {
     try {
         const { requestId } = req.params;
-        const userId = req.user.id;
+        const userId = req.user?.id || req.user?._id;
 
-        const request = await PharmacyPrescriptionRequest.findOne({ requestId, userId })
-            .populate('pharmacyId', 'name phone profileImage address location city');
-
-        if (!request) {
-            return res.status(404).json({ success: false, message: "Inquiry details not found" });
+        // 1. 🚨 STRICT CHECK: Only valid MongoDB ObjectId allowed (No string orderId)
+        if (!requestId || !mongoose.Types.ObjectId.isValid(requestId)) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Invalid ID format: Only a valid MongoDB _id is accepted." 
+            });
         }
 
-        // Safety fallback checks during serialization so GET APIs never crash
-        const responseData = request.toObject();
-        if (responseData.verifiedBill && responseData.verifiedBill.items) {
-            responseData.verifiedBill.items = responseData.verifiedBill.items.map(item => ({
-                ...item,
+        // 2. 🔍 Find Prescription Request strictly by its _id and userId
+        const request = await PharmacyPrescriptionRequest.findOne({ 
+            _id: new mongoose.Types.ObjectId(requestId), 
+            userId 
+        })
+        .populate('pharmacyId', 'name phone address location city state rating profileImage')
+        .lean();
+
+        if (!request) {
+            return res.status(404).json({ 
+                success: false, 
+                message: "Prescription inquiry details not found or access denied." 
+            });
+        }
+
+        // 3. 🔗 Find Linked PharmacyBooking (When Paid / Converted to active order)
+        let linkedBooking = null;
+
+        if (request.prescriptionImage) {
+            linkedBooking = await PharmacyBooking.findOne({
+                pharmacyId: request.pharmacyId?._id || request.pharmacyId,
+                userId,
+                $or: [
+                    { prescriptionFile: request.prescriptionImage },
+                    { prescriptionImages: request.prescriptionImage }
+                ]
+            })
+            .populate('driverId', 'name phone vehicleNumber vehicleType profilePic status location')
+            .populate('items.medicineId', 'name packaging image_url')
+            .populate('returnDetails.pickupDriverId', 'name phone vehicleNumber')
+            .sort({ createdAt: -1 })
+            .lean();
+        }
+
+        if (!linkedBooking) {
+            linkedBooking = await PharmacyBooking.findOne({
+                pharmacyId: request.pharmacyId?._id || request.pharmacyId,
+                userId,
+                orderType: 'Prescription',
+                createdAt: { $gte: new Date(request.createdAt) }
+            })
+            .populate('driverId', 'name phone vehicleNumber vehicleType profilePic status location')
+            .populate('items.medicineId', 'name packaging image_url')
+            .populate('returnDetails.pickupDriverId', 'name phone vehicleNumber')
+            .sort({ createdAt: -1 })
+            .lean();
+        }
+
+        // 4. 🛵 MAP DRIVER DETAILS
+        const activeDriver = linkedBooking?.driverId || null;
+        let cleanDriverPic = activeDriver?.profilePic || null;
+        if (cleanDriverPic) {
+            cleanDriverPic = cleanDriverPic.replace(/\\/g, "/").replace(/^public\//, "");
+            if (!cleanDriverPic.startsWith("/")) cleanDriverPic = "/" + cleanDriverPic;
+        }
+
+        const driver = activeDriver ? {
+            id: activeDriver._id?.toString() || activeDriver.id,
+            name: activeDriver.name || "",
+            phone: activeDriver.phone || "",
+            vehicleNumber: activeDriver.vehicleNumber || "N/A",
+            vehicleType: activeDriver.vehicleType || "Bike",
+            profilePic: cleanDriverPic,
+            status: activeDriver.status || "Busy",
+            currentLocation: {
+                lat: Number(activeDriver.location?.lat || 0),
+                lng: Number(activeDriver.location?.lng || 0)
+            }
+        } : null;
+
+        // 5. 📦 MAP ITEMS (With verified price, MRP & Return eligibility)
+        let formattedItems = [];
+        if (linkedBooking && linkedBooking.items && linkedBooking.items.length > 0) {
+            formattedItems = linkedBooking.items.map(item => ({
+                medicineId: item.medicineId?._id || item.medicineId || null,
+                name: item.name || item.medicineId?.name || "Medicine",
+                image: item.medicineId?.image_url?.[0] || null,
+                packaging: item.medicineId?.packaging || "10 tablets in 1 strip",
+                price: Number(item.price || 0),
+                mrp: Number(item.mrp || item.price || 0),
+                quantity: Number(item.quantity || 1),
+                duration: item.duration || `${item.quantity || 1} Days`,
+                isComboApplied: Boolean(item.isComboApplied),
+                freeQuantity: Number(item.freeQuantity || 0),
+                isReturnAllowed: Boolean(item.isReturnAllowed),
+                isReplacementAllowed: Boolean(item.isReplacementAllowed)
+            }));
+        } else if (request.verifiedBill && request.verifiedBill.items && request.verifiedBill.items.length > 0) {
+            formattedItems = request.verifiedBill.items.map(item => ({
                 medicineId: item.medicineId || null,
-                mrp: item.mrp || 0,
-                pricePerUnit: item.pricePerUnit || 0,
-                totalPrice: item.totalPrice || 0
+                name: item.name || "Medicine",
+                image: null,
+                packaging: "10 tablets in 1 strip",
+                price: Number(item.pricePerUnit || 0),
+                mrp: Number(item.mrp || item.pricePerUnit || 0),
+                quantity: Number(item.quantity || 1),
+                duration: `${item.quantity || 1} Days`,
+                isComboApplied: false,
+                freeQuantity: 0,
+                isReturnAllowed: false,
+                isReplacementAllowed: false
+            }));
+        } else if (request.requestedMedicines && request.requestedMedicines.length > 0) {
+            formattedItems = request.requestedMedicines.map(item => ({
+                medicineId: null,
+                name: item.name,
+                image: null,
+                packaging: "10 tablets in 1 strip",
+                price: Number(item.mrp || 0),
+                mrp: Number(item.mrp || 0),
+                quantity: Number(item.durationDays || 1),
+                duration: `${item.durationDays || 1} Days`,
+                isComboApplied: false,
+                freeQuantity: 0,
+                isReturnAllowed: false,
+                isReplacementAllowed: false
             }));
         }
 
-        res.json({
+        // 6. 📍 LOCATIONS & OTP
+        const pharmacyLocation = {
+            lat: Number(request.pharmacyId?.location?.lat || 0),
+            lng: Number(request.pharmacyId?.location?.lng || 0)
+        };
+
+        const activeDeliveryOtp = linkedBooking?.deliveryOTP || request.deliveryOTP || null;
+        const currentOrderStatus = linkedBooking?.status || (request.status === 'Paid' ? 'Placed' : request.status);
+        const currentDeliveryStatus = linkedBooking?.deliveryStatus || "PendingAssignment";
+
+        // 7. 🚀 LIVE TRACKING QUICK SUMMARY
+        let currentStage = "ORDER_PLACED";
+        let statusHeading = "Order Placed";
+
+        if (currentOrderStatus === 'Delivered') {
+            currentStage = "DELIVERED";
+            statusHeading = "Delivered Successfully";
+        } else if (currentDeliveryStatus === 'ReachedLocation') {
+            currentStage = "REACHED_LOCATION";
+            statusHeading = "Reached Your Location";
+        } else if (currentDeliveryStatus === 'OutForDelivery') {
+            currentStage = "OUT_FOR_DELIVERY";
+            statusHeading = "Out for Delivery";
+        } else if (driver) {
+            currentStage = "DRIVER_ASSIGNED";
+            statusHeading = `Driver Assigned (${driver.name})`;
+        } else if (['Packed', 'Shipped'].includes(currentOrderStatus)) {
+            currentStage = "ORDER_PACKED";
+            statusHeading = "Packed by Pharmacy";
+        }
+
+        const liveTracking = {
+            currentStage,
+            statusHeading,
+            deliveryOTP: activeDeliveryOtp,
+            isDriverAssigned: Boolean(driver),
+            driverLocation: driver ? driver.currentLocation : { lat: 0, lng: 0 },
+            pharmacyLocation
+        };
+
+        // 8. ⏱️ STEP-BY-STEP TRACKING TIMELINE
+        const baseCreatedAt = linkedBooking?.createdAt || request.createdAt;
+        const trackingTimeline = [
+            {
+                step: 1,
+                key: "ORDER_PLACED",
+                title: "Order Placed",
+                description: linkedBooking?.paymentMethod === 'COD' 
+                    ? "Order confirmed via Cash on Delivery"
+                    : "Payment received & order confirmed online",
+                timestamp: baseCreatedAt,
+                formattedTime: moment(baseCreatedAt).format('DD MMM YYYY, hh:mm A'),
+                isCompleted: Boolean(linkedBooking || request.status === 'Paid'),
+                isCurrent: currentStage === "ORDER_PLACED"
+            },
+            {
+                step: 2,
+                key: "ORDER_PACKED",
+                title: "Packed by Pharmacy",
+                description: "Medicines verified by licensed chemist and packed in tamper-proof bag",
+                timestamp: ['Packed', 'Shipped', 'Delivered'].includes(currentOrderStatus) ? (linkedBooking?.updatedAt || baseCreatedAt) : null,
+                formattedTime: ['Packed', 'Shipped', 'Delivered'].includes(currentOrderStatus) ? moment(linkedBooking?.updatedAt || baseCreatedAt).format('DD MMM YYYY, hh:mm A') : null,
+                isCompleted: ['Packed', 'Shipped', 'Delivered'].includes(currentOrderStatus),
+                isCurrent: currentStage === "ORDER_PACKED"
+            },
+            {
+                step: 3,
+                key: "DRIVER_ASSIGNED",
+                title: "Delivery Partner Assigned",
+                description: driver 
+                    ? `Delivery partner ${driver.name} (${driver.vehicleNumber}) assigned` 
+                    : "Pharmacy store is assigning a nearby delivery partner",
+                timestamp: linkedBooking?.assignedAt || (driver ? linkedBooking?.updatedAt : null),
+                formattedTime: (linkedBooking?.assignedAt || (driver ? linkedBooking?.updatedAt : null))
+                    ? moment(linkedBooking?.assignedAt || (driver ? linkedBooking?.updatedAt : null)).format('DD MMM YYYY, hh:mm A')
+                    : null,
+                isCompleted: Boolean(driver),
+                isCurrent: currentStage === "DRIVER_ASSIGNED"
+            },
+            {
+                step: 4,
+                key: "OUT_FOR_DELIVERY",
+                title: "Out for Delivery (Same Day Delivery)",
+                description: driver 
+                    ? `${driver.name} has picked up your parcel and is on the way` 
+                    : "Parcel will be out for delivery shortly",
+                timestamp: linkedBooking?.startedAt || null,
+                formattedTime: linkedBooking?.startedAt ? moment(linkedBooking.startedAt).format('DD MMM YYYY, hh:mm A') : null,
+                isCompleted: ['OutForDelivery', 'ReachedLocation', 'Delivered'].includes(currentDeliveryStatus) || currentOrderStatus === 'Delivered',
+                isCurrent: currentStage === "OUT_FOR_DELIVERY"
+            },
+            {
+                step: 5,
+                key: "REACHED_LOCATION",
+                title: "Reached Your Location",
+                description: "Delivery partner has reached your doorstep. Please share the delivery OTP to receive medicines.",
+                timestamp: linkedBooking?.arrivedAt || null,
+                formattedTime: linkedBooking?.arrivedAt ? moment(linkedBooking.arrivedAt).format('DD MMM YYYY, hh:mm A') : null,
+                isCompleted: ['ReachedLocation', 'Delivered'].includes(currentDeliveryStatus) || currentOrderStatus === 'Delivered',
+                isCurrent: currentStage === "REACHED_LOCATION"
+            },
+            {
+                step: 6,
+                key: "DELIVERED",
+                title: "Delivered Successfully",
+                description: "Medicines package safely handed over to customer",
+                timestamp: linkedBooking?.deliveredAt || null,
+                formattedTime: linkedBooking?.deliveredAt ? moment(linkedBooking.deliveredAt).format('DD MMM YYYY, hh:mm A') : null,
+                isCompleted: currentOrderStatus === 'Delivered' || currentDeliveryStatus === 'Delivered',
+                isCurrent: currentStage === "DELIVERED"
+            }
+        ];
+
+        // Agar order Cancel ho gaya ho
+        if (currentOrderStatus === 'Cancelled') {
+            trackingTimeline.push({
+                step: 7,
+                key: "CANCELLED",
+                title: "Order Cancelled",
+                description: linkedBooking?.cancelReason || "Order was cancelled",
+                timestamp: linkedBooking?.updatedAt || new Date(),
+                formattedTime: moment(linkedBooking?.updatedAt || new Date()).format('DD MMM YYYY, hh:mm A'),
+                isCompleted: true,
+                isCurrent: true
+            });
+        }
+
+        // 9. 💰 RETURN & REFUND DETAILS
+        const defaultReturnDetails = {
+            requestType: null,
+            reason: null,
+            userComments: "",
+            proofImages: [],
+            status: "None",
+            pickupDriverId: null,
+            pickupStatus: "PendingAssignment",
+            returnOTP: null,
+            driverCollectedPics: [],
+            vendorVerificationNote: "",
+            requestedAt: null,
+            collectedAt: null,
+            storeReceivedAt: null,
+            rejectionReason: null,
+            refundAmount: 0
+        };
+
+        const returnDetails = linkedBooking?.returnDetails || defaultReturnDetails;
+
+        // 10. 🏠 DELIVERY ADDRESS
+        const deliveryAddress = linkedBooking?.address || request.address || {
+            name: "",
+            phone: "",
+            houseNo: "",
+            city: "",
+            pincode: "",
+            addressType: "Home"
+        };
+
+        // 11. 🎯 FINAL UNIFIED RESPONSE
+        const responseData = {
+            ...request,
+            _id: request._id,
+            requestId: request.requestId,
+            bookingId: linkedBooking?._id || null,
+            bookingOrderId: linkedBooking?.orderId || null,
+            status: currentOrderStatus,
+            deliveryStatus: currentDeliveryStatus,
+            deliveryAddress,
+            deliveryOTP: activeDeliveryOtp,
+            driver,
+            itemsCount: formattedItems.length,
+            items: formattedItems,
+            liveTracking,
+            trackingTimeline,
+            returnDetails
+        };
+
+        return res.status(200).json({
             success: true,
             data: responseData
         });
+
     } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
+        console.error("getUserPrescriptionRequestDetails Error:", error);
+        return res.status(500).json({ 
+            success: false, 
+            message: error.message || "Internal Server Error in fetching prescription request details." 
+        });
     }
 };
 // 1. CREATE PRESCRIPTION REQUEST (User submits uploaded RX, Pharmacy, Duration, and Address)
@@ -4537,26 +4937,53 @@ const getSimilarInStockMedicines = async (req, res) => {
     }
 };
 
-// returnReplacement: 'Return' | 'Replacement'
-// SUBMIT RETURN / REPLACEMENT REQUEST (User App)
+// =========================================================================
+// SUBMIT RETURN / REPLACEMENT (Strictly allowed ONLY AFTER Order is Delivered)
 // Endpoint: POST /user/pharmacy/orders/return-request/:orderId
+// =========================================================================
 const requestPharmacyOrderReturn = async (req, res) => {
     try {
         const { orderId } = req.params;
-        const { requestType, reason, userComments } = req.body;
-        const userId = req.user.id;
+        const { requestType = 'Return', reason, userComments } = req.body;
+        const userId = req.user?.id || req.user?._id;
 
         const order = await PharmacyBooking.findOne({
-            $or: [{ _id: mongoose.isValidObjectId(orderId) ? orderId : new mongoose.Types.ObjectId() }, { orderId }],
+            $or: [
+                { _id: mongoose.isValidObjectId(orderId) ? new mongoose.Types.ObjectId(orderId) : new mongoose.Types.ObjectId() },
+                { orderId: String(orderId).trim() }
+            ],
             userId
         });
 
-        if (!order) return res.status(404).json({ success: false, message: "Order not found." });
-
-        if (order.status !== 'Delivered' && order.deliveryStatus !== 'Delivered') {
-            return res.status(400).json({ success: false, message: "Only delivered orders are eligible for return/replacement." });
+        if (!order) {
+            return res.status(404).json({ success: false, message: "Order not found." });
         }
 
+        // 🚨 STRICT CHECK: Order MUST be Delivered
+        const isOrderDelivered = (order.status === 'Delivered' || order.deliveryStatus === 'Delivered');
+
+        if (!isOrderDelivered) {
+            return res.status(400).json({ 
+                success: false, 
+                message: `Return Not Allowed: Order must be completely delivered before requesting a return or replacement. Current status: '${order.status}'.` 
+            });
+        }
+
+        // Return Window Days Check from Admin Config
+        let config = await PharmacyReturnConfig.findOne({ vendorType: 'Pharmacy' });
+        if (!config) config = { returnWindowDays: 3, isReturnEnabled: true, isReplacementEnabled: true };
+
+        const deliveryDate = order.deliveredAt || order.updatedAt || order.createdAt;
+        const daysPassed = moment().diff(moment(deliveryDate), 'days');
+
+        if (daysPassed > config.returnWindowDays) {
+            return res.status(400).json({
+                success: false,
+                message: `Return window expired: Requests are only accepted within ${config.returnWindowDays} days of delivery.`
+            });
+        }
+
+        // Check Batch Item Return/Replacement eligibility
         let eligibleSubtotal = 0;
         const eligibleItems = order.items.filter(item => {
             const isEligible = requestType === 'Return' ? item.isReturnAllowed : item.isReplacementAllowed;
@@ -4569,27 +4996,18 @@ const requestPharmacyOrderReturn = async (req, res) => {
         if (eligibleItems.length === 0) {
             return res.status(400).json({
                 success: false,
-                message: `Store Policy Blocked: None of the items in this order are eligible for ${requestType ? requestType.toLowerCase() : 'return'}.`
+                message: `Store Policy Blocked: None of the items in this order are eligible for ${requestType.toLowerCase()}.`
             });
         }
 
-        let config = await PharmacyReturnConfig.findOne({ vendorType: 'Pharmacy' });
-        if (!config) config = { returnWindowDays: 3, isReturnEnabled: true, isReplacementEnabled: true };
-
-        const deliveryDate = order.deliveredAt || order.updatedAt || order.createdAt;
-        const daysPassed = moment().diff(moment(deliveryDate), 'days');
-
-        if (daysPassed > config.returnWindowDays) {
-            return res.status(400).json({
-                success: false,
-                message: `Return window expired: Requests were only allowed within ${config.returnWindowDays} days.`
+        if (order.returnDetails && ['Requested', 'Approved', 'CollectedByDriver'].includes(order.returnDetails.status)) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "A return request is already active or in progress for this order." 
             });
         }
 
-        if (order.returnDetails && order.returnDetails.status === 'Requested') {
-            return res.status(400).json({ success: false, message: "A return request is already pending for this order." });
-        }
-
+        // Uploaded proof images
         let uploadedProofs = [];
         if (req.files) {
             if (Array.isArray(req.files)) {
@@ -4600,11 +5018,12 @@ const requestPharmacyOrderReturn = async (req, res) => {
         }
 
         order.returnDetails = {
-            requestType: requestType || 'Return',
+            requestType,
             reason: reason || "Product issue",
             userComments: userComments || "",
             proofImages: uploadedProofs,
             status: 'Requested',
+            pickupStatus: 'PendingAssignment',
             requestedAt: new Date(),
             rejectionReason: null,
             refundAmount: Number(eligibleSubtotal.toFixed(2))
@@ -4612,36 +5031,42 @@ const requestPharmacyOrderReturn = async (req, res) => {
 
         await order.save();
 
-        // 🛡️ VENDOR NOTIFICATION: Alert Pharmacy Desk about new Return Request
-        await notifyAdminsAndVendor(
-            order.pharmacyId,
-            'pharmacy',
-            `🔄 New ${requestType || 'Return'} Request Received!`,
-            `Customer requested ${requestType || 'Return'} for Order #${order.orderId}. Reason: ${reason || 'Product issue'}.`,
-            { orderId: order._id.toString(), type: 'pharmacy_return_request' }
-        );
+        try {
+            await notifyAdminsAndVendor(
+                order.pharmacyId,
+                'pharmacy',
+                `🔄 New ${requestType} Request Received!`,
+                `Customer submitted a ${requestType} request for Order #${order.orderId}. Reason: ${reason || 'Product issue'}.`,
+                { orderId: order._id.toString(), type: 'pharmacy_return_request' }
+            );
+        } catch (e) {}
 
-        res.json({
+        return res.status(200).json({
             success: true,
-            message: `${requestType || 'Return'} request submitted successfully! Pharmacist will review.`,
+            message: `${requestType} request submitted successfully! Chemist will review and assign a pickup partner.`,
             data: order.returnDetails
         });
 
     } catch (error) {
         console.error("requestPharmacyOrderReturn Error:", error);
-        res.status(500).json({ success: false, message: error.message });
+        return res.status(500).json({ success: false, message: error.message });
     }
 };
 
-// CANCEL RETURN REQUEST (By Patient before driver collection)
+// =========================================================================
+// CANCEL RETURN REQUEST (Blocked if Pickup Driver is Out For Pickup / Collected)
 // Endpoint: POST /user/pharmacy/orders/return-request/cancel/:orderId
+// =========================================================================
 const cancelReturnRequestByCustomer = async (req, res) => {
     try {
         const { orderId } = req.params;
-        const userId = req.user.id;
+        const userId = req.user?.id || req.user?._id;
 
         const order = await PharmacyBooking.findOne({
-            $or: [{ _id: mongoose.isValidObjectId(orderId) ? orderId : new mongoose.Types.ObjectId() }, { orderId }],
+            $or: [
+                { _id: mongoose.isValidObjectId(orderId) ? new mongoose.Types.ObjectId(orderId) : new mongoose.Types.ObjectId() },
+                { orderId: String(orderId).trim() }
+            ],
             userId
         });
 
@@ -4649,14 +5074,21 @@ const cancelReturnRequestByCustomer = async (req, res) => {
             return res.status(400).json({ success: false, message: "No active return request found on this order." });
         }
 
-        // Agar driver already pickup kar chuka hai toh cancel nahi ho sakta
-        if (order.returnDetails.pickupStatus === 'PickedUp' || order.returnDetails.status === 'CollectedByDriver') {
-            return res.status(400).json({ success: false, message: "Cannot cancel: Package has already been collected by driver." });
+        // 🚨 STRICT CHECK: Driver pickup ke liye nikal chuka hai ('OutForPickup') ya collect kar chuka hai ('PickedUp'/'CollectedByDriver')
+        const unCancellablePickupStatuses = ['OutForPickup', 'ReachedLocation', 'PickedUp', 'DeliveredToStore'];
+        if (
+            unCancellablePickupStatuses.includes(order.returnDetails.pickupStatus) ||
+            order.returnDetails.status === 'CollectedByDriver'
+        ) {
+            return res.status(400).json({
+                success: false,
+                message: "Cannot cancel return request: The pickup driver is already on the way or has collected your package."
+            });
         }
 
-        // Free assigned driver if any
+        // Free assigned pickup driver if still in 'PendingAssignment' / 'Assigned'
         if (order.returnDetails.pickupDriverId) {
-            await Driver.findByIdAndUpdate(order.returnDetails.pickupDriverId, { status: 'Available' });
+            await Driver.findByIdAndUpdate(order.returnDetails.pickupDriverId, { $set: { status: 'Available' } });
         }
 
         order.returnDetails.status = 'None';
@@ -4666,14 +5098,15 @@ const cancelReturnRequestByCustomer = async (req, res) => {
         order.returnDetails.rejectionReason = "Return request cancelled by customer.";
         await order.save();
 
-        res.json({
+        return res.status(200).json({
             success: true,
             message: "Return request cancelled successfully. Your order remains Delivered.",
             data: order
         });
 
     } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
+        console.error("cancelReturnRequestByCustomer Error:", error);
+        return res.status(500).json({ success: false, message: error.message });
     }
 };
 
