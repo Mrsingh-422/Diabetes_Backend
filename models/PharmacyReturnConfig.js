@@ -7,10 +7,16 @@ const pharmacyReturnConfigSchema = new mongoose.Schema({
         default: 'Pharmacy',
         unique: true
     },
+ // Admin yaha din set karta hai (e.g. 2, 3, 4, 7)
     returnWindowDays: {
         type: Number,
-        default: 3, // 👈 Default 3 din deliver hone ke baad tak return allowed
+        default: 3,
         required: true
+    },
+    // 🌟 NEW (Optional fallback badge text)
+    returnWindowBadgeText: {
+        type: String,
+        default: "3 Days Easy Return & Replacement"
     },
     isReturnEnabled: {
         type: Boolean,

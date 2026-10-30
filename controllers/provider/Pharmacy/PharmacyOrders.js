@@ -432,7 +432,7 @@ const getAvailableDrivers = async (req, res) => {
 };
 
 // =========================================================================
-// 3. MANUAL ASSIGN DRIVER (Updates PharmacyBooking directly)
+// 3. MANUAL ASSIGN DRIVER (Strict Unique Booking Match)
 // Endpoint: POST /provider/pharmacy/orders/assign-manual
 // =========================================================================
 const assignDriverManual = async (req, res) => {
@@ -452,7 +452,7 @@ const assignDriverManual = async (req, res) => {
         const isObjectId = mongoose.isValidObjectId(orderId);
         const now = new Date();
 
-        // 🌟 1. Find the REAL PharmacyBooking document (supports both _id and string orderId like 'ORD-RX-...')
+        // 1. Direct PharmacyBooking search
         let booking = await PharmacyBooking.findOne({
             pharmacyId,
             $or: [
@@ -461,7 +461,7 @@ const assignDriverManual = async (req, res) => {
             ]
         });
 
-        // 🌟 2. Fallback: Agar frontend ne prescription request ID bhej diya ho, toh uski linked booking dhoondein
+        // 2. Agar frontend ne prescription ticket ID bheja ho, toh strictly ISI ticket ki booking dhoondein
         if (!booking) {
             const PharmacyPrescriptionRequest = mongoose.models.PharmacyPrescriptionRequest || require('../../../models/PharmacyPrescriptionRequest');
             const rxReq = await PharmacyPrescriptionRequest.findOne({
@@ -473,13 +473,16 @@ const assignDriverManual = async (req, res) => {
             });
 
             if (rxReq) {
-                // User & file ke matching se PharmacyBooking dhoondein
-                booking = await PharmacyBooking.findOne({
-                    pharmacyId,
-                    userId: rxReq.userId,
-                    orderType: 'Prescription',
-                    status: { $in: ['Placed', 'Pending', 'Packed'] }
-                }).sort({ createdAt: -1 });
+                if (rxReq.bookingId) {
+                    booking = await PharmacyBooking.findById(rxReq.bookingId);
+                }
+                if (!booking && rxReq.prescriptionImage) {
+                    // Strict match by exact prescription file
+                    booking = await PharmacyBooking.findOne({
+                        pharmacyId,
+                        prescriptionFile: rxReq.prescriptionImage
+                    });
+                }
             }
         }
 
@@ -490,17 +493,17 @@ const assignDriverManual = async (req, res) => {
             });
         }
 
-        // 🌟 3. UPDATE THE REAL PHARMACYBOOKING DOCUMENT
+        // 🌟 Assign Driver to the EXACT PharmacyBooking document
         booking.driverId = driverId;
         booking.deliveryStatus = 'Assigned';
         booking.status = 'Shipped';
         booking.assignedAt = now;
         await booking.save();
 
-        // 🌟 4. MARK DRIVER AS BUSY
+        // Driver ko Busy mark karein
         await Driver.findByIdAndUpdate(driverId, { $set: { status: 'Busy' } });
 
-        // Driver ko notification bhejein
+        // Driver ko push notification
         try {
             await sendPushNotification(
                 driverId,
@@ -510,8 +513,6 @@ const assignDriverManual = async (req, res) => {
                 { orderId: booking._id.toString(), type: 'delivery_assigned' }
             );
         } catch (e) {}
-
-        console.log(`[ASSIGN SUCCESS]: Driver ${driver.name} assigned to PharmacyBooking #${booking.orderId} (${booking._id})`);
 
         res.json({ 
             success: true, 
@@ -626,7 +627,7 @@ const reassignDriverManual = async (req, res) => {
 };
 
 // =========================================================================
-// UPDATE ORDER STATUS & AUTO-FREE DRIVER
+// 1. UPDATE ORDER STATUS & AUTO-FREE DRIVER
 // Endpoint: PATCH /provider/pharmacy/orders/status/:orderId
 // =========================================================================
 const updateOrderStatus = async (req, res) => {
@@ -664,7 +665,12 @@ const updateOrderStatus = async (req, res) => {
 
         // 🌟 1. Check if Order is Delivered / Completed
         const isDelivered = order.status === 'Delivered' || order.deliveryStatus === 'Delivered';
-        const isCancelled = order.status === 'Cancelled' || order.deliveryStatus === 'CancelledByDriver' || order.deliveryStatus === 'UserRefused';
+
+        // 🌟 2. Check Cancellation (User OR Driver)
+        const isCancelled = order.status === 'Cancelled' || 
+                            order.deliveryStatus === 'CancelledByDriver' || 
+                            order.deliveryStatus === 'CancelledByUser' || 
+                            order.deliveryStatus === 'UserRefused';
 
         if (isDelivered) {
             order.status = 'Delivered';
@@ -672,11 +678,11 @@ const updateOrderStatus = async (req, res) => {
             if (!order.deliveredAt) order.deliveredAt = new Date();
         }
 
-        // 🌟 2. FREE THE DRIVER: Jab order Delivered ya Cancel ho jaye
+        // 🌟 3. FREE THE DRIVER: Jab order Delivered ya Cancel (User/Driver kisi se bhi) ho jaye
         if ((isDelivered || isCancelled) && order.driverId) {
             await Driver.findByIdAndUpdate(
                 order.driverId,
-                { $set: { status: 'Available' } } // 👈 Driver ab free ho jayega!
+                { $set: { status: 'Available' } } // 👈 Driver ab free ho jayega
             );
             console.log(`[DRIVER SYNC]: Driver ${order.driverId} successfully freed and marked 'Available' for Order #${order.orderId}`);
         }
@@ -697,7 +703,6 @@ const updateOrderStatus = async (req, res) => {
         });
     }
 };
-
 
 ////////////////////////////////////////////
 ////// ai prescription requests ////////////
@@ -729,7 +734,7 @@ const getProviderPrescriptionRequests = async (req, res) => {
 };
 
 // =========================================================================
-// 2. GET SPECIFIC PRESCRIPTION REQUEST DETAILS (Full Sync with Documentation)
+// 2. GET SPECIFIC PRESCRIPTION REQUEST DETAILS (Strict Unique Match)
 // Endpoint: GET /provider/pharmacy/orders/prescription-request/details/:requestId
 // =========================================================================
 const getProviderPrescriptionRequestDetails = async (req, res) => {
@@ -743,7 +748,7 @@ const getProviderPrescriptionRequestDetails = async (req, res) => {
 
         const isObjectId = mongoose.isValidObjectId(requestId);
 
-        // 1. Dhoondhein Prescription Request (chahe Mongo _id ho ya custom requestId jaise 'REQ-98320D')
+        // 1. Dhoondhein prescription request
         const request = await PharmacyPrescriptionRequest.findOne({
             pharmacyId,
             $or: [
@@ -758,129 +763,149 @@ const getProviderPrescriptionRequestDetails = async (req, res) => {
             return res.status(404).json({ success: false, message: "Prescription request not found or unauthorized." });
         }
 
-        // 2. 🔗 Dhoondhein Linked PharmacyBooking
-        // Pehle exact prescription image/path se dhoondhein, warna user + orderType se
+        // 🌟 FIX: STRICT MATCHING - Sirf ISI specific prescription slip se linked booking dhoondein
         let linkedBooking = null;
 
-        if (request.prescriptionImage) {
+        if (request.bookingId) {
+            linkedBooking = await PharmacyBooking.findById(request.bookingId)
+                .select('_id orderId status deliveryStatus deliveryOTP driverId')
+                .populate('driverId', 'name phone username vehicleNumber vehicleType profilePic status')
+                .lean();
+        }
+
+        // Fallback: Exact prescriptionFile match (Never match by generic userId!)
+        if (!linkedBooking && request.prescriptionImage) {
             linkedBooking = await PharmacyBooking.findOne({
                 pharmacyId,
-                userId: request.userId?._id || request.userId,
-                $or: [
-                    { prescriptionFile: request.prescriptionImage },
-                    { prescriptionImages: request.prescriptionImage }
-                ]
+                prescriptionFile: request.prescriptionImage // 👈 Strict Unique Slip Match
             })
-            .populate('driverId', 'name phone email vehicleNumber vehicleType profilePic status')
-            .sort({ createdAt: -1 })
+            .select('_id orderId status deliveryStatus deliveryOTP driverId')
+            .populate('driverId', 'name phone username vehicleNumber vehicleType profilePic status')
             .lean();
         }
 
-        if (!linkedBooking) {
-            linkedBooking = await PharmacyBooking.findOne({
-                pharmacyId,
-                userId: request.userId?._id || request.userId,
-                orderType: 'Prescription'
-            })
-            .populate('driverId', 'name phone email vehicleNumber vehicleType profilePic status')
-            .sort({ createdAt: -1 })
-            .lean();
+        // Driver resolve karein
+        let assignedDriver = null;
+        if (linkedBooking?.driverId && typeof linkedBooking.driverId === 'object') {
+            assignedDriver = linkedBooking.driverId;
         }
 
-        // 3. Status Synchronization: Agar linked booking mil gayi aur wo Paid/Placed hai
-        let resolvedStatus = request.status;
-        if (linkedBooking && (linkedBooking.paymentStatus === 'Paid' || ['Placed', 'Packed', 'Shipped', 'Delivered'].includes(linkedBooking.status))) {
-            resolvedStatus = 'Paid';
-        }
-
-        const isOrderPaid = (resolvedStatus?.toUpperCase() === 'PAID');
-        const hasDriver = Boolean(linkedBooking?.driverId);
-
-        // Driver details mapping as per Documentation (Page 3 & 6)
-        let driverData = null;
-        if (hasDriver && linkedBooking.driverId) {
-            const d = linkedBooking.driverId;
-            driverData = {
-                id: d._id?.toString() || d.id,
-                name: d.name || "",
-                phone: d.phone || "",
-                email: d.email || "",
-                vehicleNumber: d.vehicleNumber || "VB-010H",
-                vehicleType: d.vehicleType || "Bike",
-                profilePic: d.profilePic || null,
-                status: d.status || "Busy"
-            };
-        }
-
-        // 4. Boolean Control Flags for Frontend (Exact match with PDF Page 3)
-        const isDriverAssigned = isOrderPaid && hasDriver;
-        const canAssignDriver = isOrderPaid && !hasDriver;
+        const isDriverAssigned = Boolean(assignedDriver);
 
         const responseData = {
             ...request,
             _id: request._id,
             mongoId: request._id,
             requestId: request.requestId,
-            
-            // Status & Linked IDs
-            status: resolvedStatus,
+
+            // Linked Real Booking Details
             bookingId: linkedBooking?._id || null,
             bookingMongoId: linkedBooking?._id || null,
             bookingOrderId: linkedBooking?.orderId || null,
-            
-            // Delivery info
-            deliveryStatus: linkedBooking?.deliveryStatus || "PendingAssignment",
+            deliveryStatus: linkedBooking?.deliveryStatus || (isDriverAssigned ? "Assigned" : "PendingAssignment"),
             deliveryOTP: linkedBooking?.deliveryOTP || null,
 
-            // 🌟 PDF Documentation Essential Keys:
-            isDriverAssigned: Boolean(isDriverAssigned),
-            canAssignDriver: Boolean(canAssignDriver),
-            driver: driverData
+            // 🌟 Button Flags (Ab naye order par apne aap true nahi hoga!)
+            isDriverAssigned: isDriverAssigned,
+            canAssignDriver: !isDriverAssigned && request.status === 'Paid',
+
+            // 🌟 Driver Details (Sirf tabhi aayega jab sach mein assign hua ho)
+            driver: assignedDriver ? {
+                id: assignedDriver._id,
+                name: assignedDriver.name,
+                phone: assignedDriver.phone,
+                email: assignedDriver.username || assignedDriver.email || "N/A",
+                vehicleNumber: assignedDriver.vehicleNumber || "N/A",
+                vehicleType: assignedDriver.vehicleType || "Bike",
+                profilePic: assignedDriver.profilePic || null,
+                status: assignedDriver.status
+            } : null
         };
 
-        return res.status(200).json({
+        res.status(200).json({
             success: true,
             data: responseData
         });
 
     } catch (error) {
         console.error("getProviderPrescriptionRequestDetails Error:", error);
-        return res.status(500).json({ success: false, message: error.message });
+        res.status(500).json({ success: false, message: error.message });
     }
 };
-// 3. START REVIEW (स्टेटस को 'Pending Review' से 'Reviewing' में बदलने के लिए)
+// =========================================================================
+// 3. START REVIEW (Supports both Mongo _id and Custom Ticket requestId)
+// Endpoint: POST /provider/pharmacy/orders/prescription-request/start-review/:requestId
+// =========================================================================
 const startPrescriptionReview = async (req, res) => {
     try {
         const { requestId } = req.params;
         const pharmacyId = req.user.id;
 
-        const request = await PharmacyPrescriptionRequest.findOne({ requestId, pharmacyId });
-        if (!request) {
-            return res.status(404).json({ success: false, message: "Request not found" });
+        if (!requestId || String(requestId).trim() === '') {
+            return res.status(400).json({ success: false, message: "Request ID parameter is required." });
         }
 
+        const cleanId = String(requestId).trim();
+        const isObjectId = mongoose.isValidObjectId(cleanId);
+
+        // 🌟 FIX: Dhoondhein chahe frontend ne MongoDB _id bheji ho ya String 'REQ-...'
+        const request = await PharmacyPrescriptionRequest.findOne({
+            pharmacyId,
+            $or: [
+                ...(isObjectId ? [{ _id: new mongoose.Types.ObjectId(cleanId) }] : []),
+                { requestId: cleanId }
+            ]
+        });
+
+        if (!request) {
+            return res.status(404).json({ 
+                success: false, 
+                message: "Prescription request not found or unauthorized access." 
+            });
+        }
+
+        // Status transition to 'Reviewing'
         if (request.status === 'Pending Review') {
             request.status = 'Reviewing';
             await request.save();
         }
 
-        res.json({
+        res.status(200).json({
             success: true,
             message: "Prescription review started successfully",
             data: request
         });
     } catch (error) {
+        console.error("startPrescriptionReview Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
-// 2. PHARMACIST PORTAL: SUBMIT REVIEW & BILL (Vendor reviews, matches prices, and adds verifiedBill)
+// =========================================================================
+// SUBMIT PHARMACIST REVIEW & GENERATE BILL (Dual ID Matching)
+// Endpoint: POST /provider/pharmacy/orders/prescription-request/review/:requestId
+// =========================================================================
 const submitPharmacistReview = async (req, res) => {
     try {
         const { requestId } = req.params;
         const pharmacyId = req.user.id;
         const { items, deliveryCharge } = req.body; 
 
-        const request = await PharmacyPrescriptionRequest.findOne({ requestId, pharmacyId });
+        if (!requestId || String(requestId).trim() === '') {
+            return res.status(400).json({ success: false, message: "Request ID parameter is required." });
+        }
+
+        const cleanId = String(requestId).trim();
+        const isObjectId = mongoose.isValidObjectId(cleanId);
+
+        // 🌟 Dual ID matching (_id or requestId)
+        const request = await PharmacyPrescriptionRequest.findOne({
+            pharmacyId,
+            $or: [
+                ...(isObjectId ? [{ _id: new mongoose.Types.ObjectId(cleanId) }] : []),
+                { requestId: cleanId }
+            ]
+        });
+
         if (!request) {
             return res.status(404).json({ 
                 success: false, 
@@ -895,7 +920,6 @@ const submitPharmacistReview = async (req, res) => {
             });
         }
 
-        // 🛡️ SAFE PARSER: Handle JSON string or raw Array
         let parsedItems = [];
         if (typeof items === 'string') {
             try { parsedItems = JSON.parse(items); } catch(e) { parsedItems = []; }
@@ -983,17 +1007,17 @@ const submitPharmacistReview = async (req, res) => {
         request.status = 'Bill Generated';
         await request.save();
 
-        // 🛡️ PATIENT ALERT: Push Notification sent to user to review and pay bill
-        const { sendPushNotification } = require('../../../utils/notification');
-        await sendPushNotification(
-            request.userId,
-            'user',
-            "🧾 Prescription Verified & Bill Ready!",
-            `Pharmacist has generated a bill of ₹${Math.round(totalAmount)} for your prescription #${request.requestId}. Tap to complete payment.`,
-            { requestId: request._id.toString(), type: 'prescription_bill_generated' }
-        );
+        try {
+            await sendPushNotification(
+                request.userId,
+                'user',
+                "🧾 Prescription Verified & Bill Ready!",
+                `Pharmacist has generated a bill of ₹${Math.round(totalAmount)} for your prescription #${request.requestId}. Tap to complete payment.`,
+                { requestId: request._id.toString(), type: 'prescription_bill_generated' }
+            );
+        } catch (e) {}
 
-        res.json({
+        res.status(200).json({
             success: true,
             message: "Invoice successfully generated and sent to client.",
             data: request
@@ -1003,15 +1027,32 @@ const submitPharmacistReview = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
-// --- REJECT PRESCRIPTION REQUEST (With Patient Real-Time Alert) ---
+// =========================================================================
+// REJECT PRESCRIPTION REQUEST (Dual ID Matching)
 // Endpoint: POST /provider/pharmacy/orders/prescription-request/reject/:requestId
+// =========================================================================
 const rejectPrescriptionRequest = async (req, res) => {
     try {
         const { requestId } = req.params;
         const { reason } = req.body;
         const pharmacyId = req.user.id;
 
-        const request = await PharmacyPrescriptionRequest.findOne({ requestId, pharmacyId });
+        if (!requestId || String(requestId).trim() === '') {
+            return res.status(400).json({ success: false, message: "Request ID parameter is required." });
+        }
+
+        const cleanId = String(requestId).trim();
+        const isObjectId = mongoose.isValidObjectId(cleanId);
+
+        // 🌟 Dual ID matching (_id or requestId)
+        const request = await PharmacyPrescriptionRequest.findOne({
+            pharmacyId,
+            $or: [
+                ...(isObjectId ? [{ _id: new mongoose.Types.ObjectId(cleanId) }] : []),
+                { requestId: cleanId }
+            ]
+        });
+
         if (!request) {
             return res.status(404).json({ success: false, message: "Prescription request not found or unauthorized." });
         }
@@ -1027,17 +1068,17 @@ const rejectPrescriptionRequest = async (req, res) => {
         request.rejectReason = reason || "Prescription verification failed or medicines out of stock.";
         await request.save();
 
-        // 🛡️ PATIENT ALERT: Notify user regarding prescription rejection
-        const { sendPushNotification } = require('../../../utils/notification');
-        await sendPushNotification(
-            request.userId,
-            'user',
-            "❌ Prescription Request Rejected",
-            `Your prescription request #${request.requestId} was rejected. Reason: ${request.rejectReason}`,
-            { requestId: request._id.toString(), type: 'prescription_rejected' }
-        );
+        try {
+            await sendPushNotification(
+                request.userId,
+                'user',
+                "❌ Prescription Request Rejected",
+                `Your prescription request #${request.requestId} was rejected. Reason: ${request.rejectReason}`,
+                { requestId: request._id.toString(), type: 'prescription_rejected' }
+            );
+        } catch (e) {}
 
-        res.json({
+        res.status(200).json({
             success: true,
             message: "Prescription request has been rejected successfully.",
             rejectReason: request.rejectReason,
@@ -1538,7 +1579,7 @@ const confirmStoreReturnReceipt = async (req, res) => {
 };
 
 // =========================================================================
-// GET CANCELLED AND RETURNED/REPLACEMENT ORDERS FOR PHARMACY VENDOR
+// 2. GET CANCELLED AND RETURNED/REPLACEMENT ORDERS FOR PHARMACY VENDOR
 // Endpoint: GET /provider/pharmacy/orders/cancelled-and-returned?page=1&limit=20
 // =========================================================================
 const getCancelAndReturnOrders = async (req, res) => {
@@ -1549,12 +1590,13 @@ const getCancelAndReturnOrders = async (req, res) => {
 
         const pharmacyObjectId = new mongoose.Types.ObjectId(req.user.id);
 
-        // 🌟 Base Filter: Cancelled orders YA Return/Replacement wale orders
+        // 🌟 Base Filter: Cancelled orders (By User OR Driver) YA Return/Replacement wale orders
         let matchQuery = {
             pharmacyId: pharmacyObjectId,
             $or: [
                 { status: 'Cancelled' },
                 { deliveryStatus: 'CancelledByDriver' },
+                { deliveryStatus: 'CancelledByUser' }, // 👈 User cancellation support added
                 { 'returnDetails.status': { $nin: ['None', null] } }
             ]
         };
@@ -1565,7 +1607,8 @@ const getCancelAndReturnOrders = async (req, res) => {
                 pharmacyId: pharmacyObjectId,
                 $or: [
                     { status: 'Cancelled' },
-                    { deliveryStatus: 'CancelledByDriver' }
+                    { deliveryStatus: 'CancelledByDriver' },
+                    { deliveryStatus: 'CancelledByUser' } // 👈 User cancellation support added
                 ]
             };
         } else if (type === 'Return') {
@@ -1594,8 +1637,18 @@ const getCancelAndReturnOrders = async (req, res) => {
             .lean();
 
         const formattedOrders = orders.map(order => {
-            const isCancelled = order.status === 'Cancelled' || order.deliveryStatus === 'CancelledByDriver';
+            const isCancelled = order.status === 'Cancelled' || 
+                                order.deliveryStatus === 'CancelledByDriver' || 
+                                order.deliveryStatus === 'CancelledByUser';
             const isReturnOrReplacement = order.returnDetails && order.returnDetails.status !== 'None';
+
+            // 🌟 Identify whether it was cancelled by Customer or Driver
+            let cancelledBySource = "Customer";
+            if (order.deliveryStatus === 'CancelledByDriver') {
+                cancelledBySource = "Driver";
+            } else if (order.deliveryStatus === 'CancelledByUser') {
+                cancelledBySource = "Customer";
+            }
 
             return {
                 _id: order._id,
@@ -1605,9 +1658,9 @@ const getCancelAndReturnOrders = async (req, res) => {
                 deliveryStatus: order.deliveryStatus,
                 isRapid: Boolean(order.isRapid),
                 
-                // Flag to identify ticket type in UI
+                // Flag to identify ticket type in Vendor UI
                 category: isCancelled && !isReturnOrReplacement 
-                    ? 'Cancelled Order' 
+                    ? `Cancelled Order (${cancelledBySource})` 
                     : (order.returnDetails?.requestType || 'Return/Replacement'),
 
                 customer: {
@@ -1618,9 +1671,10 @@ const getCancelAndReturnOrders = async (req, res) => {
 
                 deliveryCity: order.address?.city || "",
 
-                // 🌟 Cancellation Info
+                // 🌟 Accurate Cancellation Info for Vendor UI
                 isCancelled: isCancelled,
-                cancelReason: order.cancelReason || null,
+                cancelledBy: isCancelled ? cancelledBySource : null, // 'Customer' | 'Driver'
+                cancelReason: order.cancelReason || (cancelledBySource === 'Driver' ? "Cancelled by driver" : "Cancelled by customer"),
                 cancellationFeeApplied: order.billSummary?.cancellationFeeApplied || 0,
 
                 // 🌟 Return / Replacement Info

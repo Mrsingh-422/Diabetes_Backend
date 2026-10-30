@@ -89,14 +89,16 @@ const pharmacyBookingSchema = new mongoose.Schema({
     },
 
     // --- PAYMENT & STATUS ---
-    paymentMethod: { type: String, enum: [
-        'Online', 'COD', 'UPI', 'Card', 'Netbanking', 'Wallet', 
-        'online', 'cod', 'upi', 'card', 'netbanking', 'wallet', 'emi', 'paylater',
-        'ONLINE', 'COD'
-    ], default: 'COD' },
+    paymentMethod: {
+        type: String, enum: [
+            'Online', 'COD', 'UPI', 'Card', 'Netbanking', 'Wallet',
+            'online', 'cod', 'upi', 'card', 'netbanking', 'wallet', 'emi', 'paylater',
+            'ONLINE', 'COD'
+        ], default: 'COD'
+    },
     paymentStatus: {
         type: String,
-        enum: ['Pending', 'Paid', 'Failed', 'Refunded','Refund-Initiated'],
+        enum: ['Pending', 'Paid', 'Failed', 'Refunded', 'Refund-Initiated'],
         default: 'Pending'
     },
 
@@ -106,7 +108,8 @@ const pharmacyBookingSchema = new mongoose.Schema({
     // Delivery Tracking Statuses
     deliveryStatus: {
         type: String,
-        enum: ['PendingAssignment', 'Assigned', 'Accepted', 'PickedUp', 'OutForDelivery', 'ReachedLocation', 'Delivered', 'CancelledByDriver', 'UserUnreachable', 'UserRefused'],
+        enum: ['PendingAssignment', 'Assigned', 'Accepted', 'PickedUp', 'CancelledByUser',   
+        'Cancelled', 'OutForDelivery', 'ReachedLocation', 'Delivered', 'CancelledByDriver', 'UserUnreachable', 'UserRefused'],
         default: 'PendingAssignment'
     },
 
@@ -130,9 +133,9 @@ const pharmacyBookingSchema = new mongoose.Schema({
 
     // 🌟 Figma Screen 13 (Return Details)
     returnReason: { type: String, default: null },
-    anyIntruction: { 
-        type: String, 
-        default: "" 
+    anyIntruction: {
+        type: String,
+        default: ""
     },
 
     // Live trip tracking timestamps
@@ -184,7 +187,12 @@ const pharmacyBookingSchema = new mongoose.Schema({
         collectedAt: { type: Date, default: null },
         storeReceivedAt: { type: Date, default: null },
         rejectionReason: { type: String, default: null },
-        refundAmount: { type: Number, default: 0 }
+        refundAmount: { type: Number, default: 0 },
+        // 🌟 ADD THESE NEW KEYS HERE (For Admin Days & Policy Snapshot) 🌟
+        allowedReturnDays: { type: Number, default: 3 },            // e.g. 2, 3, 4, 7 (Admin jo set karega)
+        daysPassedSinceDelivery: { type: Number, default: 0 },      // Delivery ke baad kitne din hue
+        remainingReturnDays: { type: Number, default: 0 },          // Return ke kitne din bache hain
+        returnWindowText: { type: String, default: "3 Days Return Policy" } // App me display hone wala badge text
     }
 
 

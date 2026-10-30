@@ -2714,7 +2714,7 @@ const uploadPrescription = async (req, res) => {
 };
 
 // =========================================================================
-// CANCEL MEDICINE ORDER (Blocked if Out For Delivery / Shipped / Delivered)
+// CANCEL MEDICINE ORDER (Fixed: CancelledByUser)
 // Endpoint: POST /user/pharmacy/cancel-order
 // =========================================================================
 const cancelMedicineOrder = async (req, res) => {
@@ -2780,8 +2780,9 @@ const cancelMedicineOrder = async (req, res) => {
             await Driver.findByIdAndUpdate(order.driverId, { $set: { status: 'Available' } });
         }
 
+        // 🌟 FIX HERE: Pehle 'CancelledByDriver' tha, ab 'CancelledByUser' hoga!
         order.status = 'Cancelled';
-        order.deliveryStatus = 'CancelledByDriver';
+        order.deliveryStatus = 'CancelledByUser'; 
         order.cancelReason = reason || "Cancelled by customer";
         order.billSummary.cancellationFeeApplied = policyResult.cancellationFee;
 
@@ -2796,7 +2797,7 @@ const cancelMedicineOrder = async (req, res) => {
                 order.pharmacyId,
                 'pharmacy',
                 "Order Cancelled by Customer",
-                `Order #${order.orderId} was cancelled before dispatch. Stock restored to inventory.`,
+                `Order #${order.orderId} was cancelled by customer. Reason: ${order.cancelReason}`,
                 { orderId: order._id.toString(), type: 'order_cancelled' }
             );
         } catch (e) {}
@@ -2807,6 +2808,8 @@ const cancelMedicineOrder = async (req, res) => {
             data: {
                 orderId: order.orderId,
                 status: order.status,
+                deliveryStatus: order.deliveryStatus, // 👈 Returns 'CancelledByUser'
+                cancelReason: order.cancelReason,
                 cancellationFee: policyResult.cancellationFee,
                 refundAmount: policyResult.refundAmount
             }
@@ -3224,105 +3227,135 @@ const getOrderDetails = async (req, res) => {
     }
 };
 
+// =========================================================================
+// GET LATEST ADDED MEDICINES (With Pagination 20 Per Page & Complete Details)
+// Endpoint: GET /user/pharmacy/latest-added-medicines?page=1&limit=20
+// =========================================================================
 const getLatestAddedMedicines = async (req, res) => {
     try {
-        const latestMeds = await MedicineInventory.aggregate([
-            // 1. Sirf wahi medicines uthayein jo stock mein hain aur available hain
+        const page = Math.max(1, parseInt(req.query.page) || 1);
+        const limit = Math.max(1, parseInt(req.query.limit) || 20); // 👈 Default 20 per page
+        const skip = (page - 1) * limit;
+
+        const pipeline = [
+            // 1. Sirf wahi medicines jo active stock me available hain
             {
                 $match: {
                     is_available: true,
                     stock_quantity: { $gt: 0 }
                 }
             },
-            // 2. Latest additions ke hisab se sort karein
+            // 2. Latest additions pehle sort karein
             {
                 $sort: { createdAt: -1 }
             },
-            // 3. Medicine ID ke base par group karein taaki duplicate medicines repeat na ho
+            // 3. Medicine ID ke hisab se group karein taaki duplicate medicines repeat na ho
             {
                 $group: {
                     _id: "$medicineId",
                     latestInventoryId: { $first: "$_id" },
-                    // 🚨 OVERWRITE: Fetch the absolute lowest vendor price across active pharmacies [cite: 1.1.2]
-                    latestVendorPrice: { $min: "$vendor_price" },
-                    // 🚨 OVERWRITE: Extract the dynamic batch MRP safely [cite: 1.1.2]
-                    latestMedsMrp: { $first: "$mrp" },
+                    lowestVendorPrice: { $min: "$vendor_price" },
+                    batchMrp: { $first: "$mrp" },
                     pharmacyId: { $first: "$pharmacyId" },
+                    availableStock: { $first: "$stock_quantity" },
+                    isReturnAllowed: { $first: "$isReturnAllowed" },
+                    isReplacementAllowed: { $first: "$isReplacementAllowed" },
                     latestCreatedAt: { $first: "$createdAt" }
                 }
             },
-            // 4. Grouping ke baad fir se global latest added order maintain karein
+            // 4. Grouping ke baad latest sequence maintain karein
             {
                 $sort: { latestCreatedAt: -1 }
             },
-            // 5. Sirf top 10 records limit karein
+            // 5. High-performance Facet: Pagination & Total Count
             {
-                $limit: 10
-            },
-            // 6. Master Medicine collection se details match karein
-            {
-                $lookup: {
-                    from: "medicines",
-                    localField: "_id",
-                    foreignField: "_id",
-                    as: "details"
-                }
-            },
-            { $unwind: "$details" },
-            // 7. UI ke liye data format aur output fields select karein
-            {
-                $project: {
-                    _id: 0,
-                    medicineId: "$_id",
-                    inventoryId: "$latestInventoryId",
-                    pharmacyId: 1,
-                    name: "$details.name",
-                    image: { $arrayElemAt: ["$details.image_url", 0] },
-                    mrp: { $toString: "$latestMedsMrp" }, // 👈 Overwritten: Dynamic Batch MRP [cite: 1.1.2]
-                    bestPrice: "$latestVendorPrice",      // 👈 Overwritten: Live minimum vendor price [cite: 1.1.2]
-                    // 🚨 DYNAMIC DISCOUNT: Calculated strictly using the lowest live price [cite: 1.1.2]
-                    discount: {
-                        $cond: {
-                            if: {
-                                $and: [
-                                    { $ne: ["$latestMedsMrp", null] },
-                                    { $gt: [{ $toDouble: { $ifNull: ["$latestMedsMrp", "0"] } }, 0] }
-                                ]
-                            },
-                            then: {
-                                $round: [
-                                    {
-                                        $multiply: [
-                                            {
-                                                $divide: [
-                                                    { $subtract: [{ $toDouble: { $ifNull: ["$latestMedsMrp", "0"] } }, "$latestVendorPrice"] },
-                                                    { $toDouble: { $ifNull: ["$latestMedsMrp", "1"] } }
-                                                ]
-                                            },
-                                            100
-                                        ]
-                                    },
-                                    0
-                                ]
-                            },
-                            else: 0
-                        }
-                    },
-                    salt: "$details.salt_composition",
-                    addedAt: "$latestCreatedAt",
-                    isAvailable: { $literal: true }
+                $facet: {
+                    metadata: [{ $count: "total" }],
+                    data: [
+                        { $skip: skip },
+                        { $limit: limit },
+                        // Master Medicine table se join sirf current page ke 20 items ke liye
+                        {
+                            $lookup: {
+                                from: "medicines",
+                                localField: "_id",
+                                foreignField: "_id",
+                                as: "details"
+                            }
+                        },
+                        { $unwind: "$details" }
+                    ]
                 }
             }
-        ]);
+        ];
 
-        res.json({
+        const result = await MedicineInventory.aggregate(pipeline);
+
+        const total = result[0]?.metadata[0]?.total || 0;
+        const rawMeds = result[0]?.data || [];
+
+        // 6. Data formatting with all required keys
+        const formattedList = rawMeds.map(item => {
+            const med = item.details;
+            const batchMrp = Number(item.batchMrp || med.mrp || 0);
+            const vendorPrice = Number(item.lowestVendorPrice || med.best_price || 0);
+
+            // Dynamic discount calculation
+            let discountPercent = "0%";
+            if (batchMrp > 0 && vendorPrice > 0 && batchMrp > vendorPrice) {
+                discountPercent = `${Math.round(((batchMrp - vendorPrice) / batchMrp) * 100)}%`;
+            } else if (med.discont_percent) {
+                discountPercent = med.discont_percent;
+            }
+
+            // Ensure image_url is always an array
+            let images = [];
+            if (Array.isArray(med.image_url)) {
+                images = med.image_url;
+            } else if (typeof med.image_url === 'string' && med.image_url.trim() !== '') {
+                images = [med.image_url];
+            }
+
+            return {
+                _id: med._id,
+                medicineId: med._id,
+                inventoryId: item.latestInventoryId,
+                name: med.name || "",
+                manufacturers: med.manufacturers || "N/A",
+                salt_composition: med.salt_composition || "",
+                packaging: med.packaging || "10 tablets in 1 strip",
+                mrp: batchMrp > 0 ? batchMrp.toString() : (med.mrp || "0"),
+                best_price: vendorPrice > 0 ? vendorPrice.toString() : (med.best_price || "0"),
+                discont_percent: discountPercent,
+                prescription_required: med.prescription_required || "NO",
+                image_url: images,
+                bread_crumb: med.bread_crumb || "",
+                primary_use: med.primary_use || "",
+                description: med.description || "",
+                isAvailable: true,
+                availableStock: Number(item.availableStock || 0),
+                vendor_id: item.pharmacyId,
+                pharmacyId: item.pharmacyId,
+                isReturnAllowed: Boolean(item.isReturnAllowed),
+                isReplacementAllowed: Boolean(item.isReplacementAllowed)
+            };
+        });
+
+        res.status(200).json({
             success: true,
-            count: latestMeds.length,
-            data: latestMeds
+            total,
+            totalPages: Math.ceil(total / limit) || 1,
+            currentPage: page,
+            count: formattedList.length,
+            data: formattedList
         });
 
     } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
+        console.error("getLatestAddedMedicines Error:", error);
+        res.status(500).json({ 
+            success: false, 
+            message: error.message 
+        });
     }
 };
 
@@ -3784,7 +3817,7 @@ const estimateRxPrices = async (req, res) => {
 };
 
 // =========================================================================
-// 2. GET SINGLE PRESCRIPTION REQUEST DETAILS (Strictly MongoDB _id Only)
+// 2. GET SINGLE PRESCRIPTION REQUEST DETAILS (100% PDF Spec Matched)
 // Endpoint: GET /user/pharmacy/prescription-request/details/:requestId
 // =========================================================================
 const getUserPrescriptionRequestDetails = async (req, res) => {
@@ -3792,63 +3825,109 @@ const getUserPrescriptionRequestDetails = async (req, res) => {
         const { requestId } = req.params;
         const userId = req.user?.id || req.user?._id;
 
-        // 1. 🚨 STRICT CHECK: Only valid MongoDB ObjectId allowed (No string orderId)
-        if (!requestId || !mongoose.Types.ObjectId.isValid(requestId)) {
+        if (!requestId || String(requestId).trim() === '') {
             return res.status(400).json({ 
                 success: false, 
-                message: "Invalid ID format: Only a valid MongoDB _id is accepted." 
+                message: "Request ID parameter is required." 
             });
         }
 
-        // 2. 🔍 Find Prescription Request strictly by its _id and userId
-        const request = await PharmacyPrescriptionRequest.findOne({ 
-            _id: new mongoose.Types.ObjectId(requestId), 
-            userId 
+        const cleanId = String(requestId).trim();
+        const isObjectId = mongoose.isValidObjectId(cleanId);
+
+        // 1. Dhoondhein Prescription Request (chahe _id ho ya custom string 'REQ-...')
+        let request = await PharmacyPrescriptionRequest.findOne({ 
+            userId,
+            $or: [
+                ...(isObjectId ? [{ _id: new mongoose.Types.ObjectId(cleanId) }] : []),
+                { requestId: cleanId }
+            ]
         })
         .populate('pharmacyId', 'name phone address location city state rating profileImage')
         .lean();
 
+        // 2. Fallback: Agar user ne booking ID bhej di ho
+        let linkedBooking = null;
         if (!request) {
+            linkedBooking = await PharmacyBooking.findOne({
+                userId,
+                $or: [
+                    ...(isObjectId ? [{ _id: new mongoose.Types.ObjectId(cleanId) }] : []),
+                    { orderId: cleanId }
+                ]
+            })
+            .populate('driverId', 'name phone vehicleNumber vehicleType profilePic status location')
+            .populate('items.medicineId', 'name packaging image_url')
+            .populate('pharmacyId', 'name phone address location city state rating profileImage')
+            .lean();
+
+            if (linkedBooking) {
+                if (linkedBooking.prescriptionFile) {
+                    request = await PharmacyPrescriptionRequest.findOne({
+                        userId,
+                        prescriptionImage: linkedBooking.prescriptionFile
+                    })
+                    .populate('pharmacyId', 'name phone address location city state rating profileImage')
+                    .lean();
+                }
+                if (!request) {
+                    request = await PharmacyPrescriptionRequest.findOne({
+                        userId,
+                        pharmacyId: linkedBooking.pharmacyId?._id || linkedBooking.pharmacyId
+                    })
+                    .sort({ createdAt: -1 })
+                    .populate('pharmacyId', 'name phone address location city state rating profileImage')
+                    .lean();
+                }
+            }
+        }
+
+        if (!request && !linkedBooking) {
             return res.status(404).json({ 
                 success: false, 
                 message: "Prescription inquiry details not found or access denied." 
             });
         }
 
-        // 3. 🔗 Find Linked PharmacyBooking (When Paid / Converted to active order)
-        let linkedBooking = null;
-
-        if (request.prescriptionImage) {
-            linkedBooking = await PharmacyBooking.findOne({
-                pharmacyId: request.pharmacyId?._id || request.pharmacyId,
-                userId,
-                $or: [
-                    { prescriptionFile: request.prescriptionImage },
-                    { prescriptionImages: request.prescriptionImage }
-                ]
-            })
-            .populate('driverId', 'name phone vehicleNumber vehicleType profilePic status location')
-            .populate('items.medicineId', 'name packaging image_url')
-            .populate('returnDetails.pickupDriverId', 'name phone vehicleNumber')
-            .sort({ createdAt: -1 })
-            .lean();
+        // 3. Linked Booking Lookup (Agar order paid ho chuka ho)
+        if (request && !linkedBooking && request.status === 'Paid') {
+            if (request.bookingId) {
+                linkedBooking = await PharmacyBooking.findById(request.bookingId)
+                    .populate('driverId', 'name phone vehicleNumber vehicleType profilePic status location')
+                    .populate('items.medicineId', 'name packaging image_url')
+                    .lean();
+            } else if (request.prescriptionImage) {
+                linkedBooking = await PharmacyBooking.findOne({
+                    pharmacyId: request.pharmacyId?._id || request.pharmacyId,
+                    userId,
+                    $or: [
+                        { prescriptionFile: request.prescriptionImage },
+                        { prescriptionImages: request.prescriptionImage }
+                    ]
+                })
+                .populate('driverId', 'name phone vehicleNumber vehicleType profilePic status location')
+                .populate('items.medicineId', 'name packaging image_url')
+                .sort({ createdAt: -1 })
+                .lean();
+            }
         }
 
-        if (!linkedBooking) {
-            linkedBooking = await PharmacyBooking.findOne({
-                pharmacyId: request.pharmacyId?._id || request.pharmacyId,
-                userId,
-                orderType: 'Prescription',
-                createdAt: { $gte: new Date(request.createdAt) }
-            })
-            .populate('driverId', 'name phone vehicleNumber vehicleType profilePic status location')
-            .populate('items.medicineId', 'name packaging image_url')
-            .populate('returnDetails.pickupDriverId', 'name phone vehicleNumber')
-            .sort({ createdAt: -1 })
-            .lean();
+        // 🌟 Clean Pharmacy Image Path (Removes Windows '\\' and 'public/')
+        if (request?.pharmacyId?.profileImage) {
+            let cleanImg = request.pharmacyId.profileImage.replace(/\\/g, "/").replace(/^public\//, "");
+            if (!cleanImg.startsWith("/")) cleanImg = "/" + cleanImg;
+            request.pharmacyId.profileImage = cleanImg;
         }
 
-        // 4. 🛵 MAP DRIVER DETAILS
+        // 4. Status Resolvers (PDF Page 3)
+        let currentStatus = request?.status || 'Pending Review';
+        if (request?.status === 'Paid') {
+            currentStatus = linkedBooking?.status || 'Placed';
+        }
+
+        const currentDeliveryStatus = linkedBooking?.deliveryStatus || (request?.status === 'Paid' ? "PendingAssignment" : "None");
+
+        // 5. Driver Details Resolution (PDF Page 5 & 6)
         const activeDriver = linkedBooking?.driverId || null;
         let cleanDriverPic = activeDriver?.profilePic || null;
         if (cleanDriverPic) {
@@ -3870,70 +3949,84 @@ const getUserPrescriptionRequestDetails = async (req, res) => {
             }
         } : null;
 
-        // 5. 📦 MAP ITEMS (With verified price, MRP & Return eligibility)
+        // 6. Items Resolution (PDF Page 4 & 5)
         let formattedItems = [];
-        if (linkedBooking && linkedBooking.items && linkedBooking.items.length > 0) {
+        if (linkedBooking?.items?.length > 0) {
             formattedItems = linkedBooking.items.map(item => ({
                 medicineId: item.medicineId?._id || item.medicineId || null,
                 name: item.name || item.medicineId?.name || "Medicine",
-                image: item.medicineId?.image_url?.[0] || null,
                 packaging: item.medicineId?.packaging || "10 tablets in 1 strip",
                 price: Number(item.price || 0),
                 mrp: Number(item.mrp || item.price || 0),
                 quantity: Number(item.quantity || 1),
                 duration: item.duration || `${item.quantity || 1} Days`,
-                isComboApplied: Boolean(item.isComboApplied),
-                freeQuantity: Number(item.freeQuantity || 0),
                 isReturnAllowed: Boolean(item.isReturnAllowed),
                 isReplacementAllowed: Boolean(item.isReplacementAllowed)
             }));
-        } else if (request.verifiedBill && request.verifiedBill.items && request.verifiedBill.items.length > 0) {
+        } else if (request?.verifiedBill?.items?.length > 0) {
             formattedItems = request.verifiedBill.items.map(item => ({
                 medicineId: item.medicineId || null,
                 name: item.name || "Medicine",
-                image: null,
                 packaging: "10 tablets in 1 strip",
                 price: Number(item.pricePerUnit || 0),
                 mrp: Number(item.mrp || item.pricePerUnit || 0),
                 quantity: Number(item.quantity || 1),
                 duration: `${item.quantity || 1} Days`,
-                isComboApplied: false,
-                freeQuantity: 0,
                 isReturnAllowed: false,
                 isReplacementAllowed: false
             }));
-        } else if (request.requestedMedicines && request.requestedMedicines.length > 0) {
+        } else if (request?.requestedMedicines?.length > 0) {
             formattedItems = request.requestedMedicines.map(item => ({
                 medicineId: null,
                 name: item.name,
-                image: null,
                 packaging: "10 tablets in 1 strip",
                 price: Number(item.mrp || 0),
                 mrp: Number(item.mrp || 0),
                 quantity: Number(item.durationDays || 1),
                 duration: `${item.durationDays || 1} Days`,
-                isComboApplied: false,
-                freeQuantity: 0,
                 isReturnAllowed: false,
                 isReplacementAllowed: false
             }));
         }
 
-        // 6. 📍 LOCATIONS & OTP
-        const pharmacyLocation = {
-            lat: Number(request.pharmacyId?.location?.lat || 0),
-            lng: Number(request.pharmacyId?.location?.lng || 0)
-        };
+        // 7. Verified Bill Ledger (PDF Page 5)
+        let verifiedBillData = null;
+        if (request?.verifiedBill && (request.verifiedBill.totalAmount !== undefined || request.verifiedBill.itemTotal !== undefined)) {
+            verifiedBillData = {
+                itemTotal: Number(request.verifiedBill.itemTotal || 0),
+                taxableTotal: Number(request.verifiedBill.taxableTotal || 0),
+                cgstTotal: Number(request.verifiedBill.cgstTotal || 0),
+                sgstTotal: Number(request.verifiedBill.sgstTotal || 0),
+                deliveryCharge: Number(request.verifiedBill.deliveryCharge || 0),
+                totalAmount: Number(request.verifiedBill.totalAmount || 0),
+                items: (request.verifiedBill.items || []).map(bItem => ({
+                    medicineId: bItem.medicineId || null,
+                    name: bItem.name,
+                    mrp: Number(bItem.mrp || 0),
+                    pricePerUnit: Number(bItem.pricePerUnit || 0),
+                    quantity: Number(bItem.quantity || 1),
+                    totalPrice: Number(bItem.totalPrice || 0),
+                    hsn_number: bItem.hsn_number || ""
+                }))
+            };
+        }
 
-        const activeDeliveryOtp = linkedBooking?.deliveryOTP || request.deliveryOTP || null;
-        const currentOrderStatus = linkedBooking?.status || (request.status === 'Paid' ? 'Placed' : request.status);
-        const currentDeliveryStatus = linkedBooking?.deliveryStatus || "PendingAssignment";
+        const activeDeliveryOtp = linkedBooking?.deliveryOTP || null;
 
-        // 7. 🚀 LIVE TRACKING QUICK SUMMARY
-        let currentStage = "ORDER_PLACED";
-        let statusHeading = "Order Placed";
+        // 8. Live Tracking Quick Summary (PDF Page 6 & 7)
+        let currentStage = "PENDING_REVIEW";
+        let statusHeading = "Awaiting Pharmacist Review";
 
-        if (currentOrderStatus === 'Delivered') {
+        if (currentStatus === 'Rejected') {
+            currentStage = "REJECTED";
+            statusHeading = "Prescription Declined";
+        } else if (currentStatus === 'Reviewing') {
+            currentStage = "REVIEWING";
+            statusHeading = "Pharmacist Reviewing Stock";
+        } else if (currentStatus === 'Bill Generated') {
+            currentStage = "BILL_GENERATED";
+            statusHeading = "Quote Ready • Pay to Dispatch";
+        } else if (currentStatus === 'Delivered') {
             currentStage = "DELIVERED";
             statusHeading = "Delivered Successfully";
         } else if (currentDeliveryStatus === 'ReachedLocation') {
@@ -3945,9 +4038,12 @@ const getUserPrescriptionRequestDetails = async (req, res) => {
         } else if (driver) {
             currentStage = "DRIVER_ASSIGNED";
             statusHeading = `Driver Assigned (${driver.name})`;
-        } else if (['Packed', 'Shipped'].includes(currentOrderStatus)) {
+        } else if (['Packed', 'Shipped'].includes(currentStatus)) {
             currentStage = "ORDER_PACKED";
             statusHeading = "Packed by Pharmacy";
+        } else if (currentStatus === 'Placed' || request?.status === 'Paid') {
+            currentStage = "ORDER_PLACED";
+            statusHeading = "Order Placed";
         }
 
         const liveTracking = {
@@ -3956,11 +4052,16 @@ const getUserPrescriptionRequestDetails = async (req, res) => {
             deliveryOTP: activeDeliveryOtp,
             isDriverAssigned: Boolean(driver),
             driverLocation: driver ? driver.currentLocation : { lat: 0, lng: 0 },
-            pharmacyLocation
+            pharmacyLocation: {
+                lat: Number(request?.pharmacyId?.location?.lat || 0),
+                lng: Number(request?.pharmacyId?.location?.lng || 0)
+            }
         };
 
-        // 8. ⏱️ STEP-BY-STEP TRACKING TIMELINE
-        const baseCreatedAt = linkedBooking?.createdAt || request.createdAt;
+        // 9. Step-by-Step Tracking Timeline Stepper (PDF Page 7)
+        const baseCreatedAt = linkedBooking?.createdAt || request?.createdAt;
+        const isPaidOrPlaced = Boolean(linkedBooking || request?.status === 'Paid');
+
         const trackingTimeline = [
             {
                 step: 1,
@@ -3968,10 +4069,10 @@ const getUserPrescriptionRequestDetails = async (req, res) => {
                 title: "Order Placed",
                 description: linkedBooking?.paymentMethod === 'COD' 
                     ? "Order confirmed via Cash on Delivery"
-                    : "Payment received & order confirmed online",
-                timestamp: baseCreatedAt,
-                formattedTime: moment(baseCreatedAt).format('DD MMM YYYY, hh:mm A'),
-                isCompleted: Boolean(linkedBooking || request.status === 'Paid'),
+                    : (isPaidOrPlaced ? "Payment received & order confirmed online" : "Awaiting pharmacist quote & payment"),
+                timestamp: isPaidOrPlaced ? baseCreatedAt : null,
+                formattedTime: isPaidOrPlaced ? moment(baseCreatedAt).format('DD MMM YYYY, hh:mm A') : null,
+                isCompleted: isPaidOrPlaced,
                 isCurrent: currentStage === "ORDER_PLACED"
             },
             {
@@ -3979,9 +4080,9 @@ const getUserPrescriptionRequestDetails = async (req, res) => {
                 key: "ORDER_PACKED",
                 title: "Packed by Pharmacy",
                 description: "Medicines verified by licensed chemist and packed in tamper-proof bag",
-                timestamp: ['Packed', 'Shipped', 'Delivered'].includes(currentOrderStatus) ? (linkedBooking?.updatedAt || baseCreatedAt) : null,
-                formattedTime: ['Packed', 'Shipped', 'Delivered'].includes(currentOrderStatus) ? moment(linkedBooking?.updatedAt || baseCreatedAt).format('DD MMM YYYY, hh:mm A') : null,
-                isCompleted: ['Packed', 'Shipped', 'Delivered'].includes(currentOrderStatus),
+                timestamp: ['Packed', 'Shipped', 'Delivered'].includes(currentStatus) ? (linkedBooking?.updatedAt || baseCreatedAt) : null,
+                formattedTime: ['Packed', 'Shipped', 'Delivered'].includes(currentStatus) ? moment(linkedBooking?.updatedAt || baseCreatedAt).format('DD MMM YYYY, hh:mm A') : null,
+                isCompleted: ['Packed', 'Shipped', 'Delivered'].includes(currentStatus),
                 isCurrent: currentStage === "ORDER_PACKED"
             },
             {
@@ -3990,7 +4091,7 @@ const getUserPrescriptionRequestDetails = async (req, res) => {
                 title: "Delivery Partner Assigned",
                 description: driver 
                     ? `Delivery partner ${driver.name} (${driver.vehicleNumber}) assigned` 
-                    : "Pharmacy store is assigning a nearby delivery partner",
+                    : "Pharmacy store will assign a nearby delivery partner",
                 timestamp: linkedBooking?.assignedAt || (driver ? linkedBooking?.updatedAt : null),
                 formattedTime: (linkedBooking?.assignedAt || (driver ? linkedBooking?.updatedAt : null))
                     ? moment(linkedBooking?.assignedAt || (driver ? linkedBooking?.updatedAt : null)).format('DD MMM YYYY, hh:mm A')
@@ -4007,7 +4108,7 @@ const getUserPrescriptionRequestDetails = async (req, res) => {
                     : "Parcel will be out for delivery shortly",
                 timestamp: linkedBooking?.startedAt || null,
                 formattedTime: linkedBooking?.startedAt ? moment(linkedBooking.startedAt).format('DD MMM YYYY, hh:mm A') : null,
-                isCompleted: ['OutForDelivery', 'ReachedLocation', 'Delivered'].includes(currentDeliveryStatus) || currentOrderStatus === 'Delivered',
+                isCompleted: ['OutForDelivery', 'ReachedLocation', 'Delivered'].includes(currentDeliveryStatus) || currentStatus === 'Delivered',
                 isCurrent: currentStage === "OUT_FOR_DELIVERY"
             },
             {
@@ -4017,7 +4118,7 @@ const getUserPrescriptionRequestDetails = async (req, res) => {
                 description: "Delivery partner has reached your doorstep. Please share the delivery OTP to receive medicines.",
                 timestamp: linkedBooking?.arrivedAt || null,
                 formattedTime: linkedBooking?.arrivedAt ? moment(linkedBooking.arrivedAt).format('DD MMM YYYY, hh:mm A') : null,
-                isCompleted: ['ReachedLocation', 'Delivered'].includes(currentDeliveryStatus) || currentOrderStatus === 'Delivered',
+                isCompleted: ['ReachedLocation', 'Delivered'].includes(currentDeliveryStatus) || currentStatus === 'Delivered',
                 isCurrent: currentStage === "REACHED_LOCATION"
             },
             {
@@ -4027,48 +4128,13 @@ const getUserPrescriptionRequestDetails = async (req, res) => {
                 description: "Medicines package safely handed over to customer",
                 timestamp: linkedBooking?.deliveredAt || null,
                 formattedTime: linkedBooking?.deliveredAt ? moment(linkedBooking.deliveredAt).format('DD MMM YYYY, hh:mm A') : null,
-                isCompleted: currentOrderStatus === 'Delivered' || currentDeliveryStatus === 'Delivered',
+                isCompleted: currentStatus === 'Delivered' || currentDeliveryStatus === 'Delivered',
                 isCurrent: currentStage === "DELIVERED"
             }
         ];
 
-        // Agar order Cancel ho gaya ho
-        if (currentOrderStatus === 'Cancelled') {
-            trackingTimeline.push({
-                step: 7,
-                key: "CANCELLED",
-                title: "Order Cancelled",
-                description: linkedBooking?.cancelReason || "Order was cancelled",
-                timestamp: linkedBooking?.updatedAt || new Date(),
-                formattedTime: moment(linkedBooking?.updatedAt || new Date()).format('DD MMM YYYY, hh:mm A'),
-                isCompleted: true,
-                isCurrent: true
-            });
-        }
-
-        // 9. 💰 RETURN & REFUND DETAILS
-        const defaultReturnDetails = {
-            requestType: null,
-            reason: null,
-            userComments: "",
-            proofImages: [],
-            status: "None",
-            pickupDriverId: null,
-            pickupStatus: "PendingAssignment",
-            returnOTP: null,
-            driverCollectedPics: [],
-            vendorVerificationNote: "",
-            requestedAt: null,
-            collectedAt: null,
-            storeReceivedAt: null,
-            rejectionReason: null,
-            refundAmount: 0
-        };
-
-        const returnDetails = linkedBooking?.returnDetails || defaultReturnDetails;
-
-        // 10. 🏠 DELIVERY ADDRESS
-        const deliveryAddress = linkedBooking?.address || request.address || {
+        // 10. Delivery Address (PDF Page 8)
+        const deliveryAddress = linkedBooking?.address || request?.address || {
             name: "",
             phone: "",
             houseNo: "",
@@ -4077,23 +4143,46 @@ const getUserPrescriptionRequestDetails = async (req, res) => {
             addressType: "Home"
         };
 
-        // 11. 🎯 FINAL UNIFIED RESPONSE
+        // 🌟 11. EXACT PDF STRUCTURE COMPILATION (Guarantees every PDF key is present)
         const responseData = {
-            ...request,
-            _id: request._id,
-            requestId: request.requestId,
+            _id: request?._id || linkedBooking?._id,
+            requestId: request?.requestId || linkedBooking?.orderId,
             bookingId: linkedBooking?._id || null,
             bookingOrderId: linkedBooking?.orderId || null,
-            status: currentOrderStatus,
+            
+            // Status Workflow Keys (PDF Page 3 & Page 8)
+            status: currentStatus,
+            requestStatus: request?.status || 'Pending Review',
+            orderStatus: linkedBooking?.status || null,
+            rejectReason: request?.rejectReason || null,
             deliveryStatus: currentDeliveryStatus,
-            deliveryAddress,
             deliveryOTP: activeDeliveryOtp,
-            driver,
+
+            // Medical Details (PDF Page 4 & Page 8)
+            doctorName: request?.doctorName || "Dr. Rajesh Sharma (Mock)",
+            prescriptionDate: request?.prescriptionDate || null,
+            prescriptionImage: request?.prescriptionImage || "",
+            durationType: request?.durationType || "Full Course",
+
+            // Recipient & Pharmacy (PDF Page 8)
+            deliveryAddress,
+            pharmacyId: request?.pharmacyId || null,
+
+            // Items & Verified Bill (PDF Page 4, 5, 8 & 9)
             itemsCount: formattedItems.length,
             items: formattedItems,
+            verifiedBill: verifiedBillData,
+
+            // Driver & Live Tracking (PDF Page 5, 6, 7 & 9)
+            driver,
             liveTracking,
             trackingTimeline,
-            returnDetails
+
+            // Return Details (PDF Page 9)
+            returnDetails: linkedBooking?.returnDetails || {
+                status: "None",
+                refundAmount: 0
+            }
         };
 
         return res.status(200).json({
@@ -4947,6 +5036,7 @@ const requestPharmacyOrderReturn = async (req, res) => {
         const { requestType = 'Return', reason, userComments } = req.body;
         const userId = req.user?.id || req.user?._id;
 
+        // 1. Fetch Order
         const order = await PharmacyBooking.findOne({
             $or: [
                 { _id: mongoose.isValidObjectId(orderId) ? new mongoose.Types.ObjectId(orderId) : new mongoose.Types.ObjectId() },
@@ -4956,10 +5046,13 @@ const requestPharmacyOrderReturn = async (req, res) => {
         });
 
         if (!order) {
-            return res.status(404).json({ success: false, message: "Order not found." });
+            return res.status(404).json({ 
+                success: false, 
+                message: "Order not found." 
+            });
         }
 
-        // 🚨 STRICT CHECK: Order MUST be Delivered
+        // 2. 🚨 STRICT CHECK: Order MUST be Delivered
         const isOrderDelivered = (order.status === 'Delivered' || order.deliveryStatus === 'Delivered');
 
         if (!isOrderDelivered) {
@@ -4969,23 +5062,33 @@ const requestPharmacyOrderReturn = async (req, res) => {
             });
         }
 
-        // Return Window Days Check from Admin Config
+        // 3. Fetch Admin Return Policy Config (Dynamic Return Days set by Admin)
         let config = await PharmacyReturnConfig.findOne({ vendorType: 'Pharmacy' });
-        if (!config) config = { returnWindowDays: 3, isReturnEnabled: true, isReplacementEnabled: true };
+        if (!config) {
+            config = { 
+                returnWindowDays: 3, 
+                isReturnEnabled: true, 
+                isReplacementEnabled: true 
+            };
+        }
 
+        const adminWindowDays = Number(config.returnWindowDays || 3);
         const deliveryDate = order.deliveredAt || order.updatedAt || order.createdAt;
         const daysPassed = moment().diff(moment(deliveryDate), 'days');
 
-        if (daysPassed > config.returnWindowDays) {
+        // Check if Return Window has expired
+        if (daysPassed > adminWindowDays) {
             return res.status(400).json({
                 success: false,
-                message: `Return window expired: Requests are only accepted within ${config.returnWindowDays} days of delivery.`
+                message: `Return window expired: Requests are only accepted within ${adminWindowDays} days of delivery.`,
+                allowedReturnDays: adminWindowDays,
+                daysPassedSinceDelivery: daysPassed
             });
         }
 
-        // Check Batch Item Return/Replacement eligibility
+        // 4. Check Batch Item Return / Replacement Eligibility
         let eligibleSubtotal = 0;
-        const eligibleItems = order.items.filter(item => {
+        const eligibleItems = (order.items || []).filter(item => {
             const isEligible = requestType === 'Return' ? item.isReturnAllowed : item.isReplacementAllowed;
             if (isEligible) {
                 eligibleSubtotal += (Number(item.price || 0) * Number(item.quantity || 1));
@@ -5000,6 +5103,7 @@ const requestPharmacyOrderReturn = async (req, res) => {
             });
         }
 
+        // 5. Prevent Duplicate Active Return Tickets
         if (order.returnDetails && ['Requested', 'Approved', 'CollectedByDriver'].includes(order.returnDetails.status)) {
             return res.status(400).json({ 
                 success: false, 
@@ -5007,7 +5111,7 @@ const requestPharmacyOrderReturn = async (req, res) => {
             });
         }
 
-        // Uploaded proof images
+        // 6. Handle Uploaded Proof Images
         let uploadedProofs = [];
         if (req.files) {
             if (Array.isArray(req.files)) {
@@ -5017,6 +5121,9 @@ const requestPharmacyOrderReturn = async (req, res) => {
             }
         }
 
+        const remainingDays = Math.max(0, adminWindowDays - daysPassed);
+
+        // 7. Save Details into Database (With Admin Days Snapshot)
         order.returnDetails = {
             requestType,
             reason: reason || "Product issue",
@@ -5026,11 +5133,18 @@ const requestPharmacyOrderReturn = async (req, res) => {
             pickupStatus: 'PendingAssignment',
             requestedAt: new Date(),
             rejectionReason: null,
-            refundAmount: Number(eligibleSubtotal.toFixed(2))
+            refundAmount: Number(eligibleSubtotal.toFixed(2)),
+
+            // 🌟 Keys Added for Admin Days & Frontend Window Display
+            allowedReturnDays: adminWindowDays,
+            daysPassedSinceDelivery: daysPassed,
+            remainingReturnDays: remainingDays,
+            returnWindowText: `${adminWindowDays} Days Return Policy`
         };
 
         await order.save();
 
+        // 8. Notify Admins and Pharmacy Store
         try {
             await notifyAdminsAndVendor(
                 order.pharmacyId,
@@ -5041,6 +5155,7 @@ const requestPharmacyOrderReturn = async (req, res) => {
             );
         } catch (e) {}
 
+        // 9. Final Success Response with all keys
         return res.status(200).json({
             success: true,
             message: `${requestType} request submitted successfully! Chemist will review and assign a pickup partner.`,
@@ -5049,7 +5164,10 @@ const requestPharmacyOrderReturn = async (req, res) => {
 
     } catch (error) {
         console.error("requestPharmacyOrderReturn Error:", error);
-        return res.status(500).json({ success: false, message: error.message });
+        return res.status(500).json({ 
+            success: false, 
+            message: error.message 
+        });
     }
 };
 
