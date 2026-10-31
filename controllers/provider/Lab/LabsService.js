@@ -170,7 +170,7 @@ const saveLabTest = async (req, res) => {
         res.json({ success: true, data: test });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
-// endpoint: GET /provider/labs/services/tests/my-tests?mainCategory=Pathology
+// endpoint: GET /provider/labs/services/tests/my-tests?mainCategory=Pathologya
 const getMyTests = async (req, res) => {
     try {
         const { mainCategory } = req.query; // Pathology or Radiology

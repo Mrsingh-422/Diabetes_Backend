@@ -7,16 +7,53 @@ const { getLocationFilter } = require('../../../middleware/authMiddleware');
 const { sendPushNotification } = require('../../../utils/notification');
 const { deleteFile } = require('../../../utils/fileHandler'); // Import the deleteFile utility
 const ProfileUpdateRequest = require('../../../models/ProfileUpdateRequest'); // For handling profile update requests
+// Helper: Clean Windows backslashes and strip "public/"
+const formatFilePath = (filePath) => {
+    if (!filePath || typeof filePath !== 'string') return filePath;
+    let clean = filePath.replace(/\\/g, '/');
+    clean = clean.replace(/^public\//, '');
+    if (!clean.startsWith('/')) {
+        clean = '/' + clean;
+    }
+    return clean;
+};
 
 // 1. GET PROFILE (Figma: Settings / My Profile)
 // endpoint: GET /provider/labs/profile
-const getLabProfile = async (req, res) => {
+   getLabProfile = async (req, res) => {
     try {
-        const lab = await Lab.findById(req.user.id);
-        res.json({ success: true, data: lab });
-    } catch (error) { res.status(500).json({ message: error.message }); }
-};
+        const lab = await Lab.findById(req.user.id).lean();
+        if (!lab) {
+            return res.status(404).json({ success: false, message: "Lab not found." });
+        }
 
+        // Clean single image fields
+        lab.profileImage = formatFilePath(lab.profileImage);
+        lab.signatureImage = formatFilePath(lab.signatureImage);
+
+        // Clean document image arrays
+        if (lab.documents) {
+            const arrayKeys = [
+                'labImages',
+                'labCertificates',
+                'labLicenses',
+                'gstCertificates',
+                'drugLicenses',
+                'otherCertificates'
+            ];
+
+            arrayKeys.forEach((key) => {
+                if (Array.isArray(lab.documents[key])) {
+                    lab.documents[key] = lab.documents[key].map(formatFilePath);
+                }
+            });
+        }
+
+        res.json({ success: true, data: lab });
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
+};
 
 const updateLabProfile = async (req, res) => {
     try {
@@ -94,7 +131,7 @@ const updateLabProfile = async (req, res) => {
 };
  
 // 3. GET LAB SERVICES (My Tests + Packages View)
-// endpoint: GET /provider/labs/profile/services/my-all-services
+// endpoint: GET /provider/labs/profile/services/all
 const getMyAllServices = async (req, res) => {
     try {
         const LabTest = require('../../../models/LabTest');
