@@ -55,6 +55,17 @@ const calculateBill = async (vendorId, items, patientsCount, couponCode, isRapid
     return { itemTotal, couponDiscount, couponId, deliveryCharge, rapidDeliveryCharge: rapidCharge, totalAmount };
 };
 
+// Helper: Clean Windows backslashes and strip "public/"
+const formatFilePath = (filePath) => {
+    if (!filePath || typeof filePath !== 'string') return filePath;
+    let clean = filePath.replace(/\\/g, '/');
+    clean = clean.replace(/^public\//, '');
+    if (!clean.startsWith('/')) {
+        clean = '/' + clean;
+    }
+    return clean;
+};
+
 /////////////////////////////////////////////////////////////////////////////
 ////////////////////////////// LAB CART ///////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
@@ -396,8 +407,7 @@ const getMyCart = async (req, res) => {
     }
 };
 
-// ================================================================
-// ---  GET LAB CART ONLY ---
+// --- GET LAB CART ONLY (With Web-Friendly Image Paths) ---
 const getLabCart = async (req, res) => {
     try {
         const cart = await Cart.findOne({ userId: req.user.id })
@@ -417,6 +427,13 @@ const getLabCart = async (req, res) => {
         }
 
         let labTotal = cart.labCart.items.reduce((acc, i) => acc + (i.price * i.quantity), 0);
+
+        // 🌟 Format populated lab profileImage path
+        let formattedLab = null;
+        if (cart.labCart.labId) {
+            formattedLab = cart.labCart.labId.toObject ? cart.labCart.labId.toObject() : { ...cart.labCart.labId };
+            formattedLab.profileImage = formatFilePath(formattedLab.profileImage);
+        }
 
         // Injected dynamic preparationGuide & mainCategory on-the-fly
         const mappedLabItems = await Promise.all(cart.labCart.items.map(async (item) => {
@@ -454,7 +471,7 @@ const getLabCart = async (req, res) => {
         res.json({
             success: true,
             data: {
-                labId: cart.labCart.labId,
+                labId: formattedLab,
                 categoryType: cart.labCart.categoryType,
                 selectedPatients: cart.labCart.selectedPatients,
                 items: mappedLabItems,

@@ -293,21 +293,26 @@ const getLabDeliveryCharges = async (req, res) => {
 
 
 
-// GET /user/labs/standard-tests?mainCategory=Pathology&search=Sugar
+// @desc    Get Standard Catalog Tests (Prioritizes tests listed by vendors first)
+// @route   GET /user/labs/standard-tests
+// @access  Public
 const getStandardCatalogTests = async (req, res) => {
     try {
         const page = parseInt(req.query.page) || 1;
         const limit = parseInt(req.query.limit) || 20;
         const skip = (page - 1) * limit;
-        const { search, mainCategory } = req.query;
+        const { search, mainCategory, labId, vendorId } = req.query;
 
         let matchQuery = { isActive: true };
         if (mainCategory) matchQuery.mainCategory = mainCategory;
         
-        // 🚨 CHANGE 1: Minimum check changed to 1 character for instant search
+        // Instant search when query length >= 1
         if (search && search.trim().length >= 1) {
             matchQuery.testName = new RegExp(search.trim(), 'i');
         }
+
+        const targetVendorId = labId || vendorId;
+        const isValidVendorObjectId = targetVendorId && mongoose.isValidObjectId(targetVendorId);
 
         const aggregate = MasterLabTest.aggregate([
             { $match: matchQuery },
@@ -323,10 +328,36 @@ const getStandardCatalogTests = async (req, res) => {
             {
                 $addFields: {
                     vendorCount: { $size: "$vendorList" },
-                    minPrice: { $min: "$vendorList.discountPrice" },
-                    
-                    // 🚨 CHANGE 2: Dynamic Category Weight Assignment for strict sorting order
-                    // 1: Pathology, 2: Radiology, 3: Microbiology, 4: Others
+                    // Calculate lowest available price, fallback to standardMRP if no vendor listed
+                    minPrice: {
+                        $cond: {
+                            if: { $gt: [{ $size: "$vendorList" }, 0] },
+                            then: { $min: "$vendorList.discountPrice" },
+                            else: "$standardMRP"
+                        }
+                    },
+                    // 🌟 Flag 1: Checks if ANY vendor has this test in their inventory (1 = Yes, 0 = No)
+                    hasVendor: {
+                        $cond: {
+                            if: { $gt: [{ $size: "$vendorList" }, 0] },
+                            then: 1,
+                            else: 0
+                        }
+                    },
+                    // 🌟 Flag 2: Checks if a SPECIFIC vendor has added it (if labId / vendorId passed in query)
+                    isSpecificVendorTest: isValidVendorObjectId ? {
+                        $cond: {
+                            if: {
+                                $in: [
+                                    new mongoose.Types.ObjectId(targetVendorId),
+                                    "$vendorList.labId"
+                                ]
+                            },
+                            then: 1,
+                            else: 0
+                        }
+                    } : { $literal: 0 },
+
                     categoryWeight: {
                         $switch: {
                             branches: [
@@ -339,8 +370,20 @@ const getStandardCatalogTests = async (req, res) => {
                     }
                 }
             },
-            // Sort by Category Weight first, then by Popularity (vendorCount), and then alphabetically by Name
-            { $sort: { categoryWeight: 1, vendorCount: -1, testName: 1 } },
+            // 🌟 SORTING ENGINE:
+            // 1. Specific Vendor's tests first (if labId/vendorId passed in query)
+            // 2. Tests present in ANY vendor's inventory come before tests with 0 vendors
+            // 3. Most popular tests (highest vendor count)
+            // 4. Category priority & alphabetical order
+            {
+                $sort: {
+                    isSpecificVendorTest: -1,
+                    hasVendor: -1,
+                    vendorCount: -1,
+                    categoryWeight: 1,
+                    testName: 1
+                }
+            },
             {
                 $facet: {
                     metadata: [{ $count: "total" }],
@@ -352,7 +395,7 @@ const getStandardCatalogTests = async (req, res) => {
         const result = await aggregate;
         const total = result[0].metadata[0]?.total || 0;
 
-        res.json({
+        res.status(200).json({
             success: true,
             total,
             currentPage: page,
@@ -360,6 +403,7 @@ const getStandardCatalogTests = async (req, res) => {
             data: result[0].data
         });
     } catch (error) { 
+        console.error("getStandardCatalogTests Error:", error);
         res.status(500).json({ success: false, message: error.message }); 
     }
 };

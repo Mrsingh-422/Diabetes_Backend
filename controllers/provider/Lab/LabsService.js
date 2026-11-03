@@ -3,6 +3,7 @@ const LabPackage = require('../../../models/LabPackage');
 const MasterLabTest = require('../../../models/MasterLabTest');
 const MasterLabPackage = require('../../../models/MasterLabPackage');
 const MasterRequest = require('../../../models/MasterRequest');
+const mongoose = require('mongoose');   
 
 // Helper to auto-calculate Discount Price
 const calculateActualPrice = (amount, discountPercent) => {

@@ -17,6 +17,14 @@ const getLabProfile = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
+// endpoint: GET /provider/labs/profile/header
+const getLabProfileHeader = async (req, res) => {
+    try {
+        const lab = await Lab.findById(req.user.id)
+            .select('name email phone role ');
+        res.json({ success: true, data: lab });
+    } catch (error) { res.status(500).json({ message: error.message }); }
+};
 
 // @desc    Update Lab Profile (Syncs live operational toggles directly & stages document edits for Admin)
 // @route   PUT /provider/labs/profile/update
@@ -197,4 +205,4 @@ const changeLabPassword = async (req, res) => {
 
 
 
-module.exports = { getLabProfile, updateLabProfile, getMyAllServices, getLatestLabProfileRequest, changeLabPassword };
+module.exports = { getLabProfile, updateLabProfile, getMyAllServices, getLatestLabProfileRequest, changeLabPassword ,getLabProfileHeader };
