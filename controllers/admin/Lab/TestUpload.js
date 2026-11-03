@@ -706,17 +706,124 @@ const getReportTemplateDetailsAdmin = async (req, res) => {
     }
 };
 
+// @desc    Get All Master Packages for Admin with Full Details, Test Population & Vendor Metrics
+// @route   GET /admin/lab/tests/master-packages
+// @access  Private (Admin)
+const getMasterPackagesAdmin = async (req, res) => {
+    try {
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 20;
+        const skip = (page - 1) * limit;
+        const { search, category, mainCategory } = req.query;
 
+        let matchQuery = {};
+        if (search && search.trim() !== "") {
+            matchQuery.packageName = new RegExp(search.trim(), 'i');
+        }
+        if (category && category.trim() !== "") {
+            matchQuery.category = category.trim();
+        }
+        if (mainCategory && mainCategory.trim() !== "") {
+            matchQuery.mainCategory = mainCategory.trim();
+        }
+
+        const aggregate = MasterLabPackage.aggregate([
+            { $match: matchQuery },
+
+            // 1. Lookup active lab vendor offerings for live vendorCount and minPrice
+            {
+                $lookup: {
+                    from: "labpackages",
+                    localField: "_id",
+                    foreignField: "masterPackageId",
+                    as: "vendorList",
+                    pipeline: [{ $match: { isActive: true } }]
+                }
+            },
+
+            // 2. Populate complete tests information (name, code, sampleType, parameters, MRP)
+            {
+                $lookup: {
+                    from: "masterlabtests",
+                    localField: "tests",
+                    foreignField: "_id",
+                    as: "testsData",
+                    pipeline: [
+                        {
+                            $project: {
+                                testName: 1,
+                                testCode: 1,
+                                sampleType: 1,
+                                parameters: 1,
+                                standardMRP: 1,
+                                mainCategory: 1
+                            }
+                        }
+                    ]
+                }
+            },
+
+            // 3. Compute counts & metrics identical to user view
+            {
+                $addFields: {
+                    vendorCount: { $size: "$vendorList" },
+                    minPrice: {
+                        $cond: {
+                            if: { $gt: [{ $size: "$vendorList" }, 0] },
+                            then: { $min: "$vendorList.offerPrice" },
+                            else: null
+                        }
+                    },
+                    testCount: { $size: "$tests" },
+                    tests: "$testsData"
+                }
+            },
+
+            // 4. Project clean schema
+            {
+                $project: {
+                    vendorList: 0,
+                    testsData: 0,
+                    __v: 0
+                }
+            },
+            { $sort: { createdAt: -1 } },
+
+            // 5. 20 items per page pagination
+            {
+                $facet: {
+                    metadata: [{ $count: "total" }],
+                    data: [{ $skip: skip }, { $limit: limit }]
+                }
+            }
+        ]);
+
+        const result = await aggregate;
+        const total = result[0].metadata[0]?.total || 0;
+
+        res.status(200).json({
+            success: true,
+            total,
+            currentPage: page,
+            totalPages: Math.ceil(total / limit),
+            limit,
+            data: result[0].data
+        });
+    } catch (error) {
+        console.error("getMasterPackagesAdmin Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
 
 
 
 
     
-module.exports = { uploadMasterTests, getMasterList, uploadMasterPackages, getMasterPackages,deleteMasterData,
+module.exports = { uploadMasterTests, getMasterList, uploadMasterPackages, getMasterPackagesAdmin,deleteMasterData,
                     listMasterData, searchMasterData, createMasterData, editMasterData,
                     getPendingRequests, approveRequest, updateCategoryImage, updatePharmacyCategoryImage,
                     getLabCategories, getPharmacyCategories,
                     listReportTemplatesAdmin, getReportTemplateDetailsAdmin,
 
-                    uploadTemplatesCSV,createReportTemplate, editReportTemplate, deleteReportTemplate
+                    uploadTemplatesCSV,createReportTemplate, editReportTemplate, deleteReportTemplate,getMasterPackages
  };

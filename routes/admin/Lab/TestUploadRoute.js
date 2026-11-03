@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { protect, checkRoleAccess } = require('../../../middleware/authMiddleware');
 const { uploadExcel, categoryTestUploads } = require('../../../middleware/multer'); 
-const { uploadMasterTests, getMasterList, uploadMasterPackages, getMasterPackages,deleteMasterData,
+const { uploadMasterTests, getMasterList, uploadMasterPackages, getMasterPackages,getMasterPackagesAdmin,deleteMasterData,
     listMasterData, searchMasterData, createMasterData, editMasterData,
                     getPendingRequests, approveRequest, updateCategoryImage,updatePharmacyCategoryImage,
                     getLabCategories, getPharmacyCategories,
@@ -33,6 +33,7 @@ router.put('/requests/approve/:requestId', protect('admin'), checkRoleAccess(29)
 // not used
 router.get('/master-tests', protect('admin'),checkRoleAccess(29), getMasterList);
 router.get('/master-packages', protect('admin'),checkRoleAccess(29), getMasterPackages);
+router.get('/get-master-packages', protect('admin'), checkRoleAccess(29), getMasterPackagesAdmin);
 
 router.post('/update-test-category-image', categoryTestUploads, protect('admin'), checkRoleAccess(29), updateCategoryImage);
 router.post('/update-pharmacy-category-image', categoryTestUploads, protect('admin'), checkRoleAccess(29), updatePharmacyCategoryImage);
