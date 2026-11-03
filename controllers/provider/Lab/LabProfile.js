@@ -202,7 +202,45 @@ const changeLabPassword = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+// @desc    Check whether logged-in vendor is Standalone Lab or Clinic-attached Lab
+// @route   GET /provider/labs/profile/account-type
+// @access  Private (Lab / clinic-lab)
+const getLabAccountType = async (req, res) => {
+    try {
+        const lab = await Lab.findById(req.user.id)
+            .select('name email phone role isClinic clinicId profileStatus isActive')
+            .populate('clinicId', 'name clinicName address city state image phoneNumber')
+            .lean();
+
+        if (!lab) {
+            return res.status(404).json({ success: false, message: "Lab account not found." });
+        }
+
+        const isClinicLab = lab.role === 'clinic-lab' || Boolean(lab.isClinic) || Boolean(lab.clinicId);
+
+        res.status(200).json({
+            success: true,
+            data: {
+                labId: lab._id,
+                labName: lab.name,
+                role: lab.role,                         // "Lab" or "clinic-lab"
+                isClinic: Boolean(lab.isClinic),        // true or false
+                isClinicLab,                            // boolean flag for direct frontend check
+                accountType: isClinicLab ? "Clinic-Lab" : "Standalone-Lab",
+                clinicDetails: isClinicLab && lab.clinicId ? lab.clinicId : null,
+                // Dashboard tab visibility config for frontend UI
+                dashboardConfig: {
+                    showDriversTab: !isClinicLab,         // Clinic-labs use clinic ambulance/logistics
+                    showDeliveryChargesTab: !isClinicLab, // Clinic-labs inherit clinic charges
+                    isAttachedToClinic: isClinicLab
+                }
+            }
+        });
+    } catch (error) {
+        console.error("getLabAccountType Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
 
 
-
-module.exports = { getLabProfile, updateLabProfile, getMyAllServices, getLatestLabProfileRequest, changeLabPassword ,getLabProfileHeader };
+module.exports = { getLabProfile, updateLabProfile, getMyAllServices, getLatestLabProfileRequest, changeLabPassword ,getLabProfileHeader, getLabAccountType };

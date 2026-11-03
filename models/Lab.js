@@ -6,8 +6,25 @@ const labSchema = new mongoose.Schema({
     email: { type: String, unique: true, sparse: true },
     phone: { type: String, unique: true, sparse: true },
     password: { type: String, required: true, select: false },
-    role: { type: String, enum: ['Lab'], default: 'Lab', immutable: true },
-    profileStatus: { type: String, enum: ['Incomplete', 'Pending', 'Approved', 'Rejected'], default: 'Incomplete' },
+// 🏥 CLINIC ATTACHMENT FIELDS (Add near top of schema)
+clinicId: { 
+    type: mongoose.Schema.Types.ObjectId, 
+    ref: 'Clinic', 
+    default: null,
+    index: true 
+},
+isClinic: { 
+    type: Boolean, 
+    default: false,
+    index: true 
+},
+
+// Update role enum to support both Standalone & Clinic Lab
+role: { 
+    type: String, 
+    enum: ['Lab', 'clinic-lab'], 
+    default: 'Lab' 
+},    profileStatus: { type: String, enum: ['Incomplete', 'Pending', 'Approved', 'Rejected'], default: 'Incomplete' },
     token: { type: String, default: null },
     fcmToken: {
         type: String,
