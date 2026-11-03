@@ -7,7 +7,7 @@ const { registerDriver } = require('../../../controllers/provider/Lab/LabDriver'
 // Base URL: /provider/lab/driver
 
 router.post('/add', protect('lab'), driverDocUploads, registerDriver); 
-// Note: Agal alag routes ke liye protect mein 'pharmacy' ya 'Food' pass karein
+// Note: Agal alag routes ke liye protect mein 'pharmacy' ya 'nurse' pass karein
 
 
 

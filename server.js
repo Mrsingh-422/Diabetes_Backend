@@ -250,7 +250,7 @@ app.use('/api/chat', require('./routes/user/Doctor/ChatRoutes')); // Doctor-User
 // --- user others ---
 // app.use('/user/subscriptions', require('./routes/user/others/SubscriptionRoute'));
 // --- user lab ---
-// app.use('/user/labs', require('./routes/user/Lab/BookLabRoute'));
+app.use('/user/labs', require('./routes/user/Lab/BookLabRoute'));
 app.use('/user/cart', require('./routes/user/Lab/CartRoute'));
 
 // --- user pharmacy ---

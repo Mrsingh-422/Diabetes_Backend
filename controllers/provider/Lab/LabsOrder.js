@@ -1,10 +1,9 @@
 // controllers/provider/Lab/LabsOrder.js
-
 const LabBooking = require('../../../models/LabBooking');
 const Wallet = require('../../../models/Wallet');
-const MasterReportTemplate = require('../../../models/MasterReportTemplate'); // 👈 Imported Template Model
-const LabPrescriptionRequest = require('../../../models/LabPrescriptionRequest'); // Import model
-const Driver = require('../../../models/Driver');
+const MasterReportTemplate = require('../../../models/MasterReportTemplate');
+const LabPrescriptionRequest = require('../../../models/LabPrescriptionRequest'); 
+const MasterLabTest = require('../../../models/MasterLabTest'); 
 const moment = require('moment');
 const fs = require('fs');
 const path = require('path');
@@ -14,75 +13,131 @@ const { deleteFile } = require('../../../utils/fileHandler');
 const NoShowConfig = require('../../../models/NoShowConfig');
 
 
-// 1. GET DASHBOARD STATS (Updated with Priority Count)
+// @desc    Get Lab Provider Dashboard Stats (Includes in-transit & delivered sample counters)
+// @route   GET /provider/labs/dashboard
+// @access  Private (Lab)
 const getLabStats = async (req, res) => {
     try {
         const labId = req.user.id;
 
-        const [requests, priorityRequests, accepted, completed] = await Promise.all([
-            LabBooking.countDocuments({ labId, status: 'Pending' }),
-            // Count of pending bookings that have a rapid/priority delivery charge
+        const [
+            totalOrders,
+            pendingOrders,
+            inTransitSamples,
+            inLabTesting,
+            completedOrders,
+            revenueData
+        ] = await Promise.all([
+            LabBooking.countDocuments({ labId }),
+            LabBooking.countDocuments({ labId, status: { $in: ['Pending', 'Confirmed'] } }),
+            
+            // 🚨 BUG FIX: Accurately count samples currently on the way to lab
             LabBooking.countDocuments({ 
                 labId, 
-                status: 'Pending', 
-                'billSummary.rapidDeliveryCharge': { $gt: 0 } 
+                status: { $in: ['Sample Collected', 'Sample on the way to lab'] } 
             }),
-            LabBooking.countDocuments({ labId, status: 'Confirmed' }),
-            LabBooking.countDocuments({ labId, status: 'Completed' })
+
+            // 🚨 BUG FIX: Accurately count samples delivered at lab & under testing
+            LabBooking.countDocuments({ 
+                labId, 
+                status: { $in: ['Sample Delivered to Lab', 'Sample Deposited', 'Testing', 'Report Generated'] } 
+            }),
+
+            LabBooking.countDocuments({ labId, status: 'Completed' }),
+
+            LabBooking.aggregate([
+                { $match: { labId: new mongoose.Types.ObjectId(labId), status: 'Completed' } },
+                { $group: { _id: null, total: { $sum: "$totalPrice" } } }
+            ])
         ]);
-        
-        const wallet = await Wallet.findOne({ vendorId: labId });
-        res.json({ 
-            success: true, 
-            data: { 
-                requests, 
-                priorityRequests, // For UI Priority Tab Badge
-                accepted, 
-                completed, 
-                todayEarnings: wallet?.balance || 0 
-            } 
+
+        const totalRevenue = revenueData.length > 0 ? revenueData[0].total : 0;
+
+        res.status(200).json({
+            success: true,
+            data: {
+                totalOrders,
+                pendingOrders,
+                inTransitSamples,    // 👈 Samples currently on the way
+                inLabTesting,        // 👈 Samples received at lab & testing
+                completedOrders,
+                totalRevenue
+            }
         });
-    } catch (error) { 
-        res.status(500).json({ success: false, message: error.message }); 
+    } catch (error) {
+        console.error("Get Lab Stats Error:", error);
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 
-// 2. GET ORDER LIST (With Filter & Priority Logic)
-// endpoint: GET /api/provider/labs/orders
+// @desc    Get Lab Orders with Status Filters (Preserves visibility in transit & in lab)
+// @route   GET /provider/labs/orders
+// @access  Private (Lab)
 const getOrders = async (req, res) => {
     try {
-        const { status, isPriority } = req.query;
-        let query = { labId: req.user.id };
-        
-        // 1. Status Filter
-        if (status) query.status = status;
+        const labId = req.user.id;
+        const { status, tab, priority, page = 1, limit = 20 } = req.query;
 
-        // 2. Priority / Rapid Delivery Filter
-        if (isPriority === 'true') {
-            // Bookings that have rapid delivery charges applied (> 0)
-            query['billSummary.rapidDeliveryCharge'] = { $gt: 0 };
-        } else if (isPriority === 'false') {
-            // Bookings that are normal/regular delivery (charge is 0)
-            query['billSummary.rapidDeliveryCharge'] = 0;
+        const pageNum = parseInt(page) || 1;
+        const limitNum = parseInt(limit) || 20;
+        const skip = (pageNum - 1) * limitNum;
+
+        let query = { labId };
+
+        // 🚨 BUG FIX: Map both new statuses into the vendor Active / Testing tabs
+        if (tab === 'Active' || tab === 'In-Progress') {
+            query.status = { 
+                $in: [
+                    'Confirmed', 
+                    'Phlebotomist Assigned', 
+                    'Arrived', 
+                    'Sample Collected', 
+                    'Sample on the way to lab', 
+                    'Sample Delivered to Lab', 
+                    'Sample Deposited', 
+                    'Testing', 
+                    'Report Generated'
+                ] 
+            };
+        } else if (tab === 'In-Lab') {
+            // Samples that arrived at lab and are ready for analyzer
+            query.status = { $in: ['Sample Delivered to Lab', 'Sample Deposited', 'Testing', 'Report Generated'] };
+        } else if (tab === 'Completed') {
+            query.status = 'Completed';
+        } else if (tab === 'Cancelled') {
+            query.status = { $in: ['Cancelled', 'No-Show'] };
+        } else if (status && status !== 'All') {
+            query.status = status;
         }
 
-        const orders = await LabBooking.find(query)
-            .populate('userId', 'name phone address')
-            .populate('phlebotomistId', 'name phone')
-            .populate({
-                path: 'items.packages.packageId',
-                select: 'packageName tests', // Select package fields
-                populate: {
-                    path: 'tests', // Populate nested MasterLabTest array
-                    model: 'MasterLabTest',
-                    select: 'testName' // Select only testName field
-                }
-            })
-            .sort({ createdAt: -1 });
+        if (priority === 'Rapid') {
+            query['billSummary.rapidDeliveryCharge'] = { $gt: 0 };
+        }
 
-        res.json({ success: true, count: orders.length, data: orders });
-    } catch (error) { 
-        res.status(500).json({ success: false, message: error.message }); 
+        const [total, orders] = await Promise.all([
+            LabBooking.countDocuments(query),
+            LabBooking.find(query)
+                .populate('userId', 'name phone email profilePic')
+                .populate('phlebotomistId', 'name phone vehicleNumber vehicleType status location')
+                .populate('items.tests.testId', 'testName sampleType discountPrice amount')
+                .populate('items.packages.packageId', 'packageName offerPrice mrp')
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(limitNum)
+                .lean()
+        ]);
+
+        res.status(200).json({
+            success: true,
+            total,
+            count: orders.length,
+            currentPage: pageNum,
+            totalPages: Math.ceil(total / limitNum),
+            data: orders
+        });
+    } catch (error) {
+        console.error("Get Lab Orders Error:", error);
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 
@@ -113,37 +168,27 @@ const assignStaff = async (req, res) => {
         if (!phlebotomistId || !orderId) {
             return res.status(400).json({ 
                 success: false, 
-                message: "Phlebotomist ID and Order ID are required to assign staff." 
+                message: "Phlebotomist ID and Order ID are required." 
             });
         }
 
-        // 1. Explicitly cast values to ObjectId to prevent dynamic refPath mismatch in queries
         const phlebotomistObjectId = new mongoose.Types.ObjectId(phlebotomistId);
         const labObjectId = new mongoose.Types.ObjectId(labId);
         const orderObjectId = new mongoose.Types.ObjectId(orderId);
 
-        // 2. Verify karein ki driver exist karta hai, is lab ka part hai aur online hai
         const driver = await Driver.findOne({ 
             _id: phlebotomistObjectId, 
             vendorId: labObjectId,
             vendorType: 'Lab'
         });
 
-        if (!driver) {
-            return res.status(404).json({ 
-                success: false, 
-                message: "Phlebotomist not found or unauthorized for this lab." 
-            });
-        }
-
-        if (driver.status === 'Offline') {
+        if (!driver || driver.status === 'Offline') {
             return res.status(400).json({ 
                 success: false, 
-                message: "Cannot assign an offline phlebotomist." 
+                message: "Phlebotomist not found or is currently Offline." 
             });
         }
 
-        // 3. Booking update karein database me
         const booking = await LabBooking.findOneAndUpdate(
             { _id: orderObjectId, labId: labObjectId },
             { 
@@ -155,93 +200,248 @@ const assignStaff = async (req, res) => {
             { new: true }
         );
 
-        if (!booking) {
-            return res.status(404).json({ success: false, message: "Order not found" });
-        }
+        if (!booking) return res.status(404).json({ success: false, message: "Order not found" });
 
-        // 4. Update the driver status directly to 'Busy' using findByIdAndUpdate
-        const updatedDriver = await Driver.findByIdAndUpdate(
-            phlebotomistObjectId,
-            { $set: { status: 'Busy' } },
-            { new: true, runValidators: false }
+        await Driver.findByIdAndUpdate(phlebotomistObjectId, { $set: { status: 'Busy' } });
+
+        // 🚨 FCM PUSH NOTIFICATION: Alert Driver on New Task
+        await sendPushNotification(
+            phlebotomistId,
+            'driver',
+            "New Lab Sample Collection Assigned!",
+            `You have been assigned order #${booking.bookingId}. Tap to view details.`,
+            { orderId: booking._id.toString(), type: 'lab_collection_task' }
         );
-
-        console.log(`[Sync Completed]: Phlebotomist status set to ->`, updatedDriver?.status);
 
         res.json({ 
             success: true, 
             message: "Phlebotomist assigned successfully", 
-            driverStatus: updatedDriver ? updatedDriver.status : "Busy",
             data: booking 
         });
 
     } catch (error) { 
-        console.error("Assign Staff Operation Failed:", error);
         res.status(500).json({ success: false, message: error.message }); 
     }
 };
 
-// 5. UPDATE PROGRESS (Sample Collected -> Testing -> Report Generated)
+// @desc    Lab Provider updates test progress status ('Sample Delivered to Lab', 'Testing', 'Report Generated')
+// @route   PATCH /provider/labs/update-progress/:orderId
+// @access  Private (Lab)
 const updateProgressStatus = async (req, res) => {
     try {
-        const { status } = req.body; 
-        const validStatuses = ['Sample Collected', 'Testing', 'Report Generated'];
-        
-        if (!validStatuses.includes(status)) return res.status(400).json({ message: "Invalid status" });
+        const { orderId } = req.params;
+        const { status } = req.body;
+        const labId = req.user.id;
 
-        const order = await LabBooking.findOneAndUpdate(
-            { _id: req.params.orderId, labId: req.user.id },
-            { status },
-            { new: true }
-        );
-        res.json({ success: true, message: "Status updated", data: order });
-    } catch (error) { 
-        res.status(500).json({ success: false, message: error.message }); 
+        const validStatuses = [
+            'Sample on the way to lab',
+            'Sample Delivered to Lab',
+            'Sample Deposited',
+            'Testing',
+            'Report Generated',
+            'Completed'
+        ];
+
+        if (!status || !validStatuses.includes(status)) {
+            return res.status(400).json({ 
+                success: false, 
+                message: `Invalid status. Allowed values: ${validStatuses.join(', ')}` 
+            });
+        }
+
+        const isObjectId = mongoose.Types.ObjectId.isValid(orderId);
+        const query = {
+            labId,
+            ...(isObjectId ? { _id: orderId } : { bookingId: orderId })
+        };
+
+        const booking = await LabBooking.findOne(query).populate('userId', 'name phone fcmToken');
+        if (!booking) {
+            return res.status(404).json({ success: false, message: "Booking not found or unauthorized." });
+        }
+
+        booking.status = status;
+        if (status === 'Sample Delivered to Lab') {
+            booking.sampleDeliveredToLabAt = new Date();
+        }
+        await booking.save();
+
+        const labName = req.user?.name || "Diagnostic Lab";
+
+        // Patient Notification
+        if (booking.userId) {
+            try {
+                let title = `🔬 Lab Testing Update: ${booking.bookingId}`;
+                let message = `Your sample status is now: ${status}`;
+
+                if (status === 'Testing') {
+                    title = `🧪 Testing in Progress: ${booking.bookingId}`;
+                    message = `${labName} has started processing and analyzing your test samples.`;
+                } else if (status === 'Report Generated') {
+                    title = `📄 Report Ready: ${booking.bookingId}`;
+                    message = `Diagnostic findings for ${booking.bookingId} have been recorded. Final report uploading shortly.`;
+                }
+
+                await sendPushNotification(
+                    booking.userId._id,
+                    'user',
+                    title,
+                    message,
+                    {
+                        type: 'LAB_PROGRESS_UPDATE',
+                        serviceType: 'Lab',
+                        bookingId: String(booking.bookingId),
+                        status: String(status),
+                        click_action: 'FLUTTER_NOTIFICATION_CLICK'
+                    }
+                );
+            } catch (e) {
+                console.error("Lab Progress Push Error:", e.message);
+            }
+        }
+
+        res.status(200).json({ 
+            success: true, 
+            message: `Booking progress updated to '${status}'.`, 
+            data: booking 
+        });
+
+    } catch (error) {
+        console.error("Update Progress Status Error:", error);
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 
-// 6. UPLOAD REPORT & COMPLETE
+// @desc    Upload Diagnostic Report PDF for Specific Patient (Multi-Patient Safe)
+// @route   POST /provider/labs/upload-report/:orderId
+// @access  Private (Lab)
 const uploadReport = async (req, res) => {
     try {
-        if (!req.file) return res.status(400).json({ message: "PDF report required" });
+        const { orderId } = req.params;
+        const { patientId } = req.body; // Target patient identifier (e.g. 'Self' or family member ID)
+        const labId = req.user.id;
 
-        const order = await LabBooking.findOneAndUpdate(
-            { _id: req.params.orderId, labId: req.user.id },
-            { 
-                reportFile: req.file.path, 
-                status: 'Completed' 
-            },
-            { new: true }
-        );
-        res.json({ success: true, message: "Report uploaded successfully", data: order });
-    } catch (error) { 
-        res.status(500).json({ success: false, message: error.message }); 
+        if (!req.file && (!req.files || req.files.length === 0)) {
+            return res.status(400).json({ success: false, message: "Please upload a valid report PDF/image file." });
+        }
+
+        const uploadedFilePath = req.file ? req.file.path.replace(/\\/g, "/") : req.files[0].path.replace(/\\/g, "/");
+
+        const booking = await LabBooking.findOne({ _id: orderId, labId });
+        if (!booking) {
+            return res.status(404).json({ success: false, message: "Lab booking not found or unauthorized." });
+        }
+
+        const targetPatientId = patientId ? String(patientId).trim() : (booking.patients[0]?.patientId || "Self");
+
+        // 1. Update individual patient subdocument report
+        const patientIndex = booking.patients.findIndex(p => String(p.patientId) === targetPatientId);
+        let targetPatientName = "Patient";
+
+        if (patientIndex > -1) {
+            booking.patients[patientIndex].medicalReport = uploadedFilePath;
+            targetPatientName = booking.patients[patientIndex].name;
+        }
+
+        // 2. Push or Update inside patientReports array
+        if (!Array.isArray(booking.patientReports)) {
+            booking.patientReports = [];
+        }
+
+        const reportEntryIndex = booking.patientReports.findIndex(pr => String(pr.patientId) === targetPatientId);
+        if (reportEntryIndex > -1) {
+            booking.patientReports[reportEntryIndex].reportFile = uploadedFilePath;
+            booking.patientReports[reportEntryIndex].patientName = targetPatientName;
+        } else {
+            booking.patientReports.push({
+                patientId: targetPatientId,
+                patientName: targetPatientName,
+                reportFile: uploadedFilePath
+            });
+        }
+
+        // Backward compatibility fallback for single report view
+        booking.reportFile = uploadedFilePath;
+
+        // 3. Strict Check: Are all patients' reports uploaded?
+        const totalPatientsCount = booking.patients.length;
+        const reportsCount = booking.patientReports.length;
+
+        if (reportsCount >= totalPatientsCount) {
+            booking.status = 'Completed'; // All reports delivered!
+        } else {
+            booking.status = 'Report Generated'; // Partial reports uploaded, wait for remaining
+        }
+
+        await booking.save();
+
+        // 4. Notify Patient App
+        if (booking.userId) {
+            try {
+                const isAllDone = booking.status === 'Completed';
+                const notifTitle = isAllDone ? "🎉 Diagnostic Reports Ready!" : "📄 New Test Report Uploaded";
+                const notifMsg = isAllDone 
+                    ? `All test reports for Booking #${booking.bookingId} have been uploaded and finalized.`
+                    : `Report for ${targetPatientName} has been uploaded. Other reports are in progress.`;
+
+                await sendPushNotification(
+                    booking.userId,
+                    'user',
+                    notifTitle,
+                    notifMsg,
+                    { bookingId: booking._id.toString(), type: 'lab_report_uploaded' }
+                );
+            } catch (e) {}
+        }
+
+        return res.status(200).json({
+            success: true,
+            message: `Report for ${targetPatientName} uploaded successfully. (${reportsCount}/${totalPatientsCount} completed)`,
+            bookingStatus: booking.status,
+            patientReports: booking.patientReports,
+            data: booking
+        });
+
+    } catch (error) {
+        console.error("Upload Lab Report Error:", error);
+        return res.status(500).json({ success: false, message: error.message });
     }
 };
 
 
-// 7. GET REPORT TEMPLATES (Optimized: Strictly requires testNames to avoid 1000+ database dumps)
-// endpoint: GET /provider/labs/report-templates
+// 7. GET REPORT TEMPLATES (Strict Test List with Optional Gender Filter)
+// endpoint: GET /provider/labs/report-templates?testNames=CBC,LFT&gender=Female
 const getReportTemplates = async (req, res) => {
     try {
-        const { testNames } = req.query;
+        const { testNames, gender } = req.query;
         
-        // 🚨 SECURITY/PERFORMANCE GUARD: Prevent massive data dump
         if (!testNames) {
             return res.status(400).json({ 
                 success: false, 
-                message: "Query parameter 'testNames' (comma-separated list) is required to fetch detailed parameters. Database dump is blocked." 
+                message: "Query parameter 'testNames' (comma-separated list) is required." 
             });
         }
 
         const requestedList = testNames.split(',').map(name => name.trim());
+        const targetGender = gender || 'Both';
         
-        // Only fetch requested templates from database
-        const templates = await MasterReportTemplate.find({ testName: { $in: requestedList } }).lean();
+        const query = {
+            testName: { $in: requestedList },
+            $or: [
+                { gender: targetGender },
+                { gender: 'Both' }
+            ]
+        };
+
+        const templates = await MasterReportTemplate.find(query).lean();
+
+        // Specific gender takes precedence over 'Both'
+        templates.sort((a, b) => (a.gender === 'Both' ? -1 : 1));
 
         const formattedTemplates = {};
         templates.forEach(t => {
             formattedTemplates[t.testName] = {
+                genderApplied: t.gender,
                 interpretation: t.parameters?.[0]?.interpretation || "",
                 parameters: t.parameters
             };
@@ -249,7 +449,8 @@ const getReportTemplates = async (req, res) => {
 
         res.json({ 
             success: true, 
-            count: templates.length, 
+            count: Object.keys(formattedTemplates).length, 
+            genderRequested: targetGender,
             data: formattedTemplates 
         });
     } catch (error) {
@@ -258,51 +459,70 @@ const getReportTemplates = async (req, res) => {
 };
 
 
-
-
-// 8. GET REPORT TEMPLATES FOR DROPDOWN (Highly Optimized: Name & ID only with Limit 50)
-// endpoint: GET /provider/labs/report-templates/dropdown
+// 8. GET REPORT TEMPLATES FOR DROPDOWN (Gender-Aware Display with Limit 50)
+// endpoint: GET /provider/labs/report-templates/dropdown?search=...
 const getReportTemplatesDropdown = async (req, res) => {
     try {
-        const { search } = req.query; // Optional search to filter dropdown values on typing
+        const { search } = req.query;
 
         let query = {};
         if (search) {
             query.testName = { $regex: search, $options: 'i' };
         }
 
-        // 🚨 PERFORMANCE OPTIMIZATION: Only select 'testName' and limit results to 50
+        // 🚨 Select both testName & gender for accurate LIMS manual selection
         const templates = await MasterReportTemplate.find(query)
-            .select('testName')
-            .sort({ testName: 1 })
-            .limit(50); // Prevents rendering bottleneck of 1000+ rows
-        
+            .select('testName gender')
+            .sort({ testName: 1, gender: 1 })
+            .limit(50)
+            .lean();
+
+        const formattedDropdown = templates.map(t => ({
+            _id: t._id,
+            testName: t.testName,
+            gender: t.gender || 'Both',
+            displayName: t.gender && t.gender !== 'Both' 
+                ? `${t.testName} (${t.gender})` 
+                : t.testName
+        }));
+
         res.json({ 
             success: true, 
-            count: templates.length, 
-            data: templates 
+            count: formattedDropdown.length, 
+            data: formattedDropdown 
         });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
-}; 
+};
 
-// =============================================================================
-// 7. NEW: GET REPORT DATA (Frontend PDF rendering ke liye clean JSON bhejega)
-// endpoint: GET /provider/labs/get-report-data/:orderId
-// =============================================================================
+
+// 7. GET REPORT DATA (Frontend PDF rendering data engine with mainCategory / Department metadata)
+// endpoint: GET /provider/labs/get-report-data/:orderId?patientId=...
 const getReportData = async (req, res) => {
     try {
         const { orderId } = req.params;
         const { patientId } = req.query;
-
         // Fetch Booking with populated Lab profile
         const booking = await LabBooking.findById(orderId).populate('labId').lean();
         if (!booking) {
             return res.status(404).json({ success: false, message: "Booking not found." });
         }
 
-        // Mapped: Fetch draft specifically for this patient to prevent data mix-ups
+        // 1. Target Patient Resolver
+        let targetPatient = null;
+        if (patientId && booking.patients && booking.patients.length > 0) {
+            targetPatient = booking.patients.find(p => 
+                String(p.patientId) === String(patientId) || 
+                String(p._id) === String(patientId) ||
+                (String(patientId).toLowerCase() === 'self' && p.relation === 'Self')
+            );
+        }
+        if (!targetPatient && booking.patients && booking.patients.length > 0) {
+            targetPatient = booking.patients[0];
+        }
+
+        // 2. Fetch specific draft values partitioned by patientId
         let testResults = null;
         if (booking.testResults) {
             if (patientId && booking.testResults[patientId]) {
@@ -313,13 +533,36 @@ const getReportData = async (req, res) => {
             }
         }
 
-        // --- NEW CONDITIONAL ADDRESS LOGIC ---
-        let reportCollectionAddress = null;
+        // 3. Extract actual values and attach mainCategory to testResults
+        if (testResults) {
+            const draftList = Array.isArray(testResults) ? testResults : (testResults.values || []);
+            const testNamesInReport = draftList.map(t => t.testName);
 
+            const masterTests = await MasterLabTest.find({
+                testName: { $in: testNamesInReport }
+            }).select('testName mainCategory category').lean();
+
+            const catMap = {};
+            masterTests.forEach(mt => {
+                catMap[mt.testName] = {
+                    mainCategory: mt.mainCategory || 'Pathology',
+                    category: mt.category || 'General'
+                };
+            });
+
+            // Inject mainCategory into each group for PDF Rendering
+            draftList.forEach(group => {
+                group.mainCategory = catMap[group.testName]?.mainCategory || 'Pathology';
+                group.department = `Department of ${group.mainCategory}`;
+                group.category = catMap[group.testName]?.category || 'General';
+            });
+        }
+
+        // 4. Conditional Address String Builder
+        let reportCollectionAddress = null;
         if (booking.collectionType === 'Home Collection') {
             const addr = booking.address;
             if (addr) {
-                // Construct full formatted address string from the booking's address object
                 reportCollectionAddress = [
                     addr.houseNo,
                     addr.sector,
@@ -328,14 +571,13 @@ const getReportData = async (req, res) => {
                     addr.state,
                     addr.pincode ? `- ${addr.pincode}` : ''
                 ]
-                .filter(part => part && part.trim() !== '') // Remove empty fields
+                .filter(part => part && String(part).trim() !== '')
                 .join(', ')
-                .replace(', -', ' -'); // Clean up spacing before the pincode
+                .replace(', -', ' -');
             } else {
                 reportCollectionAddress = "Home Collection (Address Details Missing)";
             }
         } else {
-            // For 'Visit Lab', return null or a designated walk-in string
             reportCollectionAddress = "Walk-In (Visit Lab)";
         }
 
@@ -346,10 +588,17 @@ const getReportData = async (req, res) => {
                 appointmentId: booking._id,
                 appointmentDate: booking.appointmentDate,
                 barcode: booking.barcode || "E4708538",
-                collectionType: booking.collectionType, // Returned so the PDF engine/frontend knows the setup
-                collectionAddress: reportCollectionAddress, // Handled conditionally on backend
+                collectionType: booking.collectionType,
+                collectionAddress: reportCollectionAddress,
                 labName: booking.labId?.name || "HealthKangaroo Labs",
                 labAddress: `${booking.labId?.city || ''}, ${booking.labId?.state || ''}`,
+                currentPatient: targetPatient ? {
+                    patientId: targetPatient.patientId || targetPatient._id || "Self",
+                    name: targetPatient.name,
+                    age: targetPatient.age || 30,
+                    gender: targetPatient.gender || "Both",
+                    relation: targetPatient.relation || "Self"
+                } : null,
                 patients: booking.patients, 
                 testResults: testResults 
             }
@@ -359,111 +608,106 @@ const getReportData = async (req, res) => {
     }
 };
 
-// =============================================================================
-// 8. NEW: UPLOAD CLIENT GENERATED PDF (Safe from EXDEV cross-device link issues)
-// endpoint: POST /provider/labs/upload-client-pdf/:orderId
-// =============================================================================
+
+// @desc    Upload Compiled Client-Side Smart Report PDF (Multi-Patient Safe)
+// @route   POST /provider/labs/upload-client-pdf/:orderId
+// @access  Private (Lab)
 const uploadClientGeneratedPDF = async (req, res) => {
     try {
         const { orderId } = req.params;
-        const { patientId } = req.body; // Target Patient ID
+        const { patientId } = req.body;
+        const labId = req.user.id;
 
         if (!req.file) {
-            return res.status(400).json({ success: false, message: "Please upload the compiled PDF file." });
+            return res.status(400).json({ success: false, message: "PDF reportFile is required." });
         }
 
-        const booking = await LabBooking.findById(orderId);
+        const cleanPdfPath = req.file.path.replace(/\\/g, "/");
+
+        const booking = await LabBooking.findOne({ _id: orderId, labId });
         if (!booking) {
-            return res.status(404).json({ success: false, message: "Booking not found." });
+            return res.status(404).json({ success: false, message: "Booking not found or unauthorized access." });
         }
 
-        // Safe Patient Resolver [1]
-        let patient = null;
-        if (patientId && patientId !== "undefined" && patientId !== "null") {
-            patient = booking.patients.find(p => 
-                String(p.patientId) === String(patientId) || 
-                String(p._id) === String(patientId) ||
-                (String(patientId).toLowerCase() === 'self' && p.relation === 'Self')
-            );
+        const targetPatientId = patientId ? String(patientId).trim() : (booking.patients[0]?.patientId || "Self");
+
+        const patientIndex = booking.patients.findIndex(p => String(p.patientId) === targetPatientId);
+        let targetPatientName = "Patient";
+
+        if (patientIndex > -1) {
+            booking.patients[patientIndex].medicalReport = cleanPdfPath;
+            targetPatientName = booking.patients[patientIndex].name;
         }
 
-        if (!patient && booking.patients && booking.patients.length > 0) {
-            patient = booking.patients[0];
+        if (!Array.isArray(booking.patientReports)) {
+            booking.patientReports = [];
         }
 
-        if (!patient) {
-            patient = { name: "Patient", age: 30, gender: "Female" };
+        const reportEntryIndex = booking.patientReports.findIndex(pr => String(pr.patientId) === targetPatientId);
+        if (reportEntryIndex > -1) {
+            booking.patientReports[reportEntryIndex].reportFile = cleanPdfPath;
+            booking.patientReports[reportEntryIndex].patientName = targetPatientName;
+        } else {
+            booking.patientReports.push({
+                patientId: targetPatientId,
+                patientName: targetPatientName,
+                reportFile: cleanPdfPath
+            });
         }
 
-        // Unique PDF file save path
-        const reportFileName = `report-${booking.bookingId}-${patient.name.replace(/\s+/g, '_')}.pdf`;
-        const destPath = path.join(process.cwd(), 'public', 'uploads', 'user_reports', reportFileName);
+        booking.reportFile = cleanPdfPath;
 
-        // 🚨 CRITICAL PROD FIX: Safe file rename handler protecting from EXDEV cross-device link errors [cite: custom_context]
-        try {
-            fs.renameSync(req.file.path, destPath);
-        } catch (renameErr) {
-            if (renameErr.code === 'EXDEV') {
-                // Fallback copy-and-delete for containerized mounts/Docker/VPS
-                fs.copyFileSync(req.file.path, destPath);
-                fs.unlinkSync(req.file.path);
-            } else {
-                throw renameErr;
-            }
+        const totalPatientsCount = booking.patients.length;
+        const reportsCount = booking.patientReports.length;
+
+        if (reportsCount >= totalPatientsCount) {
+            booking.status = 'Completed';
+        } else {
+            booking.status = 'Report Generated';
         }
 
-        // Sync polymorphic multi-patient database fields [1]
-        if (!booking.patientReports) booking.patientReports = [];
-        booking.patientReports = booking.patientReports.filter(r => String(r.patientId) !== String(patient.patientId || patient._id || "Self"));
-
-        const finalReportFile = `/uploads/user_reports/${reportFileName}`;
-
-        booking.patientReports.push({
-            patientId: patient.patientId || patient._id || "Self",
-            patientName: patient.name,
-            reportFile: finalReportFile
-        });
-
-        // Overall state management check
-        const allCompleted = booking.patients.every(p => {
-            const targetId = p.patientId || p._id || "Self";
-            return booking.patientReports.some(r => String(r.patientId) === String(targetId));
-        });
-
-        booking.status = allCompleted ? 'Completed' : 'Testing';
-        booking.reportFile = finalReportFile; // Fallback reference
-        
-        booking.markModified('patientReports');
         await booking.save();
 
-        res.json({
+        if (booking.userId) {
+            try {
+                await sendPushNotification(
+                    booking.userId,
+                    'user',
+                    "📄 Smart Report Compiled!",
+                    `Diagnostic Smart Report for ${targetPatientName} has been compiled and is ready to view.`,
+                    { bookingId: booking._id.toString(), type: 'lab_report_uploaded' }
+                );
+            } catch (e) {}
+        }
+
+        return res.status(200).json({
             success: true,
-            message: "Client PDF report successfully saved on server!",
-            reportUrl: finalReportFile,
-            data: booking
+            message: `Smart Report for ${targetPatientName} compiled successfully!`,
+            reportUrl: cleanPdfPath,
+            bookingStatus: booking.status,
+            patientReports: booking.patientReports
         });
 
     } catch (error) {
-        console.error("uploadClientGeneratedPDF Error:", error);
-        res.status(500).json({ success: false, message: error.message });
+        console.error("Upload Client PDF Error:", error);
+        return res.status(500).json({ success: false, message: error.message });
     }
 };
 
 
-// 10. NEW: AUTO-RESOLVE TEMPLATES FOR SPECIFIC BOOKING (Smart Handshake)
-// endpoint: GET /provider/labs/report-templates/booking/:orderId
+// 10. AUTO-RESOLVE TEMPLATES FOR SPECIFIC BOOKING (With Gender & Category/Department Binding)
+// endpoint: GET /provider/labs/report-templates/booking/:orderId?patientId=...
 const getReportTemplatesForBooking = async (req, res) => {
     try {
         const { orderId } = req.params;
-        
-        // 🚨 DEEP POPULATION: Resolves packages and their nested clinical tests dynamically! [1]
+        const { patientId } = req.query; // Partitioned by active patient
         const booking = await LabBooking.findById(orderId)
             .populate({
                 path: 'items.packages.packageId',
                 populate: {
                     path: 'tests',
                     model: 'MasterLabTest',
-                    select: 'testName'
+                    select: 'testName mainCategory category'
                 }
             });
 
@@ -471,41 +715,102 @@ const getReportTemplatesForBooking = async (req, res) => {
             return res.status(404).json({ success: false, message: "Booking not found." });
         }
 
-        // A. Extract standalone test names
-        const testNames = booking.items.tests.map(t => t.name);
-        
-        // B. 🚨 PACKAGE EXTRACTOR: Loop through packages and extract nested testName strings [1]
+        // 1. Detect patient's gender from booking.patients array
+        let detectedGender = 'Both';
+        if (booking.patients && booking.patients.length > 0) {
+            let patient = null;
+            if (patientId) {
+                patient = booking.patients.find(p => 
+                    String(p.patientId) === String(patientId) || 
+                    String(p._id) === String(patientId) ||
+                    (String(patientId).toLowerCase() === 'self' && p.relation === 'Self')
+                );
+            }
+            if (!patient) {
+                patient = booking.patients[0];
+            }
+
+            if (patient && patient.gender) {
+                const g = String(patient.gender).trim().toLowerCase();
+                if (g === 'male' || g === 'm') detectedGender = 'Male';
+                else if (g === 'female' || g === 'f') detectedGender = 'Female';
+            }
+        }
+
+        // 2. Extract standalone tests and package-included tests
+        const testNames = (booking.items?.tests || []).map(t => t.name);
         const packageTestNames = [];
         if (booking.items?.packages) {
             booking.items.packages.forEach(p => {
                 if (p.packageId && p.packageId.tests) {
                     p.packageId.tests.forEach(nt => {
-                        packageTestNames.push(nt.testName); // 👈 Nested test name [1]
+                        packageTestNames.push(nt.testName);
                     });
                 }
             });
         }
 
-        // Combine standalone and package-based tests into a single query array
         const allBookedNames = [...testNames, ...packageTestNames];
 
-        // Fuzzy regex matching
+        // Fuzzy regex matching fallback
         const regexQueries = allBookedNames.map(name => {
             const cleanName = name.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&').trim();
             const words = cleanName.split(/\s+/).filter(w => w.length > 2);
             return new RegExp(words.join('.*'), 'i');
         });
 
-        const templates = await MasterReportTemplate.find({
+        // 3. Fetch MasterLabTest details to get mainCategory & subcategory mapping
+        const masterTests = await MasterLabTest.find({
             $or: [
                 { testName: { $in: allBookedNames } },
                 { testName: { $in: regexQueries } }
             ]
+        }).select('testName mainCategory category sampleType').lean();
+
+        const masterCategoryMap = {};
+        masterTests.forEach(mt => {
+            masterCategoryMap[mt.testName] = {
+                mainCategory: mt.mainCategory || 'Pathology',
+                category: mt.category || 'General',
+                sampleType: mt.sampleType || 'Blood'
+            };
+        });
+
+        // 4. Query Master Report Templates matching test names & preferred gender
+        const templates = await MasterReportTemplate.find({
+            $and: [
+                {
+                    $or: [
+                        { testName: { $in: allBookedNames } },
+                        { testName: { $in: regexQueries } }
+                    ]
+                },
+                {
+                    $or: [
+                        { gender: detectedGender },
+                        { gender: 'Both' }
+                    ]
+                }
+            ]
         }).lean();
 
+        // Specific gender takes precedence over 'Both'
+        templates.sort((a, b) => (a.gender === 'Both' ? -1 : 1));
+
         const formattedTemplates = {};
+
         templates.forEach(t => {
+            const meta = masterCategoryMap[t.testName] || {
+                mainCategory: 'Pathology',
+                category: 'General',
+                sampleType: 'Blood'
+            };
+
             formattedTemplates[t.testName] = {
+                mainCategory: meta.mainCategory, // 👈 'Biochemistry', 'Pathology', 'Radiology', etc.
+                category: meta.category,         // 👈 Subcategory e.g., 'Electrolytes', 'Lipids'
+                sampleType: meta.sampleType,     // 👈 Sample type e.g., 'Blood', 'Urine'
+                genderApplied: t.gender,
                 interpretation: t.parameters?.[0]?.interpretation || "",
                 parameters: t.parameters
             };
@@ -513,63 +818,81 @@ const getReportTemplatesForBooking = async (req, res) => {
 
         res.json({ 
             success: true, 
-            count: templates.length, 
+            count: Object.keys(formattedTemplates).length, 
+            detectedPatientGender: detectedGender,
             data: formattedTemplates 
         });
     } catch (error) {
+        console.error("getReportTemplatesForBooking Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
 
-// ==========================================
-// 4. SAVE DRAFT RESULTS (Partitioned by Patient ID)
-// Replacing saveDraftResults inside controllers/provider/Lab/LabsOrder.js
-// ==========================================
+// @desc    Lab Technician saves observed test values draft in LIMS console
+// @route   POST /provider/labs/save-draft/:orderId
+// @access  Private (Lab)
 const saveDraftResults = async (req, res) => {
     try {
         const { orderId } = req.params;
-        const { testValues, patientId } = req.body; // 👈 Partitioned by patientId
+        const { testValues, patientId } = req.body;
+        const labId = req.user.id;
 
-        if (!testValues || !patientId) {
-            return res.status(400).json({ success: false, message: "Both 'testValues' and 'patientId' are required." });
+        const isObjectId = mongoose.Types.ObjectId.isValid(orderId);
+        const query = {
+            labId,
+            ...(isObjectId ? { _id: orderId } : { bookingId: orderId })
+        };
+
+        const booking = await LabBooking.findOne(query);
+        if (!booking) {
+            return res.status(404).json({ success: false, message: "Booking record not found or unauthorized." });
         }
 
-        const booking = await LabBooking.findById(orderId);
-        if (!booking) return res.status(404).json({ success: false, message: "Booking not found." });
+        // 🚨 BUG FIX: Allow drafting as soon as sample is delivered to lab or in testing
+        const allowedDraftStatuses = [
+            'Sample Delivered to Lab',
+            'Sample Deposited',
+            'Testing',
+            'Report Generated'
+        ];
 
-        // Initialize object if null/empty
-        if (!booking.testResults || typeof booking.testResults !== 'object') {
+        // If sample has reached lab, auto-transition to 'Testing' on first draft input
+        if (booking.status === 'Sample Delivered to Lab' || booking.status === 'Sample Deposited') {
+            booking.status = 'Testing';
+        } else if (!allowedDraftStatuses.includes(booking.status)) {
+            return res.status(400).json({ 
+                success: false, 
+                message: `Cannot enter test results. Sample must be delivered to lab first (Current Status: '${booking.status}').` 
+            });
+        }
+
+        if (!booking.testResults) {
             booking.testResults = {};
         }
 
-        // Save progress specifically under this patient's key [1]
-        booking.testResults[patientId] = testValues;
-
-        // Force Mongoose to save mixed type changes
+        const targetPatientKey = patientId || "default";
+        booking.testResults[targetPatientKey] = testValues;
         booking.markModified('testResults');
-        booking.status = 'Testing';
-
         await booking.save();
 
-        res.json({ 
-            success: true, 
-            message: "Draft saved for this patient successfully.", 
-            data: booking.testResults[patientId] 
+        res.status(200).json({
+            success: true,
+            message: "Test results draft saved successfully in LIMS. Status updated to Testing.",
+            status: booking.status,
+            data: booking.testResults[targetPatientKey]
         });
     } catch (error) {
-        console.error("saveDraftResults Error:", error.message);
+        console.error("Save Draft Results Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
 
-// ==========================================
 // 5. FETCH SAVED DRAFT RESULTS (Partitioned by Patient ID)
-// Replacing getDraftResults inside controllers/provider/Lab/LabsOrder.js
-// ==========================================
+// endpoint: GET /provider/labs/get-draft/:orderId?patientId=...
 const getDraftResults = async (req, res) => {
     try {
         const { orderId } = req.params;
-        const { patientId } = req.query; // 👈 Fetch specifically for this patient
+        const { patientId } = req.query;
 
         if (!patientId) {
             return res.status(400).json({ success: false, message: "Query parameter 'patientId' is required." });
@@ -580,12 +903,25 @@ const getDraftResults = async (req, res) => {
             return res.status(404).json({ success: false, message: "Booking not found." });
         }
 
-        // Extract draft specifically for this patient
-        const draft = booking.testResults ? booking.testResults[patientId] : null;
+        const rawDraft = booking.testResults ? booking.testResults[patientId] : null;
+
+        // Backward compatibility: If draft is an array (old schema) or object (new schema)
+        let draftValues = null;
+        let genderApplied = 'Both';
+
+        if (rawDraft) {
+            if (Array.isArray(rawDraft)) {
+                draftValues = rawDraft;
+            } else if (rawDraft.values) {
+                draftValues = rawDraft.values;
+                genderApplied = rawDraft.genderApplied || 'Both';
+            }
+        }
 
         res.json({ 
             success: true, 
-            data: draft || null 
+            genderApplied,
+            data: draftValues || null 
         });
     } catch (error) {
         console.error("getDraftResults Error:", error.message);
@@ -758,139 +1094,219 @@ const startLabPrescriptionReview = async (req, res) => {
     }
 };
 
-// 4. SUBMIT LAB REVIEW & BILL (Generate Suggested Invoice)
+// @desc    Lab generates verified bill for prescription (Supports both custom requestId and MongoDB _id)
+// @route   POST /provider/labs/prescription-request/review/:requestId
+// @access  Private (Lab Provider)
 const submitLabReviewBill = async (req, res) => {
     try {
         const { requestId } = req.params;
-        // 🚨 STRICT SYNC: Capturing tests and packages carrying precautions separately [cite: custom_context]
-        const { tests, packages, homeVisitCharge } = req.body; 
         const labId = req.user.id;
+        const { items, deliveryCharge } = req.body;
 
-        const isObjectId = mongoose.Types.ObjectId.isValid(requestId);
-        const query = { labId };
-        if (isObjectId) query._id = requestId;
-        else query.requestId = requestId;
+        if (!requestId || String(requestId).trim() === "") {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Prescription requestId parameter is required in URL." 
+            });
+        }
 
-        const request = await LabPrescriptionRequest.findOne(query);
+        const cleanRequestId = String(requestId).trim();
+        const isObjectId = mongoose.isValidObjectId(cleanRequestId);
+
+        // 🚨 DUAL LOOKUP FIX: Searches by both MongoDB _id and custom requestId string
+        const requestQuery = {
+            labId,
+            $or: [
+                ...(isObjectId ? [{ _id: new mongoose.Types.ObjectId(cleanRequestId) }] : []),
+                { requestId: cleanRequestId }
+            ]
+        };
+
+        const request = await LabPrescriptionRequest.findOne(requestQuery);
         if (!request) {
-            return res.status(404).json({ success: false, message: "Request details not found" });
+            return res.status(404).json({
+                success: false,
+                message: `Prescription request '${cleanRequestId}' not found or you are not authorized to bill it.`
+            });
+        }
+
+        // Status Guard
+        if (request.status === 'Paid') {
+            return res.status(400).json({
+                success: false,
+                message: "Cannot generate bill. This lab prescription request has already been paid."
+            });
+        }
+
+        if (['Rejected', 'Cancelled', 'Expired'].includes(request.status)) {
+            return res.status(400).json({
+                success: false,
+                message: `Cannot generate bill. Current status is already '${request.status}'.`
+            });
+        }
+
+        // Multi-key fallback for frontend payload
+        const rawItems = items || req.body.tests || req.body.requestedTests;
+        let parsedItems = [];
+        if (typeof rawItems === 'string') {
+            try { parsedItems = JSON.parse(rawItems); } catch(e) { parsedItems = []; }
+        } else if (Array.isArray(rawItems)) {
+            parsedItems = rawItems;
+        }
+
+        if (!parsedItems || parsedItems.length === 0) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Please provide valid test items in 'items' array with at least one test." 
+            });
         }
 
         let itemTotal = 0;
-        const verifiedTests = [];
-        const verifiedPackages = [];
+        const verifiedItems = [];
 
-        // Map tests array safely with precautions [cite: custom_context]
-        if (tests && tests.length > 0) {
-            for (let t of tests) {
-                const subtotal = Number(t.pricePerUnit || 0);
-                itemTotal += subtotal;
-                verifiedTests.push({
-                    testId: t.testId && mongoose.isValidObjectId(t.testId) ? t.testId : null,
-                    name: t.name,
-                    mrp: Number(t.mrp || 0),
-                    pricePerUnit: subtotal,
-                    precaution: t.precaution || "" // 👈 Dynamic precaution saved [cite: custom_context]
-                });
-            }
+        for (const item of parsedItems) {
+            const qty = Number(item.quantity || 1);
+            const price = Number(item.pricePerUnit || item.price || 0);
+            const subtotal = price * qty;
+            itemTotal += subtotal;
+
+            verifiedItems.push({
+                name: item.name || "Diagnostic Test",
+                mrp: Number(item.mrp || price),
+                pricePerUnit: price,
+                quantity: qty,
+                totalPrice: subtotal
+            });
         }
 
-        // Map packages array safely with precautions [cite: custom_context]
-        if (packages && packages.length > 0) {
-            for (let p of packages) {
-                const subtotal = Number(p.pricePerUnit || 0);
-                itemTotal += subtotal;
-                verifiedPackages.push({
-                    packageId: p.packageId && mongoose.isValidObjectId(p.packageId) ? p.packageId : null,
-                    name: p.name,
-                    mrp: Number(p.mrp || 0),
-                    pricePerUnit: subtotal,
-                    precaution: p.precaution || "" // 👈 Dynamic precaution saved [cite: custom_context]
-                });
-            }
-        }
+        const totalAmount = itemTotal + Number(deliveryCharge || 0);
 
-        const patientCount = request.patients.length || 1;
-        const subtotalSum = itemTotal * patientCount;
-        const totalAmount = subtotalSum + Number(homeVisitCharge || 0);
-
-        // Saved matching your updated database schema keys
         request.verifiedBill = {
-            tests: verifiedTests,
-            packages: verifiedPackages,
-            itemTotal: subtotalSum,
-            homeVisitCharge: Number(homeVisitCharge || 0),
+            items: verifiedItems,
+            itemTotal,
+            deliveryCharge: Number(deliveryCharge || 0),
             totalAmount: Math.round(totalAmount)
         };
         request.status = 'Bill Generated';
         await request.save();
 
-        // Trigger Notification
-        await sendPushNotification(
-            request.userId,
-            "Lab Bill Generated!",
-            `Your prescription review is complete. View suggested tests & make payment of ₹${request.verifiedBill.totalAmount}.`,
-            { requestId: request._id.toString(), type: 'lab_bill_generated' }
-        );
+        const labName = req.user?.name || "Diagnostic Lab";
+        const testNames = verifiedItems.map(i => i.name).slice(0, 3).join(', ');
+        const testsSummary = verifiedItems.length > 3 ? `${testNames} +${verifiedItems.length - 3} more` : testNames;
 
-        res.json({
+        // 🔔 Patient Notification
+        if (request.userId) {
+            try {
+                await sendPushNotification(
+                    request.userId,
+                    'user',
+                    `🧾 Lab Quotation Ready: ₹${Math.round(totalAmount)} (${labName})`,
+                    `${labName} has generated your lab tests bill #${request.requestId} for [${testsSummary}]. Total bill is ₹${Math.round(totalAmount)}. Tap to review & pay.`,
+                    { 
+                        type: 'PRESCRIPTION_BILL_GENERATED',
+                        serviceType: 'Lab',
+                        requestId: String(request.requestId), 
+                        id: String(request._id), 
+                        totalAmount: String(Math.round(totalAmount)),
+                        vendorName: String(labName),
+                        itemCount: String(verifiedItems.length),
+                        itemsSummary: String(testsSummary),
+                        paymentRoute: '/lab/prescription-bill',
+                        click_action: 'FLUTTER_NOTIFICATION_CLICK'
+                    }
+                );
+            } catch (notifErr) {
+                console.error("Lab Bill Notification Error:", notifErr.message);
+            }
+        }
+
+        res.status(200).json({
             success: true,
-            message: "Suggested bill generated successfully!",
+            message: "Lab bill generated successfully and notification dispatched to patient.",
             data: request
         });
+
     } catch (error) {
+        console.error("submitLabReviewBill Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
 
-// 5. REJECT LAB PRESCRIPTION REQUEST (With Push Alert)
+// @desc    Reject Lab Prescription Request by Vendor (Instantly frees the locked time slot and alerts patient)
+// @route   POST /provider/labs/prescription-request/reject/:requestId
+// @access  Private (Lab Provider)
 const rejectLabPrescriptionRequest = async (req, res) => {
     try {
         const { requestId } = req.params;
         const { reason } = req.body;
         const labId = req.user.id;
 
-        const isObjectId = mongoose.Types.ObjectId.isValid(requestId);
-        const query = { labId };
-        if (isObjectId) query._id = requestId;
-        else query.requestId = requestId;
+        if (!requestId) {
+            return res.status(400).json({ success: false, message: "requestId parameter is required." });
+        }
+
+        // Support lookup by custom requestId (e.g. HK-LREQ-XXXX) or MongoDB ObjectId
+        const isObjectId = mongoose.isValidObjectId(requestId);
+        const query = {
+            labId,
+            ...(isObjectId ? { $or: [{ _id: requestId }, { requestId: String(requestId).trim() }] } : { requestId: String(requestId).trim() })
+        };
 
         const request = await LabPrescriptionRequest.findOne(query);
         if (!request) {
-            return res.status(404).json({ success: false, message: "Request not found" });
+            return res.status(404).json({ success: false, message: "Prescription inquiry record not found or unauthorized access." });
         }
 
+        if (request.status === 'Paid') {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Cannot reject. This prescription has already been paid and converted into a confirmed lab booking." 
+            });
+        }
+
+        if (request.status === 'Rejected') {
+            return res.status(400).json({ 
+                success: false, 
+                message: "This prescription request has already been marked as Rejected." 
+            });
+        }
+
+        // 🚨 CRITICAL STATE TRANSITION: Marking status as 'Rejected' automatically frees the time slot in getLabSlots engine
         request.status = 'Rejected';
-        request.rejectReason = reason || "Invalid Prescription criteria";
+        request.rejectReason = reason ? String(reason).trim() : "Prescription verification check failed / Reagents out of stock.";
         await request.save();
 
-        // 🚨 TRIGGER PUSH NOTIFICATION: Patient ko rejection ki suchna dein
-        await sendPushNotification(
-            request.userId,
-            "Prescription Request Rejected",
-            `Your prescription upload was rejected. Reason: ${request.rejectReason}`,
-            { requestId: request._id.toString(), type: 'lab_prescription_rejected' }
-        );
+        // Send Real-time Push Notification to Patient
+        if (request.userId) {
+            try {
+                await sendPushNotification(
+                    request.userId,
+                    'user',
+                    "❌ Lab Prescription Request Rejected",
+                    `Your prescription inquiry #${request.requestId} was rejected by the lab. Reason: "${request.rejectReason}". Please select another lab.`,
+                    { requestId: request.requestId, type: 'lab_prescription_rejected' }
+                );
+            } catch (notifErr) {
+                console.error("Patient Notification Error:", notifErr.message);
+            }
+        }
 
-        res.json({
+        res.status(200).json({
             success: true,
-            message: "Request rejected successfully",
+            message: "Prescription request has been rejected successfully. The booked time slot is now released and free for other users.",
+            requestId: request.requestId,
             rejectReason: request.rejectReason,
             data: request
         });
+
     } catch (error) {
+        console.error("Reject Lab Prescription Request Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
 
- // =======================================================
-
 // 1. GET ALL ELIGIBLE PHLEBOTOMISTS FOR DROPDOWN / LIST
-
-// =======================================================
-
 // Endpoint: GET /provider/labs/available-phlebotomists
-
 const getAvailablePhlebotomists = async (req, res) => {
 
     try {
@@ -926,16 +1342,9 @@ const getAvailablePhlebotomists = async (req, res) => {
     }
 
 };
- 
- 
-// =======================================================
 
 // 3. RE-ASSIGN PHLEBOTOMIST (Change Existing Driver)
-
-// =======================================================
-
 // Endpoint: PATCH /provider/labs/reassign-staff/:orderId
-
 const reassignDriverStaff = async (req, res) => {
 
     try {
@@ -1092,211 +1501,80 @@ const reassignDriverStaff = async (req, res) => {
 
 };
 
-// =======================================================
-
 // GET LIVE TRACKING DETAILS FOR MODAL POPUP
-
-// =======================================================
-
 // Endpoint: GET /provider/labs/booking-tracking/:orderId
 
+// @desc    Get Lab Booking Tracking Details for Provider Modal (9 Steps Lifecycle)
+// @route   GET /provider/labs/booking-tracking/:orderId
+// @access  Private (Lab)
 const getBookingTrackingDetails = async (req, res) => {
-
     try {
-
         const { orderId } = req.params;
-
         const labId = req.user.id;
- 
-        // Fetch booking and populate user and driver details
 
-        const booking = await LabBooking.findOne({ _id: orderId, labId })
-
-            .populate('userId', 'name phone email profilePic')
-
-            .populate('phlebotomistId', 'name phone profilePic status');
- 
-        if (!booking) {
-
-            return res.status(404).json({ 
-
-                success: false, 
-
-                message: "Lab booking not found." 
-
-            });
-
-        }
- 
-        // Address string compile karein (Figma ui representation ke liye)
-
-        const addr = booking.address;
-
-        const formattedAddress = addr 
-
-            ? `${addr.houseNo ? addr.houseNo + ', ' : ''}${addr.sector ? addr.sector + ', ' : ''}${addr.landmark ? addr.landmark + ', ' : ''}${addr.city || ''}, ${addr.state || ''} - ${addr.pincode || ''}`
-
-            : "Address Details Not Found";
- 
-        // Patient details determine karein
-
-        // Pehle patients array se main primary details nikalein
-
-        const primaryPatientName = booking.patients?.[0]?.name || booking.userId?.name || "Patient";
-
-        const primaryPatientPhone = booking.address?.phone || booking.userId?.phone || "N/A";
- 
-        // Live Tracking Stubs (ETA/Distance dynamic placeholders)
-
-        // Note: Real routing algorithms na hone par standard fallback values render karein
-
-        const liveTrackingStats = {
-
-            distance: booking.startedAt && !booking.arrivedAt ? "3.2 km" : "0.0 km",
-
-            eta: booking.startedAt && !booking.arrivedAt ? "25 mins" : "0 mins"
-
+        const isObjectId = mongoose.isValidObjectId(orderId);
+        const query = {
+            labId,
+            ...(isObjectId ? { _id: orderId } : { bookingId: orderId })
         };
- 
-        // Timeline Builder Array
 
-        const timeline = [
+        const booking = await LabBooking.findOne(query)
+            .populate('userId', 'name phone email profilePic')
+            .populate('phlebotomistId', 'name phone vehicleNumber status location profilePic')
+            .lean();
 
-            {
+        if (!booking) {
+            return res.status(404).json({ success: false, message: "Booking not found." });
+        }
 
-                step: "Booking Assigned",
+        const statusHierarchy = {
+            'Confirmed': 1,
+            'Phlebotomist Assigned': 2,
+            'Arrived': 3,
+            'Sample Collected': 4,
+            'Sample on the way to lab': 5,
+            'Sample In-Transit': 5,
+            'Sample Delivered to Lab': 6,
+            'Sample Deposited': 6,
+            'Testing': 7,
+            'Report Generated': 8,
+            'Completed': 9
+        };
 
-                completed: !!booking.phlebotomistId,
+        const currentStep = statusHierarchy[booking.status] || 1;
 
-                timestamp: booking.phlebotomistId ? booking.updatedAt : null,
-
-                description: "Staff allocation recorded."
-
-            },
-
-            {
-
-                step: "On the Way",
-
-                completed: !!booking.startedAt,
-
-                timestamp: booking.startedAt,
-
-                description: "Phlebotomist is in-transit to patient location."
-
-            },
-
-            {
-
-                step: "Arrived at Location",
-
-                completed: !!booking.arrivedAt,
-
-                timestamp: booking.arrivedAt,
-
-                description: "Field phlebotomist arrived at destination."
-
-            },
-
-            {
-
-                step: "Sample Collected",
-
-                completed: !!booking.collectedAt,
-
-                timestamp: booking.collectedAt,
-
-                description: "Diagnostics samples collected successfully."
-
-            },
-
-            {
-
-                step: "Sample Deposited",
-
-                completed: !!booking.depositedAt,
-
-                timestamp: booking.depositedAt,
-
-                description: "Samples deposited at processing lab hub."
-
-            }
-
-        ];
- 
-        // Output Structure matches the popup exactly
+        const steps = [
+            { title: "Order Confirmed", step: 1, key: "Confirmed" },
+            { title: "Phlebotomist Assigned", step: 2, key: "Phlebotomist Assigned" },
+            { title: "Arrived at Location", step: 3, key: "Arrived" },
+            { title: "Sample Collected", step: 4, key: "Sample Collected" },
+            { title: "Sample on the way to lab", step: 5, key: "Sample on the way to lab" },
+            { title: "Sample Delivered to Lab", step: 6, key: "Sample Delivered to Lab" },
+            { title: "Testing in Progress", step: 7, key: "Testing" },
+            { title: "Report Generated", step: 8, key: "Report Generated" },
+            { title: "Completed", step: 9, key: "Completed" }
+        ].map(s => ({
+            ...s,
+            isCompleted: currentStep >= s.step,
+            isCurrent: currentStep === s.step
+        }));
 
         res.status(200).json({
-
             success: true,
-
             data: {
-
-                orderId: booking.bookingId,
-
-                status: booking.status,
-
-                bookingType: booking.bookingType,
-
-                collectionType: booking.collectionType,
-
-                amount: booking.billSummary?.totalAmount || 0,
-
-                // Dispatched Field Food equivalent
-
-                phlebotomist: booking.phlebotomistId ? {
-
-                    id: booking.phlebotomistId._id,
-
-                    name: booking.phlebotomistId.name,
-
-                    phone: booking.phlebotomistId.phone,
-
-                    profilePic: booking.phlebotomistId.profilePic || null,
-
-                    status: booking.phlebotomistId.status || "Busy"
-
-                } : null,
- 
-                // Live Tracking Distance & Duration Card
-
-                liveTracking: liveTrackingStats,
- 
-                // Patient Details Section
-
-                patientDetails: {
-
-                    name: primaryPatientName,
-
-                    phone: primaryPatientPhone,
-
-                    address: formattedAddress,
-
-                    patientsCount: booking.patients?.length || 1
-
-                },
- 
-                // Service Timeline Tracker Card
-
-                timeline: timeline
-
+                ...booking,
+                currentStep,
+                totalSteps: 9,
+                lifecycleProgress: steps
             }
-
         });
- 
     } catch (error) {
-
-        console.error("Error in getBookingTrackingDetails:", error.message);
-
+        console.error("Get Booking Tracking Error:", error);
         res.status(500).json({ success: false, message: error.message });
-
     }
-
 };
 
-// =======================================================
 // GET SINGLE PHLEBOTOMIST DETAIL WITH ACTIVE PATIENT INFO
-// =======================================================
 // Endpoint: GET /provider/labs/phlebotomist-detail/:phlebotomistId
 const getPhlebotomistActiveDetail = async (req, res) => {
     try {
@@ -1439,10 +1717,10 @@ module.exports = {
     getReportData,            
     uploadClientGeneratedPDF,  
     getReportTemplates,
-    getReportTemplatesDropdown, // 👈 Added
-    getReportTemplatesForBooking, // 👈 Added
-    saveDraftResults, // 👈 Added
-    getDraftResults, // 👈 Added
+    getReportTemplatesDropdown,
+    getReportTemplatesForBooking,
+    saveDraftResults,
+    getDraftResults,
     getLabOrderHistory,
 
 

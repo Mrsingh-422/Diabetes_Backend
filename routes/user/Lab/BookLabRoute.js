@@ -18,19 +18,22 @@ const {
     getAvailableCoupons ,validateLabCoupon,
     getPreparationGuide, suggestPersonalizedPackage,getTestSuggestions,getWomenSpecialTests,
     getWomenCategories,getWomenTestsByCategory,
+    retryLabPayment,
     
     // Prescription Flow
     scanLabPrescription,searchMasterTestsForPrescription,
-    createLabPrescriptionRequest,
+    createLabPrescriptionRequest,cancelLabPrescriptionRequest,
     getUserLabPrescriptionRequests,
     getUserLabPrescriptionRequestDetails,
     payAndConfirmLabRequest,
-    verifyLabPrescriptionPayment
+    verifyLabPrescriptionPayment,
+
     
 } = require('../../../controllers/user/Lab/BookLab');
 
 // Base URL: /user/labs
 
+//ye api application ke liye hai jo user ko lab test book karne me help karega
 router.post('/test-suggestions', getTestSuggestions);
 
 
@@ -80,6 +83,8 @@ router.post('/checkout', protect('user'), checkoutLabBooking);
 router.get('/main-categories', protect('user'), getUniqueMainCategories);
 router.post('/confirm-prescription', protect('user'), confirmPrescriptionBooking); // Prescription Flow Part 2
 router.post('/verify-payment', protect('user'), verifyLabPayment); // NEW
+
+router.post('/retry-payment', protect('user'), retryLabPayment);
 router.post('/upload-prescription', protect('user'), prescriptionUploads.array('prescriptionImages', 5), uploadPrescriptionFlow);
 
 // Discovery & Logistics
@@ -119,6 +124,7 @@ router.post(
     prescriptionUploads.single('prescriptionImage'), // single upload key
     createLabPrescriptionRequest
 );
+router.patch('/prescription-request/cancel/:requestId', protect('user'), cancelLabPrescriptionRequest);
 
 router.get(
     '/prescription-request/list', 

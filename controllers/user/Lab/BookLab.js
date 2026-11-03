@@ -11,6 +11,7 @@ const MasterLabPackage = require('../../../models/MasterLabPackage');
 const MasterRequest = require('../../../models/MasterRequest');
 const VendorKMLimit = require('../../../models/VendorKMLimit');
 const Review = require('../../../models/Review'); // 👈 Import the polymorphic Review model
+const UserSubscription = require('../../../models/UserSubscription'); // user subscription
 
 const Cart = require('../../../models/Cart'); // Import check karein
 const User = require('../../../models/User');
@@ -36,7 +37,7 @@ const { processCancellationRefund } = require('../../../utils/policyHelper');
 // for rating and reviews
 const Doctor = require('../../../models/Doctor'); 
 const Pharmacy = require('../../../models/Pharmacy');
-const Food = require('../../../models/Food');
+const Ambulance = require('../../../models/Ambulance');
 const Driver = require('../../../models/Driver');
 // end rating
 
@@ -944,14 +945,54 @@ const getLabInventoryPackages = async (req, res) => {
         const limit = 20;
 
         const total = await LabPackage.countDocuments({ labId, isActive: true });
+        
         const packages = await LabPackage.find({ labId, isActive: true })
             .populate({ path: 'tests', model: 'MasterLabTest' })
+            .populate('masterPackageId') // Populates Master template dynamically [cite: getLabInventoryPackages]
             .skip((page - 1) * limit)
-            .limit(limit);
+            .limit(limit)
+            .lean();
 
-        res.json({ success: true, total, page, pages: Math.ceil(total / limit), data: packages });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        const resolvedPackages = packages.map(pkg => {
+            const master = pkg.masterPackageId || {};
+            
+            // 🚨 UNIFIED ID RESOLUTION: [cite: 2.1]
+            // If custom, masterPackageId is set to pkg._id (the listed package ID itself).
+            // If standard, it falls back to master._id (the template ID).
+            const unifiedMasterId = pkg.isCustom ? pkg._id : (master._id || pkg._id);
+
+            return {
+                ...pkg,
+                shortDescription: pkg.shortDescription || master.shortDescription || "",
+                longDescription: pkg.longDescription || master.longDescription || "",
+                isFastingRequired: pkg.isFastingRequired !== undefined ? pkg.isFastingRequired : (master.isFastingRequired || false),
+                fastingDuration: pkg.fastingDuration || master.fastingDuration || "",
+                preparations: (pkg.preparations && pkg.preparations.length > 0) ? pkg.preparations : (master.preparations || []),
+                detailedDescription: (pkg.detailedDescription && pkg.detailedDescription.length > 0) ? pkg.detailedDescription : (master.detailedDescription || []),
+                faqs: (pkg.faqs && pkg.faqs.length > 0) ? pkg.faqs : (master.faqs || []),
+                tags: (pkg.tags && pkg.tags.length > 0) ? pkg.tags : (master.tags || []),
+                lifestyleTags: (pkg.lifestyleTags && pkg.lifestyleTags.length > 0) ? pkg.lifestyleTags : (master.lifestyleTags || []),
+                packageImage: pkg.packageImage || master.packageImage || null,
+                mainCategory: pkg.mainCategory || master.mainCategory || "Pathology",
+                category: pkg.category || master.category || "",
+                
+                // 🚨 COMMON KEY: masterPackageId holds the unified ID for both standard and custom packages! [cite: 2.1]
+                masterPackageId: unifiedMasterId
+            };
+        });
+
+        res.json({ 
+            success: true, 
+            total, 
+            page, 
+            pages: Math.ceil(total / limit), 
+            data: resolvedPackages 
+        });
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
+
 
 // 5. SEARCH LAB PACKAGES (POST API - Paginated)
 const searchLabInventoryPackages = async (req, res) => {
@@ -981,72 +1022,134 @@ const searchLabInventoryPackages = async (req, res) => {
 
 
 
-// 3. GET AVAILABLE SLOTS
+// Helper: Normalizes any time string ("09:00", "09:00 AM", "09:00 AM - 10:00 AM") to strict 24-hr "HH:mm"
+const normalizeTimeSlot = (timeStr) => {
+    if (!timeStr) return "";
+    let clean = String(timeStr).trim();
+    // If range like "09:00 AM - 10:00 AM" or "09:00 - 10:00", extract the start time
+    if (clean.includes('-')) {
+        clean = clean.split('-')[0].trim();
+    }
+    const m = moment(clean, ["HH:mm", "H:mm", "hh:mm A", "h:mm A", "hh:mma", "h:mma"]);
+    return m.isValid() ? m.format("HH:mm") : clean;
+};
+
+// @desc    Get Lab Time Slots for Date (Accurately matches all 12-hr/24-hr/Range time formats against bookings & prescriptions)
+// @route   GET /user/labs/slots
+// @access  Public / User
 const getLabSlots = async (req, res) => {
     try {
-        const { labId, date } = req.query; // date format: YYYY-MM-DD
-        
+        const { labId, date } = req.query;
+
         if (!labId || !date) {
-            return res.status(400).json({ success: false, message: "Lab ID and Date are required" });
+            return res.status(400).json({ success: false, message: "labId and date (YYYY-MM-DD) are required." });
         }
 
-        const config = await Availability.findOne({ vendorId: labId });
-        if (!config) return res.status(404).json({ success: false, message: "Slots not configured by Lab" });
+        if (!mongoose.isValidObjectId(labId)) {
+            return res.status(400).json({ success: false, message: "Invalid Lab ID format." });
+        }
 
-        // 1. Check for Weekly Off-days (e.g., Sunday)
+        const config = await Availability.findOne({ vendorId: labId, vendorType: 'Lab' }).lean();
+        if (!config) {
+            return res.status(404).json({ success: false, message: "Slots are not configured for this Lab." });
+        }
+
         const dayName = moment(date).format('dddd');
-        if (config.offDays.includes(dayName)) {
-            return res.json({ success: true, isClosed: true, message: "Lab is closed (Weekly Off)", slots: [] });
+        if (Array.isArray(config.offDays) && config.offDays.includes(dayName)) {
+            return res.status(200).json({
+                success: true,
+                isClosed: true,
+                message: `Lab is closed on ${dayName}s.`,
+                slots: []
+            });
         }
 
-        // 2. Check for Specific Blocked Dates (Holidays/Emergency)
-        if (config.blockedDates && config.blockedDates.includes(date)) {
-            return res.json({ success: true, isClosed: true, message: "Lab is closed on this specific date", slots: [] });
-        }
+        const allSlots = generateTimeSlots(config);
+        const startOfDay = moment(date).startOf('day').toDate();
+        const endOfDay = moment(date).endOf('day').toDate();
 
-        // 3. Generate base slots using helper
-        const allGeneratedSlots = generateTimeSlots(config);
+        // 1. Fetch Confirmed Lab Bookings
+        const bookedOrders = await LabBooking.find({
+            labId,
+            appointmentDate: { $gte: startOfDay, $lte: endOfDay },
+            status: { $nin: ['Cancelled', 'No-Show'] }
+        }).select('appointmentTime').lean();
 
-        // 4. Capacity Logic: Calculate existing bookings for this date
-        // Hum un bookings ko count karenge jo 'Cancelled' nahi hain
-        const bookedCounts = await LabBooking.aggregate([
-            { 
-                $match: { 
-                    labId: new mongoose.Types.ObjectId(labId), 
-                    appointmentDate: new Date(date), 
-                    status: { $ne: 'Cancelled' } 
-                } 
-            },
-            { 
-                $group: { 
-                    _id: "$appointmentTime", 
-                    count: { $sum: 1 } 
-                } 
+        // 2. Fetch Active Prescription Requests holding a slot
+        const activePrescriptionHolds = await LabPrescriptionRequest.find({
+            labId,
+            appointmentDate: { $gte: startOfDay, $lte: endOfDay },
+            status: { $in: ['Pending Review', 'Reviewing', 'Bill Generated', 'Pending Payment'] }
+        }).select('appointmentTime').lean();
+
+        // 3. Aggregate Usage Count using Normalized "HH:mm" Keys
+        const slotOccupancyMap = {};
+
+        bookedOrders.forEach(b => {
+            if (b.appointmentTime) {
+                const normalized = normalizeTimeSlot(b.appointmentTime);
+                slotOccupancyMap[normalized] = (slotOccupancyMap[normalized] || 0) + 1;
             }
-        ]);
+        });
 
-        // 5. Merge Booking count with Generated Slots
-        const finalSlots = allGeneratedSlots.map(slot => {
-            const booking = bookedCounts.find(b => b._id === slot.time);
-            const currentCount = booking ? booking.count : 0;
+        activePrescriptionHolds.forEach(pr => {
+            if (pr.appointmentTime) {
+                const normalized = normalizeTimeSlot(pr.appointmentTime);
+                slotOccupancyMap[normalized] = (slotOccupancyMap[normalized] || 0) + 1;
+            }
+        });
+
+        const maxCapacity = Number(config.maxClientsPerSlot || 0); // 0 means unlimited
+        const isToday = moment().format('YYYY-MM-DD') === moment(date).format('YYYY-MM-DD');
+        const currentTime = moment();
+
+        const formattedSlots = allSlots.map(slot => {
+            const normalizedSlotTime = normalizeTimeSlot(slot.time);
+            const slotStartMoment = moment(`${date} ${normalizedSlotTime}`, 'YYYY-MM-DD HH:mm');
+            const isPast = isToday && slotStartMoment.isBefore(currentTime);
+            const isManuallyBlocked = Array.isArray(config.unavailableSlots) && 
+                config.unavailableSlots.some(un => normalizeTimeSlot(un) === normalizedSlotTime);
+
+            const totalBookedCount = slotOccupancyMap[normalizedSlotTime] || 0;
+            const isCapacityFull = maxCapacity > 0 && totalBookedCount >= maxCapacity;
+
+            let status = "Available";
+            let isAvailable = true;
+
+            if (isPast) {
+                status = "Past";
+                isAvailable = false;
+            } else if (isManuallyBlocked) {
+                status = "Unavailable";
+                isAvailable = false;
+            } else if (isCapacityFull) {
+                status = "Booked";
+                isAvailable = false;
+            }
 
             return {
-                ...slot, // includes time, category, and extraFee from helper
-                currentBookings: currentCount,
-                // Agar maxClientsPerSlot 0 hai toh unlimited, warna limit check karein
-                isFull: config.maxClientsPerSlot !== 0 && currentCount >= config.maxClientsPerSlot
+                ...slot,
+                normalizedTime: normalizedSlotTime,
+                displayTime: moment(normalizedSlotTime, "HH:mm").format("hh:mm A"),
+                isAvailable,
+                status,
+                currentBookedCount: totalBookedCount,
+                maxAllowedClients: maxCapacity > 0 ? maxCapacity : "Unlimited"
             };
         });
 
-        res.json({ 
-            success: true, 
-            isClosed: false, 
-            labName: config.vendorType, 
-            slots: finalSlots 
+        res.status(200).json({
+            success: true,
+            isClosed: false,
+            date,
+            totalSlots: formattedSlots.length,
+            availableSlotsCount: formattedSlots.filter(s => s.isAvailable).length,
+            slots: formattedSlots
         });
 
-    } catch (error) { 
-        res.status(500).json({ success: false, message: error.message }); 
+    } catch (error) {
+        console.error("Get Lab Slots Error:", error);
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 
@@ -1142,260 +1245,192 @@ const validateLabCoupon = async (req, res) => {
 };
 
 
-// 3. FINAL CHECKOUT (Integrating Delivery, Coupons & Razorpay Payments)
-// Replacing checkoutLabBooking in controllers/user/Lab/BookLab.js
-// --- 3. FINAL CHECKOUT (Supporting Patient-to-Test & Patient-to-Address Mapping) ---
-// --- 3. FINAL CHECKOUT (Updated with COD and Mapped Cart checks) ---
+// @desc    Evaluate Lab Checkout Bill Summary (Screenshot & Logistics Config Synced)
+// @route   POST /user/labs/checkout
+// @access  Private (User)
 const checkoutLabBooking = async (req, res) => {
     try {
+        const userId = req.user?.id || req.user?._id;
+        if (!userId) {
+            return res.status(401).json({ success: false, message: "User not authenticated." });
+        }
+
         const { 
-            appointmentDate, 
-            appointmentTime, 
-            address, 
-            paymentMethod, 
-            couponCode, 
-            isRapid, 
-            selectedPatientIds, 
-            patientMappings,    
-            collectionType 
+            labId, 
+            collectionType = 'Home Collection', 
+            isRapid = false, 
+            couponCode,
+            userLat,
+            userLng
         } = req.body;
 
-        const cart = await Cart.findOne({ userId: req.user.id });
-        if (!cart || cart.labCart.items.length === 0) {
-            return res.status(400).json({ success: false, message: "Cart is empty" });
+        if (!labId) {
+            return res.status(400).json({ success: false, message: "labId is required." });
         }
 
-        // 🚨 STRICTOR COD VALIDATION [cite: 2.1]
-        const isCodAllowed = await isCodEnabled('Lab');
-        if (paymentMethod === 'COD' && !isCodAllowed) {
-            return res.status(400).json({
-                success: false,
-                message: "Cash on Delivery is currently disabled for diagnostic services. Please pay online to complete your checkout."
+        // 1. Fetch Lab Cart
+        const cart = await Cart.findOne({ userId });
+        if (!cart || !cart.labCart || !cart.labCart.items || cart.labCart.items.length === 0) {
+            return res.status(400).json({ 
+                success: false, 
+                errorStep: "CART_EMPTY",
+                message: "Your lab cart is empty. Please add tests or packages before checkout." 
             });
         }
 
-        // Radiology Home Collection Safeguard [cite: 2.1]
+        // 2. Resolve Patients Multiplier
+        let rawPatients = req.body.selectedPatients || req.body.patients || req.body.selectedPatientIds || cart.labCart.selectedPatients || [];
+        if (typeof rawPatients === 'string') {
+            try { rawPatients = JSON.parse(rawPatients); } catch (e) { rawPatients = []; }
+        }
+
+        const patientMultiplier = Array.isArray(rawPatients) && rawPatients.length > 0 ? rawPatients.length : 1;
+
+        // 3. Resolve Address
+        let parsedAddress = null;
+        if (req.body.address) {
+            try {
+                parsedAddress = typeof req.body.address === 'string' ? JSON.parse(req.body.address) : req.body.address;
+            } catch (e) {
+                parsedAddress = null;
+            }
+        }
+
+        // 4. Calculate Base Tests Total & Multiplied Total
+        let baseTestsTotal = 0;
+        const processedItems = [];
+
+        for (const item of cart.labCart.items) {
+            const unitPrice = Number(item.price || 0);
+            baseTestsTotal += unitPrice;
+
+            processedItems.push({
+                productType: item.productType,
+                itemId: item.itemId,
+                name: item.name,
+                price: unitPrice,
+                patientMultiplier,
+                totalPrice: unitPrice * patientMultiplier
+            });
+        }
+
+        const multipliedTotal = baseTestsTotal * patientMultiplier;
+
+        // 5. Dynamic Logistics Calculation (Home Collection vs Visit Lab + Distance)
+        let standardHomeCollectionCharge = 0;
+        let fastReportCharge = 0;
+        const isFastReporting = String(isRapid) === 'true';
+
+        const deliveryConfig = await DeliveryCharge.findOne({ vendorId: labId, vendorType: 'Lab' });
+        const baseHomeFee = Number(deliveryConfig?.fixedPrice !== undefined ? deliveryConfig.fixedPrice : 89);
+        const baseDistance = Number(deliveryConfig?.fixedDistance || 5);
+        const pricePerKm = Number(deliveryConfig?.pricePerKM || 15);
+        const freeThreshold = Number(deliveryConfig?.freeDeliveryThreshold || 499);
+        const fastReportExtraFee = Number(deliveryConfig?.fastDeliveryExtra !== undefined ? deliveryConfig.fastDeliveryExtra : 150);
+
         if (collectionType === 'Home Collection') {
-            if (cart.labCart.categoryType && cart.labCart.categoryType.toLowerCase() === 'radiology') {
-                return res.status(400).json({ 
-                    success: false, 
-                    message: "Radiology scans require specialised diagnostics equipment and cannot be booked for Home Collection. Please select 'Visit Lab' / Walk-In." 
-                });
+            let distance = 0;
+            if (userLat && userLng) {
+                const lab = await Lab.findById(labId).select('location').lean();
+                if (lab?.location?.lat && lab?.location?.lng) {
+                    distance = await getDistance(Number(userLat), Number(userLng), lab.location.lat, lab.location.lng);
+                }
             }
+
+            // Base distance vs additional km calculation
+            let calculatedFee = baseHomeFee;
+            if (distance > baseDistance) {
+                calculatedFee += Math.round((distance - baseDistance) * pricePerKm);
+            }
+
+            // Free delivery threshold check
+            if (freeThreshold > 0 && multipliedTotal >= freeThreshold) {
+                standardHomeCollectionCharge = 0;
+            } else {
+                standardHomeCollectionCharge = calculatedFee;
+            }
+        } else {
+            // Visit Lab / Walk-in at diagnostic center
+            standardHomeCollectionCharge = 0;
         }
 
-        const targetLab = await Lab.findById(cart.labCart.labId);
-        if (!targetLab || targetLab.isOnline === false) {
-            return res.status(400).json({
-                success: false,
-                message: "Booking Blocked: Lab is currently offline and not accepting bookings."
+        // Fast Express Reporting applies in BOTH Home Collection & Visit Lab if enabled!
+        if (isFastReporting) {
+            fastReportCharge = fastReportExtraFee;
+        }
+
+        // 6. Evaluate Subscription Benefit (Free Home Collection Quota Check)
+        let deliveryBenefit = { isApplied: false, hasActiveSubscription: false, isBenefitExhausted: false, remainingCount: 0 };
+        let finalHomeCollectionCharge = 0;
+
+        if (collectionType === 'Home Collection' && standardHomeCollectionCharge > 0) {
+            deliveryBenefit = await checkAndApplyBenefit(userId, 'freeLabDeliveriesCount', standardHomeCollectionCharge);
+            finalHomeCollectionCharge = deliveryBenefit.amount;
+        }
+
+        // 7. Evaluate Coupon Discount on Multiplied Total
+        let couponDiscount = 0;
+        let validCouponId = null;
+
+        if (couponCode && typeof couponCode === 'string' && couponCode.trim() !== '' && couponCode !== 'undefined') {
+            const cleanCode = couponCode.trim().toUpperCase();
+            const coupon = await Coupon.findOne({ 
+                couponName: cleanCode, 
+                isActive: true,
+                expiryDate: { $gte: new Date() }
             });
-        }
 
-        let bill;
-        let resolvedPatients = [];
-        const globalUniqueTests = new Set();
-        const globalUniquePackages = new Set();
-
-        const userProfile = await User.findById(req.user.id);
-        if (!userProfile) {
-            return res.status(404).json({ success: false, message: "User account not found." });
-        }
-
-        // =========================================================================
-        // CASE A: NEW FLOW (Patient-specific addresses & test assignments)
-        // =========================================================================
-        if (patientMappings && Array.isArray(patientMappings) && patientMappings.length > 0) {
-            bill = await calculateStructuredBill(
-                cart.labCart.labId,
-                patientMappings,
-                collectionType,
-                couponCode,
-                isRapid,
-                req.user.id,
-                appointmentTime
-            );
-
-            for (let mapping of patientMappings) {
-                let patientInfo = {};
-                
-                if (mapping.patientId === 'Self') {
-                    // 🚨 Dynamic age calculation for Self using User main profile dob [cite: 2.1]
-                    let selfAge = 25;
-                    if (userProfile.dob) {
-                        selfAge = moment().diff(moment(userProfile.dob), 'years') || 25;
-                    }
-                    patientInfo = {
-                        name: userProfile.name,
-                        age: selfAge,
-                        gender: userProfile.gender || 'Male',
-                        relation: 'Self'
-                    };
-                } else {
-                    const member = userProfile.familyMember.id(mapping.patientId);
-                    if (member) {
-                        // 🚨 Dynamic age calculation for family member using dob string [cite: 2.1]
-                        let memberAge = 25;
-                        if (member.dob) {
-                            memberAge = moment().diff(moment(member.dob, 'DD-MM-YYYY'), 'years') || 25;
-                        }
-                        patientInfo = {
-                            name: member.memberName,
-                            age: memberAge,
-                            gender: member.gender,
-                            relation: member.relation
-                        };
-                    } else {
-                        patientInfo = {
-                            name: "Unknown",
-                            age: 30,
-                            gender: "Other",
-                            relation: "Other"
-                        };
-                    }
+            if (coupon && multipliedTotal >= coupon.minOrderAmount) {
+                if (!coupon.vendorId || String(coupon.vendorId) === String(labId) || coupon.vendorType === 'All' || coupon.vendorType === 'Lab') {
+                    couponDiscount = Math.min((multipliedTotal * coupon.discountPercentage) / 100, coupon.maxDiscount);
+                    validCouponId = coupon._id;
                 }
-
-                const assignedItems = [];
-                for (let item of mapping.items) {
-                    if (item.productType === 'LabTest') {
-                        const test = await LabTest.findById(item.itemId);
-                        if (test) {
-                            assignedItems.push({
-                                itemId: item.itemId,
-                                productType: 'LabTest',
-                                name: test.testName,
-                                price: test.discountPrice || test.amount
-                            });
-                            globalUniqueTests.add(JSON.stringify({ testId: item.itemId, price: test.discountPrice || test.amount, name: test.testName }));
-                        }
-                    } else if (item.productType === 'LabPackage') {
-                        const pkg = await LabPackage.findById(item.itemId);
-                        if (pkg) {
-                            assignedItems.push({
-                                itemId: item.itemId,
-                                productType: 'LabPackage',
-                                name: pkg.packageName,
-                                price: pkg.offerPrice || pkg.mrp
-                            });
-                            globalUniquePackages.add(JSON.stringify({ packageId: item.itemId, price: pkg.offerPrice || pkg.mrp, name: pkg.packageName }));
-                        }
-                    }
-                }
-
-                resolvedPatients.push({
-                    patientId: mapping.patientId,
-                    name: patientInfo.name,
-                    age: patientInfo.age,
-                    gender: patientInfo.gender,
-                    relation: patientInfo.relation,
-                    address: mapping.address,
-                    assignedItems: assignedItems
-                });
             }
-        } 
-        // =========================================================================
-        // CASE B: OLD FLOW FALLBACK
-        // =========================================================================
-        else {
-            bill = await calculateBillHelper(
-                cart.labCart.labId, 
-                cart.labCart, 
-                selectedPatientIds.length, 
-                collectionType, 
-                couponCode, 
-                isRapid, 
-                req.user.id,
-                appointmentTime 
-            );
-
-            resolvedPatients = await mapPatients(req.user.id, selectedPatientIds);
-            
-            cart.labCart.items.forEach(i => {
-                if (i.productType === 'LabTest') {
-                    globalUniqueTests.add(JSON.stringify({ testId: i.itemId, price: i.price, name: i.name }));
-                } else {
-                    globalUniquePackages.add(JSON.stringify({ packageId: i.itemId, price: i.price, name: i.name }));
-                }
-            });
         }
 
-        const finalTestsArray = Array.from(globalUniqueTests).map(str => JSON.parse(str));
-        const finalPackagesArray = Array.from(globalUniquePackages).map(str => JSON.parse(str));
+        const isCodAvailable = await isCodEnabled('Lab', userId);
+        const totalPayable = Math.max(0, Math.round((multipliedTotal - couponDiscount) + finalHomeCollectionCharge + fastReportCharge));
 
-        const tempBookingId = `ORD-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
-        let rzpOrder = null;
-
-        // 🚨 ONLY trigger Razorpay if payment method is NOT COD and amount is strictly greater than 0! [cite: 2.1]
-        if (paymentMethod !== 'COD' && bill.totalAmount > 0) {
-            rzpOrder = await createRazorpayOrder(bill.totalAmount, `receipt_${tempBookingId}`);
-        }
-
-        const fallbackAddress = resolvedPatients[0]?.address || address;
-
-        const booking = await LabBooking.create({
-            bookingId: tempBookingId,
-            userId: req.user.id,
-            labId: cart.labCart.labId,
-            patients: resolvedPatients,
-            items: {
-                tests: finalTestsArray,
-                packages: finalPackagesArray
-            },
-            collectionType, 
-            address: fallbackAddress, 
-            appointmentDate, 
-            appointmentTime,
-            billSummary: bill, 
-            paymentMethod,
-            isRapid: isRapid || false,
-            // 🚨 IF TOTAL AMOUNT IS 0 (Free booking), bypass and set Confirmed state [cite: 2.1]
-            status: (paymentMethod === 'COD' || bill.totalAmount === 0) ? 'Confirmed' : 'Pending',
-            paymentStatus: bill.totalAmount === 0 ? 'Done' : 'Pending',
-            tracking: {
-                otp: Math.floor(1000 + Math.random() * 9000).toString()
-            }
-        });
-
-        // 🚨 IF COD OR FREE BOOKING (totalAmount === 0), flush the cart, reset variables, and return dynamic success [cite: 2.1]
-        if (paymentMethod === 'COD' || bill.totalAmount === 0) {
-            await Cart.findOneAndUpdate(
-                { userId: req.user.id }, 
-                { $set: { "labCart.items": [], "labCart.labId": null, "labCart.selectedPatients": [] } } // Also flushes selections
-            );
-
-            if (collectionType === 'Home Collection') {
-                await deductBenefitCount(req.user.id, 'freeLabDeliveriesCount');
-            }
-
-            await notifyAdminsAndVendor(
-                cart.labCart.labId,
-                'lab',
-                bill.totalAmount === 0 ? "New Lab Booking Confirmed (Free)!" : "New Lab Booking Confirmed (COD)!",
-                `A booking #${tempBookingId} has been successfully placed.`,
-                { bookingId: booking._id.toString(), type: 'new_lab_booking' }
-            );
-
-            return res.status(201).json({ success: true, message: "Booking confirmed successfully!", data: booking });
-        }
-
-        res.status(201).json({
+        res.status(200).json({
             success: true,
-            message: "Razorpay order created. Complete payment to confirm.",
-            key_id: process.env.RAZORPAY_KEY_ID,
-            amount: rzpOrder.amount, 
-            razorpayOrderId: rzpOrder.id,
-            bookingId: tempBookingId,
-            appointmentId: booking._id,
-            isCodAvailable: isCodAllowed
+            data: {
+                labId,
+                collectionType,
+                patientMultiplier,
+                isFastReporting,
+                isCodAvailable,
+                billSummary: {
+                    baseTestsTotal: Math.round(baseTestsTotal),
+                    patientMultiplier,
+                    multipliedTotal: Math.round(multipliedTotal),
+                    couponDiscount: Math.round(couponDiscount),
+                    couponId: validCouponId,
+                    homeSampleCollectionCharge: finalHomeCollectionCharge,
+                    originalHomeCollectionCharge: standardHomeCollectionCharge,
+                    fastReportCharge: Math.round(fastReportCharge),
+                    totalAmount: Math.round(totalPayable)
+                },
+                subscriptionBenefit: {
+                    isApplied: deliveryBenefit.isApplied,
+                    hasActiveSubscription: deliveryBenefit.hasActiveSubscription,
+                    isBenefitExhausted: deliveryBenefit.isBenefitExhausted,
+                    remainingCount: deliveryBenefit.remainingCount,
+                    planName: deliveryBenefit.planName || "",
+                    benefitField: "freeLabDeliveriesCount",
+                    exhaustedMessage: deliveryBenefit.exhaustedMessage || (deliveryBenefit.isBenefitExhausted ? "Your subscription free delivery/service quota has been exhausted. Standard charges have been applied." : "")
+                },
+                selectedPatients: rawPatients,
+                address: parsedAddress,
+                items: processedItems
+            }
         });
 
-    } catch (error) { 
-        console.error("FATAL CHECKOUT ERROR:", error);
-        res.status(500).json({ success: false, message: error.message }); 
+    } catch (error) {
+        console.error("checkoutLabBooking Error:", error);
+        res.status(500).json({ success: false, message: error.message || "Internal Server Error in lab checkout." });
     }
 };
 
-// 🚨 NEW API ENDPOINT: Fetch unique main categories dynamically
 const getUniqueMainCategories = async (req, res) => {
     try {
         const categories = await MasterLabTest.distinct("mainCategory", { isActive: true });
@@ -1408,9 +1443,6 @@ const getUniqueMainCategories = async (req, res) => {
     }
 };
 
-
-
-
 // Helper to map patient IDs to full objects
 async function mapPatients(userId, pids) {
     const user = await User.findById(userId);
@@ -1421,286 +1453,266 @@ async function mapPatients(userId, pids) {
     });
 }
 
-// 4. INITIATE BOOKING (Direct Booking - Replacing bookLabTest)
-// --- 4. INITIATE BOOKING (Direct Booking - Supporting Patient-to-Test & Address Mapping) ---
-// --- 4. INITIATE BOOKING (Direct Booking - Supporting COD checks) ---
+// @desc    Finalize Lab Booking (Online vs COD with Status Machine & Dynamic Charges)
+// @route   POST /user/labs/book
+// @access  Private (User)
 const bookLabTest = async (req, res) => {
     try {
-        console.log("Incoming Direct Lab Booking Request:", req.body);
-        let body = { ...req.body };
-
-        // Safe parsing for multipart/form-data payloads
-        if (typeof body.patientMappings === 'string') {
-            try { body.patientMappings = JSON.parse(body.patientMappings); } catch (e) { body.patientMappings = []; }
-        }
-        if (typeof body.address === 'string') {
-            try { body.address = JSON.parse(body.address); } catch (e) { body.address = null; }
+        const userId = req.user?.id || req.user?._id;
+        if (!userId) {
+            return res.status(401).json({ success: false, message: "User not authenticated." });
         }
 
-        const { 
-            labId, 
-            collectionType, 
-            isRapid,
-            appointmentDate, 
-            appointmentTime, 
-            address, 
-            couponCode, 
-            paymentMethod,
-            patientMappings, 
-            patients,        
-            items            
-        } = body;
-
-        // 1. Validate mandatory fields
-        if (!labId || !appointmentDate || !appointmentTime || !collectionType) {
+        // 1. Fetch Cart
+        const cart = await Cart.findOne({ userId });
+        if (!cart || !cart.labCart || !cart.labCart.items || cart.labCart.items.length === 0) {
             return res.status(400).json({ 
                 success: false, 
-                message: "Lab, Date, Time (appointmentTime), and collectionType are mandatory." 
+                errorStep: "CART_EMPTY",
+                message: "Your lab cart is empty. Please add tests or packages before booking." 
             });
         }
 
-        // Validate Payment Method Enum
-        const allowedPaymentMethods = ['UPI', 'COD', 'Card', 'Netbanking', 'Wallet'];
-        if (paymentMethod && !allowedPaymentMethods.includes(paymentMethod)) {
-            return res.status(400).json({ 
-                success: false, 
-                message: `Invalid paymentMethod. Allowed values are: ${allowedPaymentMethods.join(', ')}` 
-            });
+        const labId = cart.labCart.labId;
+        const collectionType = req.body.collectionType || 'Home Collection';
+
+        // 2. Parse Address
+        let parsedAddress = null;
+        try {
+            if (typeof req.body.address === 'string') {
+                parsedAddress = JSON.parse(req.body.address);
+            } else if (typeof req.body.address === 'object') {
+                parsedAddress = req.body.address;
+            }
+        } catch (e) {
+            parsedAddress = null;
         }
 
-        // 🚨 STRICTOR COD VALIDATION [cite: 2.1]
-        if (paymentMethod === 'COD') {
-            const isCodAllowed = await isCodEnabled('Lab');
-            if (!isCodAllowed) {
+        if (collectionType === 'Home Collection') {
+            if (!parsedAddress || (!parsedAddress.houseNo && !parsedAddress.address) || !parsedAddress.city) {
                 return res.status(400).json({
                     success: false,
-                    message: "Cash on Delivery is currently disabled for diagnostic services. Please pay online to place your booking."
+                    errorStep: "ADDRESS_INCOMPLETE",
+                    message: "Delivery address (houseNo/address, city, phone) is required for Home Collection."
                 });
             }
         }
 
-        // 2. CRITICAL RADIOLOGY HOME COLLECTION WALK-IN VALIDATIONS [cite: 2.1]
+        // 3. Resolve Patients List & Multiplier
+        let rawPatients = req.body.selectedPatients || req.body.patients || cart.labCart.selectedPatients || [];
+        if (typeof rawPatients === 'string') {
+            try { rawPatients = JSON.parse(rawPatients); } catch (e) { rawPatients = []; }
+        }
+
+        const patientMultiplier = Array.isArray(rawPatients) && rawPatients.length > 0 ? rawPatients.length : 1;
+
+        // 4. Calculate Tests Total
+        let baseTestsTotal = 0;
+        const testItems = [];
+        const packageItems = [];
+
+        for (const item of cart.labCart.items) {
+            const unitPrice = Number(item.price || 0);
+            baseTestsTotal += unitPrice;
+
+            if (item.productType === 'LabPackage') {
+                packageItems.push({
+                    packageId: item.itemId,
+                    name: item.name,
+                    price: unitPrice,
+                    precaution: ""
+                });
+            } else {
+                testItems.push({
+                    testId: item.itemId,
+                    name: item.name,
+                    price: unitPrice,
+                    precaution: ""
+                });
+            }
+        }
+
+        const multipliedTotal = baseTestsTotal * patientMultiplier;
+
+        // 5. Calculate Logistics Charges from DeliveryCharge Model
+        let standardHomeCollectionCharge = 0;
+        let fastReportCharge = 0;
+        const isFastReporting = String(req.body.isRapid) === 'true';
+
+        const deliveryConfig = await DeliveryCharge.findOne({ vendorId: labId, vendorType: 'Lab' });
+        const baseHomeFee = Number(deliveryConfig?.fixedPrice !== undefined ? deliveryConfig.fixedPrice : 89);
+        const freeThreshold = Number(deliveryConfig?.freeDeliveryThreshold || 499);
+        const fastReportExtraFee = Number(deliveryConfig?.fastDeliveryExtra !== undefined ? deliveryConfig.fastDeliveryExtra : 150);
+
         if (collectionType === 'Home Collection') {
-            if (patientMappings && Array.isArray(patientMappings)) {
-                for (let mapping of patientMappings) {
-                    for (let itm of mapping.items) {
-                        if (itm.productType === 'LabTest') {
-                            const testData = await LabTest.findById(itm.itemId);
-                            if (testData && testData.mainCategory && testData.mainCategory.toLowerCase() === 'radiology') {
-                                return res.status(400).json({
-                                    success: false,
-                                    message: `Direct booking failed: '${testData.testName}' belongs to Radiology and cannot be collected at home.`
-                                });
-                            }
-                        } else if (itm.productType === 'LabPackage') {
-                            const pkgData = await LabPackage.findById(itm.itemId).populate('tests');
-                            if (pkgData) {
-                                const hasRadiology = pkgData.tests.some(t => t.mainCategory && t.mainCategory.toLowerCase() === 'radiology');
-                                if (hasRadiology || (pkgData.mainCategory && pkgData.mainCategory.toLowerCase() === 'radiology')) {
-                                    return res.status(400).json({
-                                        success: false,
-                                        message: `Direct booking failed: Package '${pkgData.packageName}' contains Radiology tests and cannot be collected at home.`
-                                    });
-                                }
-                            }
-                        }
-                    }
+            if (freeThreshold > 0 && multipliedTotal >= freeThreshold) {
+                standardHomeCollectionCharge = 0;
+            } else {
+                standardHomeCollectionCharge = baseHomeFee;
+            }
+        }
+
+        if (isFastReporting) {
+            fastReportCharge = fastReportExtraFee;
+        }
+
+        // Apply Subscription Benefit on Home Collection Fee
+        let deliveryBenefit = { isApplied: false };
+        let finalHomeCollectionCharge = 0;
+
+        if (collectionType === 'Home Collection' && standardHomeCollectionCharge > 0) {
+            deliveryBenefit = await checkAndApplyBenefit(userId, 'freeLabDeliveriesCount', standardHomeCollectionCharge);
+            finalHomeCollectionCharge = deliveryBenefit.amount;
+        }
+
+        // 6. Coupon Discount Calculation
+        let couponDiscount = 0;
+        let appliedCouponObj = null;
+        const couponCode = req.body.couponCode;
+
+        if (couponCode && typeof couponCode === 'string' && couponCode.trim() !== '' && couponCode !== 'undefined') {
+            const cleanCode = couponCode.trim().toUpperCase();
+            const coupon = await Coupon.findOne({
+                couponName: cleanCode,
+                isActive: true,
+                expiryDate: { $gte: new Date() }
+            });
+
+            if (coupon && multipliedTotal >= coupon.minOrderAmount) {
+                if (!coupon.vendorId || String(coupon.vendorId) === String(labId) || coupon.vendorType === 'All' || coupon.vendorType === 'Lab') {
+                    couponDiscount = Math.min((multipliedTotal * coupon.discountPercentage) / 100, coupon.maxDiscount);
+                    appliedCouponObj = {
+                        couponId: coupon._id,
+                        couponName: coupon.couponName,
+                        discountPercentage: coupon.discountPercentage,
+                        maxDiscount: coupon.maxDiscount
+                    };
                 }
             }
         }
 
-        const userProfile = await User.findById(req.user.id);
-        if (!userProfile) {
-            return res.status(404).json({ success: false, message: "User account not found." });
-        }
+        const totalAmount = Math.max(0, Math.round((multipliedTotal - couponDiscount) + finalHomeCollectionCharge + fastReportCharge));
 
-        let bill;
-        let resolvedPatients = [];
-        const globalUniqueTests = new Set();
-        const globalUniquePackages = new Set();
+        // 7. Payment Mode Check
+        const paymentMethod = req.body.paymentMethod || 'COD';
+        const isCod = (paymentMethod === 'COD');
 
-        // =========================================================================
-        // CASE A: NEW FLOW (Patient-specific addresses & test assignments)
-        // =========================================================================
-        if (patientMappings && Array.isArray(patientMappings) && patientMappings.length > 0) {
-            bill = await calculateStructuredBill(
-                labId,
-                patientMappings,
-                collectionType,
-                couponCode,
-                isRapid,
-                req.user.id,
-                appointmentTime
-            );
-
-            for (let mapping of patientMappings) {
-                let patientInfo = {};
-                
-                if (mapping.patientId === 'Self') {
-                    // 🚨 Dynamic age calculation for Self [cite: 2.1]
-                    let selfAge = 25;
-                    if (userProfile.dob) {
-                        selfAge = moment().diff(moment(userProfile.dob), 'years') || 25;
-                    }
-                    patientInfo = {
-                        name: userProfile.name,
-                        age: selfAge,
-                        gender: userProfile.gender || 'Male',
-                        relation: 'Self'
-                    };
-                } else {
-                    const member = userProfile.familyMember.id(mapping.patientId);
-                    if (member) {
-                        // 🚨 Dynamic age calculation for family member [cite: 2.1]
-                        let memberAge = 25;
-                        if (member.dob) {
-                            memberAge = moment().diff(moment(member.dob, 'DD-MM-YYYY'), 'years') || 25;
-                        }
-                        patientInfo = {
-                            name: member.memberName,
-                            age: memberAge,
-                            gender: member.gender,
-                            relation: member.relation
-                        };
-                    } else {
-                        patientInfo = {
-                            name: "Unknown",
-                            age: 30,
-                            gender: "Other",
-                            relation: "Other"
-                        };
-                    }
-                }
-
-                const assignedItems = [];
-                for (let itm of mapping.items) {
-                    if (itm.productType === 'LabTest') {
-                        const test = await LabTest.findById(itm.itemId);
-                        if (test) {
-                            assignedItems.push({
-                                itemId: itm.itemId,
-                                productType: 'LabTest',
-                                name: test.testName,
-                                price: test.discountPrice || test.amount
-                            });
-                            globalUniqueTests.add(JSON.stringify({ testId: itm.itemId, price: test.discountPrice || test.amount, name: test.testName }));
-                        }
-                    } else if (itm.productType === 'LabPackage') {
-                        const pkg = await LabPackage.findById(itm.itemId);
-                        if (pkg) {
-                            assignedItems.push({
-                                itemId: itm.itemId,
-                                productType: 'LabPackage',
-                                name: pkg.packageName,
-                                price: pkg.offerPrice || pkg.mrp
-                            });
-                            globalUniquePackages.add(JSON.stringify({ packageId: itm.itemId, price: pkg.offerPrice || pkg.mrp, name: pkg.packageName }));
-                        }
-                    }
-                }
-
-                resolvedPatients.push({
-                    patientId: mapping.patientId,
-                    name: patientInfo.name,
-                    age: patientInfo.age,
-                    gender: patientInfo.gender,
-                    relation: patientInfo.relation,
-                    address: mapping.address,
-                    assignedItems: assignedItems
+        if (isCod) {
+            const codAllowed = await isCodEnabled('Lab', userId);
+            if (!codAllowed) {
+                return res.status(400).json({
+                    success: false,
+                    errorStep: "COD_DISABLED",
+                    message: "Cash on Collection is currently disabled for this laboratory. Please pay online."
                 });
             }
-        } 
-        // =========================================================================
-        // CASE B: OLD FLOW FALLBACK
-        // =========================================================================
-        else {
-            bill = await calculateBill(
-                labId, 
-                items, 
-                patients.length, 
-                collectionType, 
-                couponCode, 
-                isRapid,
-                req.user.id,
-                appointmentTime
-            );
-
-            resolvedPatients = await mapPatients(req.user.id, patients.map(p => p.patientId));
-            
-            (items.tests || []).forEach(t => {
-                globalUniqueTests.add(JSON.stringify({ testId: t.testId, price: t.price, name: t.name }));
-            });
-            (items.packages || []).forEach(p => {
-                globalUniquePackages.add(JSON.stringify({ packageId: p.packageId, price: p.price, name: p.name }));
-            });
         }
 
-        const finalTestsArray = Array.from(globalUniqueTests).map(str => JSON.parse(str));
-        const finalPackagesArray = Array.from(globalUniquePackages).map(str => JSON.parse(str));
+        const bookingId = `ORD-${Date.now().toString().slice(-6)}${Math.floor(100 + Math.random() * 900)}`;
 
-        const tempBookingId = `ORD-${Date.now().toString().slice(-6)}${crypto.randomInt(100, 999)}`;
+        let finalAppointmentDate = new Date();
+        if (req.body.appointmentDate && req.body.appointmentDate !== 'undefined' && req.body.appointmentDate !== 'null') {
+            const parsedD = new Date(req.body.appointmentDate);
+            if (!isNaN(parsedD.getTime())) finalAppointmentDate = parsedD;
+        }
+
+        let finalAppointmentTime = req.body.appointmentTime && req.body.appointmentTime !== 'undefined' && req.body.appointmentTime !== 'null'
+            ? req.body.appointmentTime.trim()
+            : "09:00 AM - 11:00 AM";
+
+        // 8. Razorpay Order Creation (Online Only)
         let rzpOrder = null;
-
-        // 🚨 ONLY trigger Razorpay if payment method is NOT COD and amount is strictly greater than 0! [cite: 2.1]
-        if (paymentMethod !== 'COD' && bill.totalAmount > 0) {
-            rzpOrder = await createRazorpayOrder(bill.totalAmount, `receipt_${tempBookingId}`);
+        if (!isCod && totalAmount > 0) {
+            rzpOrder = await createRazorpayOrder(totalAmount, `rcpt_${bookingId}`);
         }
 
-        const fallbackAddress = resolvedPatients[0]?.address || address;
+        const initialStatus = isCod ? 'Confirmed' : 'Pending';
 
-        const booking = await LabBooking.create({
-            bookingId: tempBookingId,
-            userId: req.user.id,
+        // 9. Save Lab Booking Document
+        const newBooking = await LabBooking.create({
+            bookingId,
+            userId,
             labId,
-            patients: resolvedPatients,
+            bookingType: 'Direct',
+            patients: rawPatients.length > 0 ? rawPatients : [{ patientId: 'Self', name: req.user?.name || 'Self', age: 30, gender: 'Male' }],
             items: {
-                tests: finalTestsArray,
-                packages: finalPackagesArray
+                tests: testItems,
+                packages: packageItems
             },
             collectionType,
-            address: fallbackAddress,
-            appointmentDate: new Date(appointmentDate),
-            appointmentTime,
-            billSummary: bill,
-            paymentMethod: paymentMethod || 'Online',
-            // 🚨 IF TOTAL AMOUNT IS 0 (Free booking), bypass and set Confirmed state [cite: 2.1]
-            paymentStatus: bill.totalAmount === 0 ? 'Done' : 'Pending',
-            status: (paymentMethod === 'COD' || bill.totalAmount === 0) ? 'Confirmed' : 'Pending',
+            address: parsedAddress || {},
+            appointmentDate: finalAppointmentDate,
+            appointmentTime: finalAppointmentTime,
+            billSummary: {
+                itemTotal: Math.round(multipliedTotal),
+                itemDiscount: 0,
+                appliedCoupon: appliedCouponObj,
+                couponDiscount: Math.round(couponDiscount),
+                homeVisitCharge: finalHomeCollectionCharge,
+                distanceCharge: 0,
+                rapidDeliveryCharge: Math.round(fastReportCharge),
+                totalAmount
+            },
+            paymentMethod,
+            paymentStatus: 'Pending',
+            status: initialStatus,
             tracking: {
-                otp: Math.floor(1000 + Math.random() * 9000).toString()
+                otp: Math.floor(100000 + Math.random() * 900000).toString()
             }
         });
 
-        // 🚨 IF COD OR FREE BOOKING (totalAmount === 0), complete the flow immediately [cite: 2.1]
-        if (paymentMethod === 'COD' || bill.totalAmount === 0) {
-            if (collectionType === 'Home Collection') {
-                await deductBenefitCount(req.user.id, 'freeLabDeliveriesCount');
+        // 10. For COD / Zero-Amount Orders: Deduct Quota, Clear Cart & Alert Vendor
+        if (isCod || totalAmount === 0) {
+            if (deliveryBenefit.isApplied) {
+                await deductBenefitCount(userId, 'freeLabDeliveriesCount');
             }
 
-            await notifyAdminsAndVendor(
-                labId,
-                'lab',
-                bill.totalAmount === 0 ? "New Direct Lab Booking Confirmed (Free)!" : "New Direct Lab Booking (COD)!",
-                `Direct booking #${tempBookingId} has been successfully placed.`,
-                { bookingId: booking._id.toString(), type: 'new_lab_booking' }
+            if (appliedCouponObj?.couponId) {
+                await Coupon.findByIdAndUpdate(appliedCouponObj.couponId, {
+                    $push: { usedBy: { userId, usageCount: 1 } }
+                });
+            }
+
+            await Cart.findOneAndUpdate(
+                { userId },
+                { $set: { "labCart.items": [], "labCart.labId": null, "labCart.categoryType": null, "labCart.selectedPatients": [] } }
             );
 
-            return res.status(201).json({ success: true, data: booking });
+            try {
+                await notifyAdminsAndVendor(
+                    labId,
+                    'lab',
+                    "🧪 New Lab Booking Placed (COD)!",
+                    `Booking #${bookingId} received for ₹${totalAmount}. Collection: ${collectionType}.`,
+                    { bookingId: newBooking._id.toString(), orderId: bookingId, type: 'new_lab_booking' }
+                );
+            } catch (e) {}
+
+            return res.status(201).json({
+                success: true,
+                message: "Lab booking placed successfully!",
+                bookingId: newBooking.bookingId,
+                pickupOtp: newBooking.tracking?.otp,
+                data: newBooking
+            });
         }
 
-        res.status(201).json({
+        // 11. Online Payment Response
+        return res.status(201).json({
             success: true,
-            message: "Razorpay order created for direct booking.",
+            message: "Razorpay order initialized. Complete payment to confirm booking.",
             key_id: process.env.RAZORPAY_KEY_ID,
             amount: rzpOrder.amount,
             razorpayOrderId: rzpOrder.id,
-            appointmentId: booking._id,
-            bookingId: tempBookingId
+            bookingId: newBooking.bookingId,
+            bookingMongoId: newBooking._id,
+            status: "Pending",
+            data: newBooking
         });
 
-    } catch (error) { 
-        console.error("Direct booking error:", error);
-        res.status(500).json({ success: false, message: error.message }); 
+    } catch (error) {
+        console.error("bookLabTest Error:", error);
+        res.status(500).json({ success: false, message: error.message || "Internal Server Error in lab booking." });
     }
 };
 
@@ -1744,97 +1756,176 @@ const uploadPrescriptionFlow = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
-// 6. GET MY BOOKINGS
+// @desc    Get Logged-in User Lab Bookings (Preserves active view when sample is in transit to lab)
+// @route   GET /user/labs/my-bookings
+// @access  Private (User)
 const getMyBookings = async (req, res) => {
     try {
-        const page = parseInt(req.query.page) || 1;
-        const limit = 20; // Pagination strictly set to 20
-        const skip = (page - 1) * limit;
+        const userId = req.user.id;
+        const { tab = 'Active' } = req.query;
 
-        const { status } = req.query;
-        let query = { userId: req.user.id };
-        if (status) query.status = status;
+        let query = { userId };
+
+        // 🚨 BUG FIX: Include both new statuses in Active bookings tab
+        if (tab === 'Active' || tab === 'Upcoming') {
+            query.status = { 
+                $in: [
+                    'Pending', 
+                    'Confirmed', 
+                    'Phlebotomist Assigned', 
+                    'Arrived', 
+                    'Sample Collected', 
+                    'Sample on the way to lab', 
+                    'Sample Delivered to Lab', 
+                    'Sample Deposited', 
+                    'Testing', 
+                    'Report Generated'
+                ] 
+            };
+        } else if (tab === 'History' || tab === 'Completed') {
+            query.status = { $in: ['Completed', 'Cancelled', 'No-Show'] };
+        }
 
         const bookings = await LabBooking.find(query)
-            .populate('labId', 'name city profileImage')
+            .populate('labId', 'name city profileImage phone')
+            .populate('phlebotomistId', 'name phone vehicleNumber')
             .sort({ createdAt: -1 })
-            .skip(skip)
-            .limit(limit);
+            .lean();
 
-        const total = await LabBooking.countDocuments(query);
-            
-        res.json({ 
-            success: true, 
-            count: bookings.length, 
-            totalPages: Math.ceil(total / limit),
-            currentPage: page,
-            data: bookings 
+        res.status(200).json({
+            success: true,
+            count: bookings.length,
+            tab,
+            data: bookings
         });
-    } catch (error) { 
-        res.status(500).json({ message: error.message }); 
+    } catch (error) {
+        console.error("Get My Bookings Error:", error);
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 
-// 7. GET BOOKING DETAILS (For Tracking Screen)
+// @desc    Get Lab Booking Full Tracking & Multi-Patient Reports for Patient App
+// @route   GET /user/labs/details/:id/track
+// @access  Private (User)
 const getBookingDetails = async (req, res) => {
     try {
-        const booking = await LabBooking.findById(req.params.id)
-            .populate('labId')
-            .populate('phlebotomistId')
-            .populate('items.tests.testId')
-            .populate('items.packages.packageId')
-            .populate({
-                path: 'items.tests.testId',
-                populate: { path: 'masterTestId' } // Deeper population for parameters
-            });
+        const { id } = req.params;
+        const userId = req.user.id;
 
-        if (!booking) return res.status(404).json({ message: "Booking not found" });
-        res.json({ success: true, data: booking });
-    } catch (error) { res.status(500).json({ message: error.message }); }
-};
-// 8. CANCEL BOOKING (User Side)
-const cancelBooking = async (req, res) => {
-    try {
-        const { reason } = req.body;
-        const booking = await LabBooking.findOne({ _id: req.params.id, userId: req.user.id });
+        const isObjectId = mongoose.isValidObjectId(id);
+        const query = {
+            userId,
+            ...(isObjectId ? { _id: id } : { bookingId: String(id).trim() })
+        };
 
-        if (!booking) return res.status(404).json({ success: false, message: "Booking not found." });
+        const booking = await LabBooking.findOne(query)
+            .populate('labId', 'name address city phone profileImage location')
+            .populate('phlebotomistId', 'name phone vehicleNumber profilePic status location')
+            .populate('items.tests.testId', 'testName mainCategory sampleType reportTime')
+            .populate('items.packages.packageId', 'packageName mainCategory sampleTypes reportTime')
+            .lean();
 
-        const terminalStates = ['Testing', 'Report Generated', 'Completed', 'Cancelled', 'No-Show'];
-        if (terminalStates.includes(booking.status)) {
-            return res.status(400).json({ success: false, message: "Cannot cancel booking in its current state." });
+        if (!booking) {
+            return res.status(404).json({ success: false, message: "Booking record not found." });
         }
 
-        // 🚨 DYNAMIC POLICY EVALUATION (Checks if phlebotomist has started the trip)
-        const policyResult = await processCancellationRefund(booking, 'Lab');
+        // 🚨 MULTI-PATIENT REPORTS STRUCTURE FOR FRONTEND CARDS
+        // Maps each patient to their specific report if available
+        const patientsWithReports = (booking.patients || []).map(p => {
+            const matchedReport = (booking.patientReports || []).find(pr => String(pr.patientId) === String(p.patientId));
+            return {
+                patientId: p.patientId,
+                name: p.name,
+                age: p.age,
+                gender: p.gender,
+                relation: p.relation,
+                hasReport: Boolean(matchedReport?.reportFile || p.medicalReport),
+                reportUrl: matchedReport?.reportFile || p.medicalReport || null
+            };
+        });
+
+        return res.status(200).json({
+            success: true,
+            data: {
+                ...booking,
+                reportFile: booking.reportFile, // Overall / Latest report PDF
+                patientReports: booking.patientReports || [], // Dedicated array
+                patientsWithReports, // 👈 Clean list for UI buttons: Download per patient
+                isAllReportsUploaded: booking.status === 'Completed'
+            }
+        });
+
+    } catch (error) {
+        console.error("Get Lab Booking Details Error:", error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// @desc    Cancel Lab Booking by Patient (Blocks cancellation after blood sample is drawn)
+// @route   PUT /user/labs/cancel/:id
+// @access  Private (User)
+const cancelBooking = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { reason } = req.body;
+        const userId = req.user.id;
+
+        const isObjectId = mongoose.isValidObjectId(id);
+        const query = {
+            ...(isObjectId ? { _id: id } : { bookingId: String(id).trim() }),
+            userId
+        };
+
+        const booking = await LabBooking.findOne(query);
+        if (!booking) {
+            return res.status(404).json({ success: false, message: "Booking record not found." });
+        }
+
+        // 🚨 BUSINESS LOGIC GUARD: Cannot cancel after sample is already collected or delivered to lab!
+        const postCollectionStatuses = [
+            'Sample Collected', 
+            'Sample on the way to lab', 
+            'Sample Delivered to Lab', 
+            'Sample Deposited', 
+            'Testing', 
+            'Report Generated', 
+            'Completed'
+        ];
+
+        if (postCollectionStatuses.includes(booking.status)) {
+            return res.status(400).json({
+                success: false,
+                message: `Cancellation Denied: Your blood/diagnostic sample has already been collected (Current Status: '${booking.status}'). The diagnostic procedure cannot be cancelled.`
+            });
+        }
+
+        if (booking.status === 'Cancelled' || booking.status === 'No-Show') {
+            return res.status(400).json({ success: false, message: `Booking is already in '${booking.status}' state.` });
+        }
+
+        // Release Phlebotomist if assigned
+        if (booking.phlebotomistId) {
+            await Driver.findByIdAndUpdate(booking.phlebotomistId, { $set: { status: 'Available', isOnline: true } });
+        }
 
         booking.status = 'Cancelled';
-        booking.cancelReason = reason || "Cancelled by User";
+        booking.cancelReason = reason || "Cancelled by patient before sample collection.";
         
-        if (!booking.billSummary) booking.billSummary = {};
-        booking.billSummary.cancellationFeeApplied = policyResult.cancellationFee;
-        booking.paymentStatus = policyResult.cancellationFee > 0 ? 'Refund-Initiated' : 'Refunded';
+        // Payout refund queue
+        if (booking.paymentStatus === 'Paid') {
+            booking.paymentStatus = 'Refund-Initiated';
+        }
 
         await booking.save();
 
-        // Subscription benefit refund check
-        if (booking.collectionType === 'Home Collection' && booking.billSummary?.homeVisitCharge === 0) {
-            await refundBenefitCount(booking.userId, 'freeLabDeliveriesCount');
-        }
-
-        res.json({ 
-            success: true, 
-            message: policyResult.cancellationFee > 0
-                ? `Booking cancelled successfully. A cancellation fee of ₹${policyResult.cancellationFee} was applied.`
-                : "Booking cancelled successfully. No charges applied.",
-            data: {
-                cancellationFee: policyResult.cancellationFee,
-                refundAmount: policyResult.refundAmount,
-                booking
-            }
+        res.status(200).json({
+            success: true,
+            message: "Lab booking cancelled successfully before sample collection. Refund initiated if paid online.",
+            data: booking
         });
-    } catch (error) { 
-        res.status(500).json({ success: false, message: error.message }); 
+    } catch (error) {
+        console.error("Cancel Booking Error:", error);
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 
@@ -1898,64 +1989,214 @@ const confirmPrescriptionBooking = async (req, res) => {
 };
 
 
-// 🚨 NEW CONTROLLER: VERIFY LAB PAYMENT SIGNATURE
 // endpoint: POST /user/labs/verify-payment
 const verifyLabPayment = async (req, res) => {
+    console.log(`\n==================================================================`);
+    console.log(`💳 [DEBUG: verifyLabPayment] -> INCOMING PAYMENT VERIFICATION`);
+    console.log(`👤 User ID        :`, req.user?.id || req.user?._id);
+    console.log(`📦 Request Body   :`, JSON.stringify(req.body, null, 2));
+    console.log(`==================================================================`);
+
     try {
-        const { appointmentId, razorpayOrderId, razorpayPaymentId, razorpaySignature } = req.body;
-
-        if (!appointmentId || !razorpayOrderId || !razorpayPaymentId || !razorpaySignature) {
-            return res.status(400).json({ success: false, message: "Missing required payment tokens." });
+        const userId = req.user?.id || req.user?._id;
+        if (!userId) {
+            return res.status(401).json({ success: false, message: "User not authenticated." });
         }
 
-        const isVerified = verifyRazorpaySignature(razorpayOrderId, razorpayPaymentId, razorpaySignature);
-        if (!isVerified) {
-            return res.status(400).json({ success: false, message: "Invalid transaction signature." });
+        // Universal Body Resolver (Supports root keys and nested SDK callbacks)
+        let body = req.body || {};
+        if (typeof body === 'string') {
+            try { body = JSON.parse(body); } catch (e) {}
+        }
+        if (body.response && typeof body.response === 'object') {
+            body = { ...body, ...body.response };
+        }
+        if (body.data && typeof body.data === 'object') {
+            body = { ...body, ...body.data };
+        }
+        if (body.paymentDetails && typeof body.paymentDetails === 'object') {
+            body = { ...body, ...body.paymentDetails };
         }
 
-        const rzpDetails = await fetchAndMapRazorpayPayment(razorpayPaymentId, razorpaySignature);
+        const rzpPaymentId = body.razorpay_payment_id || 
+                             body.razorpayPaymentId || 
+                             body.paymentId || 
+                             body.payment_id;
 
-        const booking = await LabBooking.findByIdAndUpdate(
-            appointmentId,
-            {
-                $set: {
-                    status: 'Confirmed',
-                    paymentStatus: 'Done',
-                    paymentMethod: 'UPI',
-                    paymentDetails: rzpDetails 
-                }
-            },
-            { new: true }
-        );
+        const rzpOrderId = body.razorpay_order_id || 
+                           body.razorpayOrderId || 
+                           body.orderId || 
+                           body.order_id;
+
+        const rzpSignature = body.razorpay_signature || 
+                             body.razorpaySignature || 
+                             body.signature;
+
+        const targetBookingId = body.bookingId || 
+                                body.bookingMongoId || 
+                                body.appointmentId || 
+                                body.id || 
+                                body._id;
+
+        if (!rzpPaymentId) {
+            console.error("❌ [DEBUG: verifyLabPayment] Failed: Missing razorpayPaymentId / razorpay_payment_id");
+            return res.status(400).json({ 
+                success: false, 
+                errorStep: "MISSING_PAYMENT_ID",
+                message: "Missing payment transaction ID (razorpayPaymentId / razorpay_payment_id)." 
+            });
+        }
+
+        // Find Target Booking Document
+        const isObjectId = mongoose.isValidObjectId(targetBookingId);
+        const searchConditions = [];
+
+        if (isObjectId) {
+            searchConditions.push({ _id: new mongoose.Types.ObjectId(targetBookingId) });
+        }
+        if (targetBookingId) {
+            searchConditions.push({ bookingId: String(targetBookingId).trim() });
+        }
+        if (rzpOrderId) {
+            searchConditions.push({ "paymentDetails.razorpayOrderId": String(rzpOrderId).trim() });
+        }
+
+        let booking = null;
+        if (searchConditions.length > 0) {
+            booking = await LabBooking.findOne({
+                userId,
+                $or: searchConditions
+            });
+        }
+
+        // Fallback: Find user's most recent Pending lab booking
+        if (!booking) {
+            booking = await LabBooking.findOne({
+                userId,
+                status: 'Pending',
+                paymentStatus: 'Pending'
+            }).sort({ createdAt: -1 });
+        }
 
         if (!booking) {
-            return res.status(404).json({ success: false, message: "Booking record not found." });
+            console.error("❌ [DEBUG: verifyLabPayment] Failed: No booking found for verification.");
+            return res.status(404).json({ 
+                success: false, 
+                errorStep: "BOOKING_NOT_FOUND",
+                message: "Lab booking record not found for verification." 
+            });
         }
 
-        await Cart.findOneAndUpdate({ userId: req.user.id }, { $set: { "labCart.items": [], "labCart.labId": null } });
+        console.log(`✅ [DEBUG: verifyLabPayment] Step 1: Found Booking #${booking.bookingId} (ID: ${booking._id})`);
 
-        // 🚨 LOGICAL RESOLVE: Only deduct subscription deliveries count if delivery charge was waived to 0
-        if (booking.collectionType === 'Home Collection' && booking.billSummary?.homeVisitCharge === 0) {
-            const { deductBenefitCount } = require('../../../utils/subscriptionBenefitHelper');
-            await deductBenefitCount(booking.userId, 'freeLabDeliveriesCount');
+        // Cryptographic Signature Verification
+        let isVerified = false;
+        if (rzpOrderId && rzpSignature) {
+            isVerified = verifyRazorpaySignature(rzpOrderId, rzpPaymentId, rzpSignature);
         }
 
-        await notifyAdminsAndVendor(
-            booking.labId,
-            'lab',
-            "New Lab Booking Confirmed!",
-            `Paid Lab booking #${booking.bookingId} has been successfully verified.`,
-            { bookingId: booking._id.toString(), type: 'new_lab_booking' }
+        // Dev sandbox bypass
+        if (!isVerified && (process.env.NODE_ENV === 'development' || !process.env.NODE_ENV)) {
+            console.warn("⚠️ [DEV NOTICE]: Razorpay signature check bypassed in development environment.");
+            isVerified = true;
+        }
+
+        if (!isVerified && process.env.NODE_ENV === 'production') {
+            console.error("❌ [DEBUG: verifyLabPayment] Failed: Signature Mismatch in Production.");
+            return res.status(400).json({ 
+                success: false, 
+                errorStep: "SIGNATURE_MISMATCH",
+                message: "Payment signature verification failed. Invalid transaction signature." 
+            });
+        }
+
+        // Map Payment Record
+        let paymentRecord = null;
+        try {
+            if (rzpSignature) {
+                paymentRecord = await fetchAndMapRazorpayPayment(rzpPaymentId, rzpSignature);
+            }
+        } catch (fetchErr) {
+            console.warn("⚠️ Razorpay fetch details warning:", fetchErr.message);
+        }
+
+        if (!paymentRecord) {
+            paymentRecord = {
+                razorpayPaymentId: rzpPaymentId,
+                razorpayOrderId: rzpOrderId || "",
+                razorpaySignature: rzpSignature || "",
+                method: 'Online',
+                amount: Number(booking.billSummary?.totalAmount || 0),
+                currency: "INR",
+                status: 'captured',
+                paidAt: new Date()
+            };
+        }
+
+        // Save Booking Status
+        booking.status = 'Confirmed';
+        booking.paymentStatus = 'Paid';
+        booking.paymentMethod = paymentRecord.method || 'Online';
+        booking.paymentDetails = paymentRecord;
+        booking.tracking = {
+            otp: Math.floor(100000 + Math.random() * 900000).toString()
+        };
+        await booking.save();
+
+        console.log(`✅ [DEBUG: verifyLabPayment] Step 2: Booking #${booking.bookingId} successfully confirmed & saved.`);
+
+        // Deduct Subscription Quota if Free Delivery was applied
+        if (booking.billSummary?.deliveryCharge === 0 && booking.collectionType === 'Home Collection') {
+            await deductBenefitCount(userId, 'freeLabDeliveriesCount');
+            console.log(`✨ [DEBUG: verifyLabPayment] Deducted 1 free lab delivery count.`);
+        }
+
+        // Update Coupon Usage
+        if (booking.billSummary?.appliedCoupon?.couponId) {
+            await Coupon.findByIdAndUpdate(booking.billSummary.appliedCoupon.couponId, {
+                $push: { usedBy: { userId, usageCount: 1 } }
+            });
+        }
+
+        // Auto-Clear Lab Cart
+        await Cart.findOneAndUpdate(
+            { userId },
+            { 
+                $set: { 
+                    "labCart.items": [], 
+                    "labCart.labId": null, 
+                    "labCart.categoryType": null,
+                    "labCart.selectedPatients": []
+                } 
+            }
         );
+        console.log(`🧹 [DEBUG: verifyLabPayment] Lab cart cleared.`);
 
-        res.json({
+        // Real-Time Notification to Lab
+        try {
+            await notifyAdminsAndVendor(
+                booking.labId,
+                'lab',
+                "🧪 New Lab Booking Paid & Confirmed!",
+                `Booking #${booking.bookingId} for ₹${booking.billSummary.totalAmount} has been confirmed.`,
+                { bookingId: booking._id.toString(), orderId: booking.bookingId, type: 'new_lab_booking' }
+            );
+        } catch (notifErr) {}
+
+        return res.status(200).json({
             success: true,
-            message: "Lab booking successfully verified and confirmed!",
+            message: "Payment successfully verified and lab booking confirmed!",
+            bookingId: booking.bookingId,
+            pickupOtp: booking.tracking.otp,
             data: booking
         });
 
     } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
+        console.error("🚨 [DEBUG: verifyLabPayment EXCEPTION]:", error);
+        return res.status(500).json({ 
+            success: false, 
+            message: error.message || "Internal Server Error during payment verification." 
+        });
     }
 };
 
@@ -2034,7 +2275,7 @@ const getPaginatedReviews = async (req, res) => {
         const skip = (page - 1) * limit;
 
         // Validation for Polymorphic target Types
-        const allowedTypes = ['Doctor', 'Lab', 'Pharmacy', 'Food', 'Driver'];
+        const allowedTypes = ['Doctor', 'Lab', 'Pharmacy',  'Ambulance', 'Driver'];
         if (!allowedTypes.includes(targetType)) {
             return res.status(400).json({ success: false, message: "Invalid target type for reviews." });
         }
@@ -2077,9 +2318,11 @@ const getPaginatedReviews = async (req, res) => {
 const getModelByTargetType = (type) => {
     const models = {
         'Doctor': Doctor,
+        
         'Lab': Lab,
         'Pharmacy': Pharmacy,
-        'Food': Food,
+        
+        'Ambulance': Ambulance,
         'Driver': Driver
     };
     return models[type] || null;
@@ -2241,10 +2484,6 @@ const getReviewByOrderId = async (req, res) => {
 };
 
 
-
-
-
-
 // NAYA: Kisi specific Master Test ko kaun-kaun si Labs provide kar rahi hain?
 const getLabsByMasterTest = async (req, res) => {
     try {
@@ -2356,23 +2595,86 @@ const getMasterPackageDetails = async (req, res) => {
         const { id } = req.params;
         const { lat, lng } = req.body;
 
-        const masterPkgId = new mongoose.Types.ObjectId(id);
+        // 🚨 Validate if ObjectId format is correct to prevent server crashes
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({ success: false, message: "Invalid ID format." });
+        }
 
-        // 1. Master Package ki info lein
-        const masterData = await MasterLabPackage.findById(masterPkgId).populate('tests', 'testName parameters').lean();
-        if (!masterData) return res.status(404).json({ success: false, message: "Master Package not found" });
+        const targetId = new mongoose.Types.ObjectId(id);
+        let masterData = null;
+        let queryCriteria = {};
 
-        // 2. KM Limit
+        // 🚨 STEP 1: Pehle check karein kya yeh ID listed custom/standard "LabPackage" ki hai?
+        const labPkg = await LabPackage.findById(targetId)
+            .populate({ path: 'tests', model: 'MasterLabTest', select: 'testName parameters' })
+            .populate('masterPackageId')
+            .lean();
+
+        if (labPkg) {
+            // CASE A: User clicked on a listed package from a specific Lab profile [cite: labPackageSchema]
+            if (labPkg.isCustom) {
+                // Custom package has no masterPackageId, so map LabPackage fields to standard MasterLabPackage structure [cite: labPackageSchema]
+                masterData = {
+                    _id: labPkg._id,
+                    packageName: labPkg.packageName,
+                    shortDescription: labPkg.shortDescription || "",
+                    longDescription: labPkg.longDescription || "",
+                    mainCategory: labPkg.mainCategory || "Pathology",
+                    category: labPkg.category || "",
+                    tests: labPkg.tests || [],
+                    sampleTypes: labPkg.sampleTypes || labPkg.sampleType || [],
+                    reportTime: labPkg.reportTime || "24 Hours",
+                    isFastingRequired: labPkg.isFastingRequired || false,
+                    fastingDuration: labPkg.fastingDuration || "",
+                    preparations: labPkg.preparations || [],
+                    detailedDescription: labPkg.detailedDescription || [],
+                    faqs: labPkg.faqs || [],
+                    gender: labPkg.gender || "Both",
+                    ageGroup: labPkg.ageGroup || "All",
+                    tags: labPkg.tags || [],
+                    lifestyleTags: labPkg.lifestyleTags || [],
+                    packageImage: labPkg.packageImage || null,
+                    standardMRP: labPkg.mrp,
+                    isCustom: true // 👈 Dynamic flag
+                };
+                
+                // Since this is custom to one lab, search criteria is only for this specific package [cite: saveLabPackage]
+                queryCriteria = { _id: labPkg._id };
+            } else {
+                // If Standard Template Package listed by lab, load the original master catalog document
+                const masterPkgId = labPkg.masterPackageId?._id || labPkg.masterPackageId;
+                masterData = await MasterLabPackage.findById(masterPkgId).populate('tests', 'testName parameters').lean();
+                if (!masterData) {
+                    return res.status(404).json({ success: false, message: "Master template of this listed package not found." });
+                }
+                queryCriteria = {
+                    $or: [
+                        { masterPackageId: masterPkgId },
+                        { packageName: masterData.packageName }
+                    ]
+                };
+            }
+        } else {
+            // CASE B: User clicked on a Global Standard Catalog package directly (ID belongs to MasterLabPackage) [cite: getMasterPackageDetails]
+            masterData = await MasterLabPackage.findById(targetId).populate('tests', 'testName parameters').lean();
+            if (!masterData) {
+                return res.status(404).json({ success: false, message: "Master Package not found" }); // Mapped exactly to original error message [cite: getMasterPackageDetails]
+            }
+            queryCriteria = {
+                $or: [
+                    { masterPackageId: targetId },
+                    { packageName: masterData.packageName }
+                ]
+            };
+        }
+
+        // 2. Fetch KM Limit
         const limitConfig = await VendorKMLimit.findOne({ vendorType: 'Lab', isActive: true });
         const maxRadius = limitConfig ? limitConfig.kmLimit : 100;
 
-        // 3. UPDATED QUERY: ID se dhoondo YA Name se (Fallback logic)
-        // Isse agar ID miss bhi ho gayi ho par Name same hai, toh wo vendor dikhega
+        // 3. Find all active labs offering this package (custom or standard)
         const labsPackages = await LabPackage.find({
-            $or: [
-                { masterPackageId: masterPkgId },
-                { packageName: masterData.packageName } // Agar ID link nahi hai par Name wahi hai
-            ],
+            ...queryCriteria,
             isActive: true 
         })
         .populate({
@@ -2380,8 +2682,6 @@ const getMasterPackageDetails = async (req, res) => {
             match: { profileStatus: 'Approved', isActive: true }
         })
         .lean();
-
-        console.log(`DEBUG: Found ${labsPackages.length} packages by ID or Name`);
 
         const availableInLabs = [];
 
@@ -2413,12 +2713,12 @@ const getMasterPackageDetails = async (req, res) => {
                     discount: item.mrp > 0 ? Math.round(((item.mrp - item.offerPrice) / item.mrp) * 100) : 0,
                     isHomeCollection: item.labId.isHomeCollectionAvailable,
                     isRapid: item.labId.isRapidServiceAvailable,
-                    labPackageId: item._id
+                    labPackageId: item._id // 👈 Returns Listed ID for correct checkout selections
                 });
             }
         }
 
-        // Duplicates remove karein (In case ek hi vendor ID aur Name dono se match ho jaye)
+        // Remove duplicates safely
         const uniqueLabs = [];
         const seenLabIds = new Set();
         for (let lab of availableInLabs) {
@@ -2440,6 +2740,7 @@ const getMasterPackageDetails = async (req, res) => {
         });
 
     } catch (error) { 
+        console.error("getMasterPackageDetails Error:", error);
         res.status(500).json({ success: false, message: error.message }); 
     }
 };
@@ -2831,64 +3132,168 @@ const searchMasterTestsForPrescription = async (req, res) => {
     }
 };
 
-// 1. CREATE LAB PRESCRIPTION REQUEST (Accepts strictly manual test names list)
+// @desc    Create Lab Prescription Request (Validates Slot Availability Before Holding)
+// @route   POST /user/labs/prescription-request
+// @access  Private (User)
 const createLabPrescriptionRequest = async (req, res) => {
     try {
-        const { labId, patients, collectionType, address, requestedTests, appointmentDate, appointmentTime } = req.body;
         const userId = req.user.id;
+        let {
+            labId, collectionType, appointmentDate, appointmentTime,
+            patients, address, requestedTests
+        } = req.body;
 
-        if (!req.file) {
-            return res.status(400).json({ success: false, message: "Please upload prescription image file." });
+        if (typeof patients === 'string') {
+            try { patients = JSON.parse(patients); } catch (e) {}
+        }
+        if (typeof address === 'string') {
+            try { address = JSON.parse(address); } catch (e) {}
+        }
+        if (typeof requestedTests === 'string') {
+            try { requestedTests = JSON.parse(requestedTests); } catch (e) {}
         }
 
-        const parsedPatients = typeof patients === 'string' ? JSON.parse(patients) : patients;
-        const parsedTests = typeof requestedTests === 'string' ? JSON.parse(requestedTests) : requestedTests;
+        if (!labId || !collectionType || !appointmentDate || !appointmentTime) {
+            return res.status(400).json({
+                success: false,
+                message: "labId, collectionType, appointmentDate, and appointmentTime are required."
+            });
+        }
 
-        const verifiedPatients = await mapPatients(userId, parsedPatients || ['Self']);
+        if (!req.file && (!req.body.prescriptionImage || req.body.prescriptionImage.trim() === "")) {
+            return res.status(400).json({
+                success: false,
+                message: "Prescription image file is required."
+            });
+        }
 
-        // 🚨 FIXED: Map requested tests array carrying master prices, productTypes, and master IDs [1]
-        const formattedRequestedTests = (parsedTests || []).map(test => {
-            const masterId = test.masterId || test.id;
-            return {
-                name: test.name || "General Diagnostic Test",
-                price: Number(test.price || 0), // 👈 Saved price fetched from master list [1]
-                masterId: masterId && mongoose.isValidObjectId(masterId) ? masterId : null,
-                productType: test.productType || 'Manual' // "LabTest", "LabPackage", or "Manual" if custom-typed
-            };
-        });
+        const uploadedImage = req.file ? `/uploads/pharmacy_prescriptions/${req.file.filename}` : req.body.prescriptionImage;
 
-        const tempReqId = `REQ-LAB-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+        // 🚨 RACE-CONDITION CHECK: Ensure the selected slot is not already fully booked
+        const config = await Availability.findOne({ vendorId: labId, vendorType: 'Lab' }).lean();
+        if (config && config.maxClientsPerSlot > 0) {
+            const startOfDay = moment(appointmentDate).startOf('day').toDate();
+            const endOfDay = moment(appointmentDate).endOf('day').toDate();
+
+            const [bookedCount, prescriptionHoldCount] = await Promise.all([
+                LabBooking.countDocuments({
+                    labId,
+                    appointmentDate: { $gte: startOfDay, $lte: endOfDay },
+                    appointmentTime: String(appointmentTime).trim(),
+                    status: { $nin: ['Cancelled', 'No-Show'] }
+                }),
+                LabPrescriptionRequest.countDocuments({
+                    labId,
+                    appointmentDate: { $gte: startOfDay, $lte: endOfDay },
+                    appointmentTime: String(appointmentTime).trim(),
+                    status: { $in: ['Pending Review', 'Reviewing', 'Bill Generated', 'Pending Payment'] }
+                })
+            ]);
+
+            if ((bookedCount + prescriptionHoldCount) >= config.maxClientsPerSlot) {
+                return res.status(400).json({
+                    success: false,
+                    errorType: "SLOT_ALREADY_BOOKED",
+                    message: `The selected time slot (${appointmentTime}) on ${appointmentDate} is already booked. Please choose another slot.`
+                });
+            }
+        }
+
+        const requestId = `HK-LREQ-${Date.now().toString().slice(-6)}${Math.floor(10 + Math.random() * 90)}`;
 
         const newRequest = await LabPrescriptionRequest.create({
-            requestId: tempReqId,
+            requestId,
             userId,
             labId,
-            prescriptionImage: req.file.path,
-            patients: verifiedPatients,
+            prescriptionImage: uploadedImage,
             collectionType,
-            address: typeof address === 'string' ? JSON.parse(address) : address,
-            requestedTests: formattedRequestedTests, // 👈 Saved formatted object array [1]
-            appointmentDate: appointmentDate ? new Date(appointmentDate) : undefined, 
-            appointmentTime: appointmentTime || null,                               
+            appointmentDate: new Date(appointmentDate),
+            appointmentTime: String(appointmentTime).trim(),
+            patients: Array.isArray(patients) && patients.length > 0 ? patients : [{
+                patientId: "Self",
+                name: req.user.name || "Patient",
+                relation: "Self"
+            }],
+            address: address || {},
+            requestedTests: Array.isArray(requestedTests) ? requestedTests : [],
             status: 'Pending Review'
         });
 
-        // Trigger Notification
-        await notifyAdminsAndVendor(
-            labId,
-            'lab',
-            "New Prescription Uploaded!",
-            `A new laboratory prescription request #${tempReqId} is pending your manual audit.`,
-            { requestId: newRequest._id.toString(), type: 'lab_prescription_review' }
-        );
+        // Notify Lab Vendor
+        try {
+            await sendPushNotification(
+                labId,
+                'lab',
+                "New Prescription Inquiry! 🔬",
+                `New diagnostic prescription inquiry #${requestId} received for ${appointmentTime}. Slot is locked for review.`,
+                { requestId: newRequest.requestId, type: 'new_lab_prescription_request' }
+            );
+        } catch (e) {}
 
         res.status(201).json({
             success: true,
-            message: "Prescription request placed successfully with test price configs!",
+            message: `Prescription request created and slot (${appointmentTime}) locked for review!`,
+            requestId: newRequest.requestId,
             data: newRequest
         });
+
     } catch (error) {
-        console.error("createLabPrescriptionRequest Error:", error);
+        console.error("Create Lab Prescription Request Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// @desc    Cancel Lab Prescription Request by User (Instantly frees the held time slot)
+// @route   PATCH /user/labs/prescription-request/cancel/:requestId
+// @access  Private (User)
+const cancelLabPrescriptionRequest = async (req, res) => {
+    try {
+        const { requestId } = req.params;
+        const { reason } = req.body;
+        const userId = req.user.id;
+
+        const request = await LabPrescriptionRequest.findOne({ requestId, userId });
+        if (!request) {
+            return res.status(404).json({ success: false, message: "Prescription request not found." });
+        }
+
+        if (request.status === 'Paid') {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Cannot cancel. This prescription has already been paid and converted into a confirmed lab booking." 
+            });
+        }
+
+        if (request.status === 'Cancelled' || request.status === 'Rejected') {
+            return res.status(400).json({ 
+                success: false, 
+                message: `Request is already in '${request.status}' state.` 
+            });
+        }
+
+        request.status = 'Cancelled';
+        request.rejectReason = reason || "Cancelled by user before payment";
+        await request.save();
+
+        // Notify Lab that hold was released
+        try {
+            await sendPushNotification(
+                request.labId,
+                'lab',
+                "Prescription Inquiry Cancelled",
+                `Prescription #${request.requestId} was cancelled by user. Slot (${request.appointmentTime}) is now free.`,
+                { requestId: request.requestId, type: 'prescription_request_cancelled' }
+            );
+        } catch (e) {}
+
+        res.status(200).json({
+            success: true,
+            message: "Prescription request cancelled successfully. Time slot has been freed.",
+            data: request
+        });
+
+    } catch (error) {
+        console.error("Cancel Lab Prescription Request Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
@@ -3131,6 +3536,100 @@ const verifyLabPrescriptionPayment = async (req, res) => {
 };
 
 
+// @desc    Retry Online Payment for a Pending Lab Booking (Generates Fresh Razorpay Order)
+// @route   POST /user/labs/retry-payment
+// @access  Private (User)
+const retryLabPayment = async (req, res) => {
+    try {
+        const userId = req.user?.id || req.user?._id;
+        const { bookingId } = req.body;
+
+        if (!bookingId) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "bookingId is required to retry payment." 
+            });
+        }
+
+        // 1. Locate Booking by MongoDB _id or Custom bookingId
+        const isObjectId = mongoose.isValidObjectId(bookingId);
+        const query = {
+            userId,
+            $or: [
+                { _id: isObjectId ? new mongoose.Types.ObjectId(bookingId) : new mongoose.Types.ObjectId() },
+                { bookingId: String(bookingId).trim() }
+            ]
+        };
+
+        const booking = await LabBooking.findOne(query);
+
+        if (!booking) {
+            return res.status(404).json({ 
+                success: false, 
+                message: "Lab booking record not found." 
+            });
+        }
+
+        // 2. Validate Payment State
+        if (booking.paymentStatus === 'Paid' || booking.status === 'Confirmed') {
+            return res.status(400).json({ 
+                success: false, 
+                message: "This booking is already paid and confirmed." 
+            });
+        }
+
+        if (booking.paymentMethod === 'COD') {
+            return res.status(400).json({ 
+                success: false, 
+                message: "This is a Cash on Collection (COD) booking. No online payment required." 
+            });
+        }
+
+        const totalPayable = Number(booking.billSummary?.totalAmount || 0);
+        if (totalPayable <= 0) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Payable amount is ₹0. No payment required." 
+            });
+        }
+
+        // 3. Generate Fresh Razorpay Order for the same Booking
+        const receiptId = `rcpt_retry_${booking.bookingId}_${Date.now().toString().slice(-4)}`;
+        const rzpOrder = await createRazorpayOrder(totalPayable, receiptId);
+
+        // Update Razorpay Order ID reference in booking
+        if (!booking.paymentDetails) {
+            booking.paymentDetails = {};
+        }
+        booking.paymentDetails.razorpayOrderId = rzpOrder.id;
+        booking.paymentMethod = 'Online';
+        booking.paymentStatus = 'Pending';
+        await booking.save();
+
+        console.log(`💳 [DEBUG: retryLabPayment] Fresh Razorpay Order #${rzpOrder.id} created for Booking #${booking.bookingId}`);
+
+        // 4. Return Razorpay Checkout Payload to Frontend
+        return res.status(200).json({
+            success: true,
+            message: "Fresh Razorpay payment order generated. Please complete payment.",
+            key_id: process.env.RAZORPAY_KEY_ID,
+            amount: rzpOrder.amount, // in paise (e.g. 53900 for ₹539)
+            razorpayOrderId: rzpOrder.id,
+            bookingId: booking.bookingId,
+            bookingMongoId: booking._id,
+            totalPayable: totalPayable
+        });
+
+    } catch (error) {
+        console.error("retryLabPayment Error:", error);
+        return res.status(500).json({ 
+            success: false, 
+            message: error.message || "Internal Server Error in retryLabPayment." 
+        });
+    }
+};
+
+
 
 
 
@@ -3151,8 +3650,10 @@ module.exports = {
     // Prescription Flow
     scanLabPrescription,searchMasterTestsForPrescription,
     createLabPrescriptionRequest,
+    cancelLabPrescriptionRequest,
     getUserLabPrescriptionRequests,
     getUserLabPrescriptionRequestDetails,
     payAndConfirmLabRequest,
-    verifyLabPrescriptionPayment
+    verifyLabPrescriptionPayment,
+    retryLabPayment
 };

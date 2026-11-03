@@ -12,51 +12,59 @@ const fs = require('fs');
 const path = require('path');
 const MasterReportTemplate = require('../../../models/MasterReportTemplate'); 
 
-// upload master tests // Example CSV Format: 
-// endpoint: POST /admin/lab/tests/upload
-// testName: CBC, parameters: Hb||WBC||RBC, faqs: What is CBC?:It is blood test||Why do it?:To check health
+// @desc    Upload Master Lab Tests via Excel/CSV (Automatically deletes temp file after DB import)
+// @route   POST /admin/lab/tests/upload
+// @access  Private (Admin)
 const uploadMasterTests = async (req, res) => {
     try {
-        if (!req.file) return res.status(400).json({ message: "Upload Excel/CSV file" });
+        if (!req.file) return res.status(400).json({ success: false, message: "Upload Excel/CSV file" });
 
         const workbook = xlsx.readFile(req.file.path);
         const data = xlsx.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]]);
 
         const formattedData = data.map(item => ({
-            testName: item.testName,
-            testCode: item.testCode,
-            mainCategory: item.mainCategory,
-            category: item.category,
-            sampleType: item.sampleType || 'NA',
-            pretestPreparation: item.pretestPreparation,
+            testName: item.testName ? String(item.testName).trim() : "Diagnostic Test",
+            testCode: item.testCode ? String(item.testCode).trim() : `TEST-${Date.now().toString().slice(-4)}`,
+            mainCategory: item.mainCategory || 'Pathology',
+            category: item.category || 'General Health',
+            sampleType: item.sampleType || 'Blood',
+            pretestPreparation: item.pretestPreparation || "No fasting required",
             standardMRP: item.standardMRP ? parseFloat(item.standardMRP) : 0,
-            
-            // Logic: "Hb||WBC" -> ["Hb", "WBC"]
             parameters: item.parameters ? item.parameters.split('||').map(s => s.trim()) : [],
-            
-            // Logic: "Q:A || Q:A" -> [{question:Q, answer:A}]
             faqs: item.faqs ? item.faqs.split('||').map(pair => {
                 const [q, a] = pair.split(':');
                 return { question: q?.trim(), answer: a?.trim() };
             }) : [],
-
-            // Logic: "Title:Desc || Title:Desc"
             detailedDescription: item.detailedDescription ? item.detailedDescription.split('||').map(pair => {
                 const [title, content] = pair.split(':');
                 return { sectionTitle: title?.trim(), sectionContent: content?.trim() };
             }) : []
         }));
 
-        await MasterLabTest.insertMany(formattedData, { ordered: false }); 
-        res.json({ success: true, message: "Master Test List Updated with FAQs & Details" });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        await MasterLabTest.insertMany(formattedData, { ordered: false });
+
+        // Clean up temporary excel file from disk storage
+        if (fs.existsSync(req.file.path)) {
+            fs.unlinkSync(req.file.path);
+        }
+
+        res.status(200).json({ 
+            success: true, 
+            message: `Successfully processed and imported ${formattedData.length} Master Tests. Temporary file deleted.` 
+        });
+    } catch (error) { 
+        if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+        console.error("Upload Master Tests Error:", error);
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
 
-// Upload Master Packages
-// endpoint: POST admin/lab/tests/upload-packages
+// @desc    Upload Master Lab Packages via Excel/CSV (Automatically deletes temp file after DB import)
+// @route   POST /admin/lab/tests/upload-packages
+// @access  Private (Admin)
 const uploadMasterPackages = async (req, res) => {
     try {
-        if (!req.file) return res.status(400).json({ message: "Upload Excel/CSV file" });
+        if (!req.file) return res.status(400).json({ success: false, message: "Upload Excel/CSV file" });
 
         const workbook = xlsx.readFile(req.file.path);
         const data = xlsx.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]]);
@@ -64,46 +72,34 @@ const uploadMasterPackages = async (req, res) => {
         let formattedData = [];
 
         for (let item of data) {
-            // 1. Logic: Excel se Test Names uthakar unki IDs find karna
             let testIds = [];
             if (item.tests) {
                 const testNamesArray = item.tests.split('||').map(t => t.trim());
-                // Database mein tests search karein
                 const foundTests = await MasterLabTest.find({ testName: { $in: testNamesArray } }).select('_id');
                 testIds = foundTests.map(t => t._id);
             }
 
             formattedData.push({
-                packageName: item.packageName,
-                shortDescription: item.shortDescription,
-                longDescription: item.longDescription,
+                packageName: item.packageName ? String(item.packageName).trim() : "Master Health Package",
+                shortDescription: item.shortDescription || "",
+                longDescription: item.longDescription || "",
                 mainCategory: item.mainCategory || 'Pathology',
-                category: item.category,
-                reportTime: item.reportTime,
+                category: item.category || 'Full Body',
+                reportTime: item.reportTime || "24 Hours",
                 standardMRP: item.standardMRP ? parseFloat(item.standardMRP) : 0,
-                
-                // Foreign Keys (Tests)
                 tests: testIds,
-                
-                // Simple Arrays: "Value1||Value2" -> ["Value1", "Value2"]
-                sampleTypes: item.sampleTypes ? item.sampleTypes.split('||').map(s => s.trim()) : [],
+                sampleTypes: item.sampleTypes ? item.sampleTypes.split('||').map(s => s.trim()) : ['Blood'],
                 preparations: item.preparations ? item.preparations.split('||').map(p => p.trim()) : [],
                 tags: item.tags ? item.tags.split('||').map(t => t.trim()) : [],
                 lifestyleTags: item.lifestyleTags ? item.lifestyleTags.split('||').map(l => l.trim()) : [],
-
-                // Booleans
                 isFastingRequired: item.isFastingRequired === 'TRUE' || item.isFastingRequired === true,
-                fastingDuration: item.fastingDuration,
+                fastingDuration: item.fastingDuration || "",
                 gender: item.gender || 'Both',
                 ageGroup: item.ageGroup || 'All',
-
-                // Object Arrays: "Q:A || Q:A"
                 faqs: item.faqs ? item.faqs.split('||').map(pair => {
                     const [q, a] = pair.split(':');
                     return { question: q?.trim(), answer: a?.trim() };
                 }) : [],
-
-                // Object Arrays: "Title:Desc || Title:Desc"
                 detailedDescription: item.detailedDescription ? item.detailedDescription.split('||').map(pair => {
                     const [title, content] = pair.split(':');
                     return { sectionTitle: title?.trim(), sectionContent: content?.trim() };
@@ -111,16 +107,22 @@ const uploadMasterPackages = async (req, res) => {
             });
         }
 
-        // Database mein insert karein (Duplicates skip karne ke liye ordered: false)
         await MasterLabPackage.insertMany(formattedData, { ordered: false });
+
+        // Clean up temporary excel file from disk storage
+        if (fs.existsSync(req.file.path)) {
+            fs.unlinkSync(req.file.path);
+        }
         
-        res.json({ 
+        res.status(200).json({ 
             success: true, 
-            message: `Successfully uploaded ${formattedData.length} Master Packages` 
+            message: `Successfully uploaded ${formattedData.length} Master Packages. Storage cleaned.` 
         });
 
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+        console.error("Upload Master Packages Error:", error);
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 
@@ -193,41 +195,93 @@ const editMasterData = async (req, res) => {
 
 // ================= APPROVAL FLOW SECTION =================
 
-// 5. GET ALL VENDOR REQUESTS (Pending)
+// 5. GET ALL VENDOR REQUESTS (Pending - with Populated Test Details)
 // endpoint: GET /admin/lab/tests/requests/pending
 const getPendingRequests = async (req, res) => {
     try {
-        // Medicine या अन्य प्रदाताओं की रिक्वेस्ट्स को रोकने के लिए 'vendorType: "Lab"' फ़िल्टर जोड़ा गया है
         const requests = await MasterRequest.find({ 
             status: 'Pending',
-            vendorType: 'Lab' // 👈 सिर्फ लैब वाले रिक्वेस्ट्स लोड होंगे
-        }).populate('vendorId', 'name');
+            vendorType: 'Lab'
+        })
+        .populate('vendorId', 'name email phone')
+        .sort({ createdAt: -1 })
+        .lean();
 
-        res.json({ success: true, data: requests });
+        // 1. Collect all test IDs from package requests
+        const testIds = [];
+        requests.forEach((reqItem) => {
+            if (reqItem.requestType === 'Package' && Array.isArray(reqItem.data?.tests)) {
+                testIds.push(...reqItem.data.tests);
+            }
+        });
+
+        // 2. Fetch test details (name, code, mrp, sampleType, mainCategory)
+        if (testIds.length > 0) {
+            const testDocs = await MasterLabTest.find({ _id: { $in: testIds } })
+                .select('testName testCode standardMRP sampleType mainCategory')
+                .lean();
+
+            const testMap = new Map();
+            testDocs.forEach((t) => testMap.set(t._id.toString(), t));
+
+            // 3. Populate test details into the tests array
+            requests.forEach((reqItem) => {
+                if (reqItem.requestType === 'Package' && Array.isArray(reqItem.data?.tests)) {
+                    reqItem.data.tests = reqItem.data.tests.map(
+                        (id) => testMap.get(id.toString()) || id
+                    );
+                }
+            });
+        }
+
+        res.status(200).json({ success: true, count: requests.length, data: requests });
     } catch (error) { 
-        res.status(500).json({ message: error.message }); 
+        console.error("getPendingRequests Error:", error);
+        res.status(500).json({ success: false, message: error.message }); 
     }
 };
-
-// 6. APPROVE REQUEST (Moves data to Master Collection)
-// endpoint: PUT /admin/lab/tests/request/approve/:requestId
+// 6. APPROVE OR REJECT REQUEST
+// endpoint: PUT /admin/lab/tests/requests/approve/:requestId
 const approveRequest = async (req, res) => {
     try {
         const { requestId } = req.params;
-        const request = await MasterRequest.findById(requestId);
-        if (!request) return res.status(404).json({ message: "Request not found" });
+        const { status = 'Approved', adminComment = '' } = req.body;
 
+        const request = await MasterRequest.findById(requestId);
+        if (!request) {
+            return res.status(404).json({ success: false, message: "Request not found" });
+        }
+
+        // If Admin decides to Reject
+        if (status === 'Rejected') {
+            request.status = 'Rejected';
+            request.adminComment = adminComment || "Request rejected by admin.";
+            await request.save();
+
+            return res.status(200).json({ 
+                success: true, 
+                message: "Request rejected successfully",
+                data: request 
+            });
+        }
+
+        // If Admin Approves: Move data to official Master Collection
         const Model = request.requestType === 'Test' ? MasterLabTest : MasterLabPackage;
-        
-        // Move data to Master
         await Model.create(request.data);
-        
+
         // Update Request Status
         request.status = 'Approved';
+        request.adminComment = adminComment || "Approved and imported to master catalog.";
         await request.save();
 
-        res.json({ success: true, message: "Request approved and moved to Master list" });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        res.status(200).json({ 
+            success: true, 
+            message: "Request approved and moved to Master list",
+            data: request 
+        });
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
 
 
@@ -421,7 +475,7 @@ const uploadTemplatesCSV = async (req, res) => {
             return res.status(400).json({ success: false, message: "Please upload a valid CSV/Excel file." });
         }
 
-        // 🚨 1. USE XLSX library to parse (Automatically strips carriage returns and handles both CSV & Excel!)
+        // Parse CSV/Excel file safely
         const workbook = xlsx.readFile(req.file.path);
         const sheetName = workbook.SheetNames[0];
         const data = xlsx.utils.sheet_to_json(workbook.Sheets[sheetName]);
@@ -429,7 +483,7 @@ const uploadTemplatesCSV = async (req, res) => {
         const groups = {};
 
         data.forEach(row => {
-            // 🚨 2. KEY NORMALIZATION: Remove \r, spaces and convert to lowercase [3]
+            // Key normalization: trim and lower-case
             const normalizedRow = {};
             Object.keys(row).forEach(key => {
                 const cleanKey = key.replace(/\r/g, '').trim().toLowerCase();
@@ -439,40 +493,63 @@ const uploadTemplatesCSV = async (req, res) => {
             const testName = (normalizedRow['testname'] || "").trim();
             const parameterName = (normalizedRow['parametername'] || "").trim();
             
-            // 🚨 3. SMART COLUMN RESOLVER: Auto-detect any column containing 'interpret'
+            // Resolve gender column from CSV (Male, Female, Both)
+            let genderVal = (normalizedRow['gender'] || "Both").trim();
+            if (!['Male', 'Female', 'Both'].includes(genderVal)) {
+                // Capitalize first letter check (e.g., 'male' -> 'Male')
+                genderVal = genderVal.charAt(0).toUpperCase() + genderVal.slice(1).toLowerCase();
+                if (!['Male', 'Female', 'Both'].includes(genderVal)) {
+                    genderVal = 'Both';
+                }
+            }
+
+            // Grouping key combining testName and gender
+            const groupKey = `${testName}___${genderVal}`;
+            
             const interpretationKey = Object.keys(normalizedRow).find(k => k.includes('interpret'));
             const interpText = interpretationKey ? String(normalizedRow[interpretationKey] || "").trim() : "";
 
-            if (!testName || !parameterName) return; // Skip empty rows
+            if (!testName || !parameterName) return;
 
-            if (!groups[testName]) {
-                groups[testName] = [];
+            if (!groups[groupKey]) {
+                groups[groupKey] = {
+                    testName: testName,
+                    gender: genderVal,
+                    parameters: []
+                };
             }
 
-            // Only the very first parameter (index 0) gets the interpretation [1]
-            const isFirstParam = groups[testName].length === 0;
+            const isFirstParam = groups[groupKey].parameters.length === 0;
 
-            groups[testName].push({
+            groups[groupKey].parameters.push({
                 name: parameterName,
                 unit: normalizedRow['unit'] ? String(normalizedRow['unit']).trim() : "",
                 minRef: normalizedRow['minref'] ? String(normalizedRow['minref']).trim() : "",
                 maxRef: normalizedRow['maxref'] ? String(normalizedRow['maxref']).trim() : "",
+                gender: genderVal,
                 method: normalizedRow['method'] ? String(normalizedRow['method']).trim() : "N/A",
                 machine: normalizedRow['machine'] ? String(normalizedRow['machine']).trim() : "Automated Analyzer",
-                interpretation: isFirstParam ? interpText : "" // 👈 Strictly saves only in first parameter! [1]
+                interpretation: isFirstParam ? interpText : ""
             });
         });
 
-        // 🚨 4. Bulk upsert directly into MongoDB
-        for (const testName of Object.keys(groups)) {
+        // Bulk upsert grouped records into MongoDB
+        for (const key of Object.keys(groups)) {
+            const groupItem = groups[key];
             await MasterReportTemplate.findOneAndUpdate(
-                { testName },
-                { $set: { parameters: groups[testName] } }, // parameters array has the nested interpretation!
-                { upsert: true, new: true } 
+                { testName: groupItem.testName, gender: groupItem.gender },
+                { 
+                    $set: { 
+                        testName: groupItem.testName,
+                        gender: groupItem.gender,
+                        parameters: groupItem.parameters 
+                    } 
+                },
+                { upsert: true, new: true }
             );
         }
 
-        // Delete temporary file safely
+        // Clean up uploaded temporary file
         try {
             fs.unlinkSync(req.file.path);
         } catch (unlinkErr) {
@@ -481,7 +558,7 @@ const uploadTemplatesCSV = async (req, res) => {
 
         res.json({
             success: true,
-            message: `Successfully processed ${Object.keys(groups).length} test templates. Database updated.`
+            message: `Successfully processed ${Object.keys(groups).length} test templates across genders. Database updated.`
         });
 
     } catch (error) {
@@ -493,21 +570,32 @@ const uploadTemplatesCSV = async (req, res) => {
 // 2. MANUAL CREATE REPORT TEMPLATE (Admin Panel)
 const createReportTemplate = async (req, res) => {
     try {
-        const { testName, parameters, interpretation } = req.body; // 👈 interpretation added
+        const { testName, gender, parameters, interpretation } = req.body;
 
         if (!testName || !parameters || !Array.isArray(parameters) || parameters.length === 0) {
             return res.status(400).json({ success: false, message: "testName and parameters array are required." });
         }
 
-        const exists = await MasterReportTemplate.findOne({ testName });
+        const targetGender = gender || 'Both';
+
+        const exists = await MasterReportTemplate.findOne({ testName, gender: targetGender });
         if (exists) {
-            return res.status(400).json({ success: false, message: "A template with this test name already exists." });
+            return res.status(400).json({ 
+                success: false, 
+                message: `A template for '${testName}' with gender '${targetGender}' already exists.` 
+            });
         }
+
+        // Map parameters with default interpretation on first param if provided
+        const formattedParams = parameters.map((param, index) => ({
+            ...param,
+            interpretation: index === 0 ? (interpretation || param.interpretation || "") : (param.interpretation || "")
+        }));
 
         const newTemplate = await MasterReportTemplate.create({ 
             testName, 
-            parameters,
-            interpretation: interpretation || "" // Saved successfully
+            gender: targetGender,
+            parameters: formattedParams
         });
         
         res.status(201).json({ success: true, message: "Template created manually successfully", data: newTemplate });
@@ -520,7 +608,19 @@ const createReportTemplate = async (req, res) => {
 const editReportTemplate = async (req, res) => {
     try {
         const { id } = req.params;
-        const updated = await MasterReportTemplate.findByIdAndUpdate(id, req.body, { new: true });
+        const { testName, gender, parameters, interpretation } = req.body;
+
+        const updateData = {};
+        if (testName) updateData.testName = testName.trim();
+        if (gender) updateData.gender = gender;
+        if (parameters && Array.isArray(parameters)) {
+            updateData.parameters = parameters.map((param, index) => ({
+                ...param,
+                interpretation: index === 0 ? (interpretation || param.interpretation || "") : (param.interpretation || "")
+            }));
+        }
+
+        const updated = await MasterReportTemplate.findByIdAndUpdate(id, { $set: updateData }, { new: true });
         
         if (!updated) {
             return res.status(404).json({ success: false, message: "Report template not found." });
@@ -546,25 +646,29 @@ const deleteReportTemplate = async (req, res) => {
     }
 };
 
-// 7. GET: LIST ALL REPORT TEMPLATES (Admin Table View with Search & Pagination)
-// endpoint: GET /admin/lab/tests/report-templates
+// 7. GET: LIST ALL REPORT TEMPLATES (Admin Table View with Search, Gender Filter & Pagination)
+// endpoint: GET /admin/lab/tests/report-templates?page=1&limit=20&gender=Female&search=CBC
 const listReportTemplatesAdmin = async (req, res) => {
     try {
         const page = parseInt(req.query.page) || 1;
-        const limit = parseInt(req.query.limit) || 20; // Default 20 templates per page
+        const limit = parseInt(req.query.limit) || 20;
         const skip = (page - 1) * limit;
-        const { search } = req.query;
+        const { search, gender } = req.query;
 
         let filter = {};
-        if (search) {
-            filter.testName = { $regex: search, $options: 'i' }; // Search by test name
+        if (search && search.trim() !== "") {
+            filter.testName = { $regex: search.trim(), $options: 'i' };
+        }
+        if (gender && ['Male', 'Female', 'Both'].includes(gender)) {
+            filter.gender = gender;
         }
 
         const total = await MasterReportTemplate.countDocuments(filter);
         const templates = await MasterReportTemplate.find(filter)
-            .sort({ createdAt: -1 }) // Newest templates first
+            .sort({ testName: 1, gender: 1, createdAt: -1 })
             .skip(skip)
-            .limit(limit);
+            .limit(limit)
+            .lean();
 
         res.json({
             success: true,
@@ -578,20 +682,24 @@ const listReportTemplatesAdmin = async (req, res) => {
     }
 };
 
-// 8. GET: FETCH SINGLE TEMPLATE DETAILS (For Admin Edit/Details Form)
+// 8. GET: FETCH SINGLE TEMPLATE DETAILS (For Admin Edit/Details Form with Gender Metadata)
 // endpoint: GET /admin/lab/tests/report-templates/details/:id
 const getReportTemplateDetailsAdmin = async (req, res) => {
     try {
         const { id } = req.params;
 
-        const template = await MasterReportTemplate.findById(id);
+        const template = await MasterReportTemplate.findById(id).lean();
         if (!template) {
             return res.status(404).json({ success: false, message: "Report template not found." });
         }
 
         res.json({
             success: true,
-            data: template
+            data: {
+                ...template,
+                gender: template.gender || 'Both',
+                totalParametersCount: template.parameters ? template.parameters.length : 0
+            }
         });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
@@ -611,4 +719,4 @@ module.exports = { uploadMasterTests, getMasterList, uploadMasterPackages, getMa
                     listReportTemplatesAdmin, getReportTemplateDetailsAdmin,
 
                     uploadTemplatesCSV,createReportTemplate, editReportTemplate, deleteReportTemplate
- }; 
+ };
