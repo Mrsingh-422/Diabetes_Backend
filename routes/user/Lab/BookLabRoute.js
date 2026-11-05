@@ -27,6 +27,8 @@ const {
     getUserLabPrescriptionRequestDetails,
     payAndConfirmLabRequest,
     verifyLabPrescriptionPayment,
+    getAllCategories,getTestsByCategory,
+    getBodyPartsList,getTestsByBodyPart
 
     
 } = require('../../../controllers/user/Lab/BookLab');
@@ -47,6 +49,14 @@ router.post('/standard-packages/search', searchStandardPackages); ///user/labs/s
 router.get('/standard-packages/female', getFemaleStandardPackages);
 router.get('/standard-tests/female', getFemaleStandardTests);
 
+
+
+// 2. Public Route (Place near top with other discovery routes)
+router.get('/categories/all', getAllCategories);
+// 2. Add route (Public access)
+router.get('/category-tests', getTestsByCategory);
+router.get('/body-parts', getBodyPartsList);
+router.get('/body-part-tests', getTestsByBodyPart);
 
 router.get('/suggestions', getSearchSuggestions); //user/labs/suggestions?query=Labname
 router.get('/lab-suggestions', getLabSuggestions); //user/labs/lab-suggestions?query=Labname

@@ -9,7 +9,8 @@ const { uploadMasterTests, getMasterList, uploadMasterPackages, getMasterPackage
                                         listReportTemplatesAdmin, getReportTemplateDetailsAdmin,
 
 
-                    uploadTemplatesCSV,createReportTemplate, editReportTemplate, deleteReportTemplate
+                    uploadTemplatesCSV,createReportTemplate, editReportTemplate, deleteReportTemplate,
+                    toggleMasterData
 
  } = require('../../../controllers/admin/Lab/TestUpload');
 
@@ -23,6 +24,7 @@ router.post('/search', protect('admin'), checkRoleAccess(29), searchMasterData);
 router.post('/create', protect('admin'), checkRoleAccess(29), createMasterData); // type: test/package
 router.put('/edit/:type/:id', protect('admin'), checkRoleAccess(29), editMasterData);
 router.delete('/delete/:type/:id', protect('admin'), checkRoleAccess(29), deleteMasterData);
+router.patch('/toggle/:type/:id', protect('admin'), checkRoleAccess(29), toggleMasterData);
 
 // Approval System
 router.get('/requests/pending', protect('admin'), checkRoleAccess(29), getPendingRequests);

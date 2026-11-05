@@ -815,6 +815,37 @@ const getMasterPackagesAdmin = async (req, res) => {
     }
 };
 
+// @desc    Toggle Active/Inactive Status for Master Test or Package
+// @route   PATCH /admin/lab/tests/toggle/:type/:id
+// @access  Private (Admin)
+const toggleMasterData = async (req, res) => {
+    try {
+        const { type, id } = req.params;
+        const Model = type === 'test' ? MasterLabTest : MasterLabPackage;
+
+        const item = await Model.findById(id);
+        if (!item) {
+            return res.status(404).json({ 
+                success: false, 
+                message: `${type === 'test' ? 'Test' : 'Package'} not found.` 
+            });
+        }
+
+        item.isActive = !item.isActive;
+        await item.save();
+
+        res.status(200).json({
+            success: true,
+            message: `${type === 'test' ? 'Test' : 'Package'} is now ${item.isActive ? 'Active' : 'Inactive'}.`,
+            data: {
+                id: item._id,
+                isActive: item.isActive
+            }
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
 
 
 
@@ -825,5 +856,5 @@ module.exports = { uploadMasterTests, getMasterList, uploadMasterPackages, getMa
                     getLabCategories, getPharmacyCategories,
                     listReportTemplatesAdmin, getReportTemplateDetailsAdmin,
 
-                    uploadTemplatesCSV,createReportTemplate, editReportTemplate, deleteReportTemplate,getMasterPackages
+                    uploadTemplatesCSV,createReportTemplate, editReportTemplate, deleteReportTemplate,getMasterPackages, toggleMasterData
  };

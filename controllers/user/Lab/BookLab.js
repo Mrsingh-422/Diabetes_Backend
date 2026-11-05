@@ -461,21 +461,25 @@ const searchStandardTests = async (req, res) => {
 
 // --- NEW: GET STANDARD CATALOG PACKAGES (For User Discovery) --- // pagination 20
 // GET /user/labs/standard-packages?category=Full Body Checkup
+
+
 const getStandardPackages = async (req, res) => {
     try {
         const page = parseInt(req.query.page) || 1;
         const limit = 20;
         const skip = (page - 1) * limit;
-        const { search, category } = req.query;
+        const { search, category, mainCategory, gender } = req.query;
 
         let matchQuery = { isActive: true };
-        if (search) matchQuery.packageName = new RegExp(search, 'i');
-        if (category) matchQuery.category = category;
+        if (search && search.trim() !== "") matchQuery.packageName = new RegExp(search.trim(), 'i');
+        if (category && category.trim() !== "") matchQuery.category = category.trim();
+        if (mainCategory && mainCategory.trim() !== "") matchQuery.mainCategory = mainCategory.trim();
+        if (gender && gender.trim() !== "") matchQuery.gender = { $in: [gender.trim(), 'Both'] };
 
         const aggregate = MasterLabPackage.aggregate([
             { $match: matchQuery },
             
-            // 1. LOOKUP VENDORS (Sirf Price aur Count nikalne ke liye)
+            // 1. Lookup active lab vendor offerings for price & count calculation
             {
                 $lookup: {
                     from: "labpackages",
@@ -485,28 +489,50 @@ const getStandardPackages = async (req, res) => {
                     pipeline: [{ $match: { isActive: true } }]
                 }
             },
+
+            // 2. Lookup tests from masterlabtests to extract only test names
+            {
+                $lookup: {
+                    from: "masterlabtests",
+                    localField: "tests",
+                    foreignField: "_id",
+                    as: "testsData",
+                    pipeline: [
+                        { $project: { _id: 0, testName: 1 } }
+                    ]
+                }
+            },
             
-            // 2. LIGHTWEIGHT FIELDS (Sirf zaroori data)
+            // 3. Compute counts & extract test names array
             {
                 $addFields: {
                     vendorCount: { $size: "$vendorList" },
                     minPrice: { $min: "$vendorList.offerPrice" },
-                    testCount: { $size: "$tests" } // Sirf ginti bhejein, pura data nahi
+                    testCount: { $size: "$tests" },
+                    testNames: "$testsData.testName" // 👈 Array of test name strings
                 }
             },
             
-            // 3. PROJECT: Heavy fields ko hata dein
+            // 4. Strict projection (Only requested lightweight fields)
             { 
                 $project: { 
-                    vendorList: 0, 
-                    tests: 0,        // <--- Tests array hata diya (Heavy field)
-                    description: 0,  // <--- Description bhi details mein dikhayenge
-                    precaution: 0    // <--- Precaution details mein
+                    _id: 1,
+                    packageName: 1,
+                    mainCategory: 1,
+                    category: 1,
+                    sampleTypes: 1,
+                    vendorCount: 1,
+                    minPrice: 1,
+                    testCount: 1,
+                    testNames: 1,
+                    standardMRP: 1,
+                    gender: 1
                 } 
             },
             
             { $sort: { vendorCount: -1, packageName: 1 } },
             
+            // 5. 20-item pagination facet
             {
                 $facet: {
                     metadata: [{ $count: "total" }],
@@ -516,13 +542,17 @@ const getStandardPackages = async (req, res) => {
         ]);
 
         const result = await aggregate;
-        res.json({
+        res.status(200).json({
             success: true,
             total: result[0].metadata[0]?.total || 0,
             currentPage: page,
+            totalPages: Math.ceil((result[0].metadata[0]?.total || 0) / limit),
             data: result[0].data
         });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (error) { 
+        console.error("getStandardPackages Error:", error);
+        res.status(500).json({ success: false, message: error.message }); 
+    }
 };
 
 // 2. SEARCH STANDARD PACKAGES (POST - Master Catalog)
@@ -3673,11 +3703,350 @@ const retryLabPayment = async (req, res) => {
     }
 };
 
+// @desc    Get Only Categories (Single Flat Array)
+// @route   GET /user/labs/categories/all
+// @access  Public
+const getAllCategories = async (req, res) => {
+    try {
+        // 1. Fetch all distinct categories and mainCategories from tests and packages
+        const [testMainCats, pkgMainCats, testSubCats, pkgSubCats] = await Promise.all([
+            MasterLabTest.distinct("mainCategory", { isActive: true }),
+            MasterLabPackage.distinct("mainCategory", { isActive: true }),
+            MasterLabTest.distinct("category", { isActive: true }),
+            MasterLabPackage.distinct("category", { isActive: true })
+        ]);
 
+        // 2. Combine and deduplicate into one single list
+        const categorySet = new Set(
+            [...testMainCats, ...pkgMainCats, ...testSubCats, ...pkgSubCats]
+                .filter(c => c && typeof c === 'string' && c.trim() !== '')
+                .map(c => c.trim())
+        );
 
+        // Ensure primary categories are always present
+        categorySet.add("Pathology");
+        categorySet.add("Radiology");
 
+        const categories = Array.from(categorySet).sort();
 
+        // 3. Return ONLY the category array
+        res.status(200).json({
+            success: true,
+            data: categories
+        });
+    } catch (error) {
+        console.error("getAllCategories Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
 
+// @desc    Get Tests By Selected Category (Prioritizes tests in vendor inventory first)
+// @route   GET /user/labs/category-tests
+// @access  Public
+const getTestsByCategory = async (req, res) => {
+    try {
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 20;
+        const skip = (page - 1) * limit;
+        const { category, search, labId, vendorId } = req.query;
+
+        let matchQuery = { isActive: true };
+
+        // 1. Matches against either mainCategory OR category dynamically
+        if (category && category.trim() !== "" && category.trim().toLowerCase() !== "all") {
+            const catRegex = new RegExp(`^${category.trim()}$`, "i");
+            matchQuery.$or = [
+                { mainCategory: catRegex },
+                { category: catRegex }
+            ];
+        }
+
+        // Optional keyword search
+        if (search && search.trim() !== "") {
+            matchQuery.testName = new RegExp(search.trim(), "i");
+        }
+
+        const targetVendorId = labId || vendorId;
+        const isValidVendorObjectId = targetVendorId && mongoose.isValidObjectId(targetVendorId);
+
+        const aggregate = MasterLabTest.aggregate([
+            { $match: matchQuery },
+
+            // 2. Lookup active vendor offerings in labtests
+            {
+                $lookup: {
+                    from: "labtests",
+                    localField: "_id",
+                    foreignField: "masterTestId",
+                    as: "vendorList",
+                    pipeline: [{ $match: { isActive: true } }]
+                }
+            },
+
+            // 3. Calculate vendor inventory presence & prices
+            {
+                $addFields: {
+                    vendorCount: { $size: "$vendorList" },
+                    // Calculate lowest available price, fallback to standardMRP if no vendor listed
+                    minPrice: {
+                        $cond: {
+                            if: { $gt: [{ $size: "$vendorList" }, 0] },
+                            then: { $min: "$vendorList.discountPrice" },
+                            else: "$standardMRP"
+                        }
+                    },
+                    // 🌟 Flag: 1 if ANY vendor has added this test to inventory, 0 if not
+                    hasVendor: {
+                        $cond: {
+                            if: { $gt: [{ $size: "$vendorList" }, 0] },
+                            then: 1,
+                            else: 0
+                        }
+                    },
+                    // Optional: Flag if added by a specific labId passed in query
+                    isSpecificVendorTest: isValidVendorObjectId ? {
+                        $cond: {
+                            if: {
+                                $in: [
+                                    new mongoose.Types.ObjectId(targetVendorId),
+                                    "$vendorList.labId"
+                                ]
+                            },
+                            then: 1,
+                            else: 0
+                        }
+                    } : { $literal: 0 }
+                }
+            },
+
+            // 4. Clean projection
+            {
+                $project: {
+                    vendorList: 0,
+                    __v: 0
+                }
+            },
+
+            // 5. 🌟 SORTING PRIORITY: Tests with vendor in inventory ALWAYS appear first
+            {
+                $sort: {
+                    isSpecificVendorTest: -1,
+                    hasVendor: -1,      // 👈 Tests in vendor inventory first (1 before 0)
+                    vendorCount: -1,    // 👈 More offering labs first
+                    testName: 1         // 👈 Alphabetical fallback
+                }
+            },
+
+            // 6. 20-item pagination
+            {
+                $facet: {
+                    metadata: [{ $count: "total" }],
+                    data: [{ $skip: skip }, { $limit: limit }]
+                }
+            }
+        ]);
+
+        const result = await aggregate;
+        const total = result[0].metadata[0]?.total || 0;
+
+        res.status(200).json({
+            success: true,
+            category: category || "All",
+            total,
+            currentPage: page,
+            totalPages: Math.ceil(total / limit),
+            data: result[0].data
+        });
+    } catch (error) {
+        console.error("getTestsByCategory Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// 1. GET DYNAMIC LIST OF BODY PARTS / ORGANS (Pulls directly from DB, auto-detects new admin categories)
+// @route   GET /user/labs/body-parts
+// @access  Public
+const getBodyPartsList = async (req, res) => {
+    try {
+        // Fetch all distinct categories currently stored in database
+        const categories = await MasterLabTest.distinct("category", { isActive: true });
+
+        // Non-body-part terms to filter out (diseases, symptoms, routine types)
+        const nonOrganExclusion = /fever|allergy|infection|viral|routine|wellness|general|covid|immune|inflammation/i;
+
+        const organSet = new Set();
+
+        categories.forEach(cat => {
+            if (cat && typeof cat === 'string' && cat.trim() !== '') {
+                const cleanCat = cat.trim();
+
+                // If it is not a symptom or non-organ term, process as a body part / organ
+                if (!nonOrganExclusion.test(cleanCat)) {
+                    // Clean suffixes (e.g. "Kidney Health" -> "Kidney", "Heart Care" -> "Heart")
+                    const normalized = cleanCat
+                        .replace(/\b(health|care|tests?|panel|checkup|profile)\b/gi, '')
+                        .trim();
+
+                    if (normalized.length > 2) {
+                        // Capitalize first letter
+                        const formatted = normalized.charAt(0).toUpperCase() + normalized.slice(1);
+                        organSet.add(formatted);
+                    }
+                }
+            }
+        });
+
+        const dynamicBodyParts = Array.from(organSet).sort();
+
+        res.status(200).json({
+            success: true,
+            totalCount: dynamicBodyParts.length,
+            data: dynamicBodyParts
+        });
+    } catch (error) {
+        console.error("getBodyPartsList Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// 2. GET TESTS BY SELECTED BODY PART (100% Dynamic, Vendor Inventory Prioritized First, Deduplicated)
+// @route   GET /user/labs/body-part-tests
+// @access  Public
+const getTestsByBodyPart = async (req, res) => {
+    try {
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 20;
+        const skip = (page - 1) * limit;
+        const { bodyPart, search, labId, vendorId } = req.query;
+
+        if (!bodyPart || bodyPart.trim() === "") {
+            return res.status(400).json({
+                success: false,
+                message: "Query parameter 'bodyPart' is required."
+            });
+        }
+
+        const cleanPart = bodyPart.trim();
+        const partRegex = new RegExp(cleanPart, "i");
+
+        // Optional standard medical synonyms helper (complements dynamic search without breaking it)
+        const medicalSynonyms = {
+            "kidney": [/kidney/i, /renal/i, /kft/i, /rft/i, /creatinine/i, /microalbumin/i],
+            "liver": [/liver/i, /lft/i, /hepatic/i, /bilirubin/i, /sgpt/i],
+            "heart": [/heart/i, /cardiac/i, /lipid/i, /ecg/i, /troponin/i],
+            "lungs": [/lung/i, /pulmonary/i, /chest/i, /respiratory/i]
+        };
+
+        const lowerKey = cleanPart.toLowerCase();
+        const searchPatterns = medicalSynonyms[lowerKey] || [partRegex];
+
+        // Match tests where category, testName, or parameters match the organ
+        let matchQuery = {
+            isActive: true,
+            $or: [
+                { category: { $in: searchPatterns } },
+                { testName: { $in: searchPatterns } },
+                { parameters: { $in: searchPatterns } }
+            ]
+        };
+
+        if (search && search.trim() !== "") {
+            matchQuery.testName = new RegExp(search.trim(), "i");
+        }
+
+        const targetVendorId = labId || vendorId;
+        const isValidVendorObjectId = targetVendorId && mongoose.isValidObjectId(targetVendorId);
+
+        const aggregate = MasterLabTest.aggregate([
+            { $match: matchQuery },
+
+            // Lookup active vendor offerings in labtests
+            {
+                $lookup: {
+                    from: "labtests",
+                    localField: "_id",
+                    foreignField: "masterTestId",
+                    as: "vendorList",
+                    pipeline: [{ $match: { isActive: true } }]
+                }
+            },
+
+            // Compute vendor inventory presence & prices
+            {
+                $addFields: {
+                    vendorCount: { $size: "$vendorList" },
+                    minPrice: {
+                        $cond: {
+                            if: { $gt: [{ $size: "$vendorList" }, 0] },
+                            then: { $min: "$vendorList.discountPrice" },
+                            else: "$standardMRP"
+                        }
+                    },
+                    // 🌟 Flag: 1 if this test is present in any active lab inventory, 0 if not
+                    hasVendor: {
+                        $cond: {
+                            if: { $gt: [{ $size: "$vendorList" }, 0] },
+                            then: 1,
+                            else: 0
+                        }
+                    },
+                    isSpecificVendorTest: isValidVendorObjectId ? {
+                        $cond: {
+                            if: {
+                                $in: [
+                                    new mongoose.Types.ObjectId(targetVendorId),
+                                    "$vendorList.labId"
+                                ]
+                            },
+                            then: 1,
+                            else: 0
+                        }
+                    } : { $literal: 0 }
+                }
+            },
+
+            {
+                $project: {
+                    vendorList: 0,
+                    __v: 0
+                }
+            },
+
+            // 🌟 SORTING ENGINE: Tests in vendor inventory ALWAYS appear first
+            {
+                $sort: {
+                    isSpecificVendorTest: -1,
+                    hasVendor: -1,      // 👈 1 (in lab inventory) before 0
+                    vendorCount: -1,    // 👈 more offering labs first
+                    testName: 1         // 👈 alphabetical
+                }
+            },
+
+            // 20-item pagination
+            {
+                $facet: {
+                    metadata: [{ $count: "total" }],
+                    data: [{ $skip: skip }, { $limit: limit }]
+                }
+            }
+        ]);
+
+        const result = await aggregate;
+        const total = result[0].metadata[0]?.total || 0;
+
+        res.status(200).json({
+            success: true,
+            bodyPart: cleanPart,
+            total,
+            currentPage: page,
+            totalPages: Math.ceil(total / limit),
+            data: result[0].data
+        });
+    } catch (error) {
+        console.error("getTestsByBodyPart Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
 module.exports = { 
         getStandardCatalogTests,searchStandardTests, getStandardPackages, searchStandardPackages,getFemaleStandardPackages,getFemaleStandardTests,getSearchSuggestions,getLabSuggestions,
     getLabs, getLabDetails,getLabInventoryTests,searchLabInventoryTests,getLabInventoryPackages,searchLabInventoryPackages,
@@ -3699,5 +4068,5 @@ module.exports = {
     getUserLabPrescriptionRequestDetails,
     payAndConfirmLabRequest,
     verifyLabPrescriptionPayment,
-    retryLabPayment
+    retryLabPayment,getAllCategories,getTestsByCategory,getBodyPartsList,getTestsByBodyPart
 };
