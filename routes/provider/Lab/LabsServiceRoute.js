@@ -24,7 +24,7 @@ router.get('/packages/standard-catalog', getStandardPackages);
 
 
 // --- MASTER TESTS ---
-router.get('/tests/master-tests', protect('lab'), getMasterList);
+router.get('/tests/master-tests', getMasterList);
 router.get('/tests/master-details/:masterTestId', protect('lab'), getMasterTestDetails);
 router.get('/packages/master-packages', protect('lab'), getMasterPackages);
 router.get('/packages/master-details/:id', protect('lab'), getMasterPackageDetails);
