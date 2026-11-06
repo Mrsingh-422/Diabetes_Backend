@@ -4047,6 +4047,156 @@ const getTestsByBodyPart = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+// 1. GET ALL UNIQUE MAIN CATEGORIES (100% Dynamic from DB)
+// @route   GET /user/labs/main-categories
+// @access  Public
+const getMainCategories = async (req, res) => {
+    try {
+        // Fetch distinct mainCategory values directly from both tests and packages
+        const [testMainCats, pkgMainCats] = await Promise.all([
+            MasterLabTest.distinct("mainCategory", { isActive: true }),
+            MasterLabPackage.distinct("mainCategory", { isActive: true })
+        ]);
+
+        // Deduplicate and filter out empty values
+        const categories = Array.from(
+            new Set([...testMainCats, ...pkgMainCats].filter(c => c && typeof c === 'string' && c.trim() !== ''))
+        ).map(c => c.trim()).sort();
+
+        res.status(200).json({
+            success: true,
+            totalCount: categories.length,
+            data: categories // e.g. ["Clinical Pathology", "Endocrinology", "Genetics", "Microbiology", "Parasitology", "Pathology", "Radiology"]
+        });
+    } catch (error) {
+        console.error("getUniqueMainCategories Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// 2. GET TESTS BY SELECTED MAIN CATEGORY (Vendor Inventory Prioritized First, 100% Dynamic)
+// @route   GET /user/labs/main-category-tests
+// @access  Public
+const getTestsByMainCategory = async (req, res) => {
+    try {
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 20;
+        const skip = (page - 1) * limit;
+        const { mainCategory, search, labId, vendorId } = req.query;
+
+        if (!mainCategory || mainCategory.trim() === "") {
+            return res.status(400).json({
+                success: false,
+                message: "Query parameter 'mainCategory' is required."
+            });
+        }
+
+        const cleanCategory = mainCategory.trim();
+
+        // 1. Case-insensitive exact match for mainCategory
+        let matchQuery = {
+            isActive: true,
+            mainCategory: new RegExp(`^${cleanCategory}$`, "i")
+        };
+
+        if (search && search.trim() !== "") {
+            matchQuery.testName = new RegExp(search.trim(), "i");
+        }
+
+        const targetVendorId = labId || vendorId;
+        const isValidVendorObjectId = targetVendorId && mongoose.isValidObjectId(targetVendorId);
+
+        const aggregate = MasterLabTest.aggregate([
+            { $match: matchQuery },
+
+            // 2. Lookup active vendor offerings in labtests
+            {
+                $lookup: {
+                    from: "labtests",
+                    localField: "_id",
+                    foreignField: "masterTestId",
+                    as: "vendorList",
+                    pipeline: [{ $match: { isActive: true } }]
+                }
+            },
+
+            // 3. Compute counts & vendor inventory flags
+            {
+                $addFields: {
+                    vendorCount: { $size: "$vendorList" },
+                    minPrice: {
+                        $cond: {
+                            if: { $gt: [{ $size: "$vendorList" }, 0] },
+                            then: { $min: "$vendorList.discountPrice" },
+                            else: "$standardMRP"
+                        }
+                    },
+                    // 🌟 Flag: 1 if this test is present in any active lab inventory, 0 if not
+                    hasVendor: {
+                        $cond: {
+                            if: { $gt: [{ $size: "$vendorList" }, 0] },
+                            then: 1,
+                            else: 0
+                        }
+                    },
+                    // Optional: Flag if added by a specific labId passed in query
+                    isSpecificVendorTest: isValidVendorObjectId ? {
+                        $cond: {
+                            if: {
+                                $in: [
+                                    new mongoose.Types.ObjectId(targetVendorId),
+                                    "$vendorList.labId"
+                                ]
+                            },
+                            then: 1,
+                            else: 0
+                        }
+                    } : { $literal: 0 }
+                }
+            },
+
+            {
+                $project: {
+                    vendorList: 0,
+                    __v: 0
+                }
+            },
+
+            // 4. 🌟 SORTING PRIORITY: Tests with active lab vendors come FIRST, non-inventory tests come LAST
+            {
+                $sort: {
+                    isSpecificVendorTest: -1,
+                    hasVendor: -1,      // 👈 1 (in lab inventory) before 0
+                    vendorCount: -1,    // 👈 Higher offering lab count first
+                    testName: 1         // 👈 Alphabetical fallback
+                }
+            },
+
+            // 5. 20-item pagination facet
+            {
+                $facet: {
+                    metadata: [{ $count: "total" }],
+                    data: [{ $skip: skip }, { $limit: limit }]
+                }
+            }
+        ]);
+
+        const result = await aggregate;
+        const total = result[0].metadata[0]?.total || 0;
+
+        res.status(200).json({
+            success: true,
+            mainCategory: cleanCategory,
+            total,
+            currentPage: page,
+            totalPages: Math.ceil(total / limit),
+            data: result[0].data
+        });
+    } catch (error) {
+        console.error("getTestsByMainCategory Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
 module.exports = { 
         getStandardCatalogTests,searchStandardTests, getStandardPackages, searchStandardPackages,getFemaleStandardPackages,getFemaleStandardTests,getSearchSuggestions,getLabSuggestions,
     getLabs, getLabDetails,getLabInventoryTests,searchLabInventoryTests,getLabInventoryPackages,searchLabInventoryPackages,
@@ -4068,5 +4218,6 @@ module.exports = {
     getUserLabPrescriptionRequestDetails,
     payAndConfirmLabRequest,
     verifyLabPrescriptionPayment,
-    retryLabPayment,getAllCategories,getTestsByCategory,getBodyPartsList,getTestsByBodyPart
+    retryLabPayment,getAllCategories,getTestsByCategory,getBodyPartsList,getTestsByBodyPart,
+       getMainCategories, getTestsByMainCategory 
 };

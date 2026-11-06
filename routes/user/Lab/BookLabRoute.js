@@ -28,7 +28,8 @@ const {
     payAndConfirmLabRequest,
     verifyLabPrescriptionPayment,
     getAllCategories,getTestsByCategory,
-    getBodyPartsList,getTestsByBodyPart
+    getBodyPartsList,getTestsByBodyPart,
+    getMainCategories, getTestsByMainCategory 
 
     
 } = require('../../../controllers/user/Lab/BookLab');
@@ -57,6 +58,9 @@ router.get('/categories/all', getAllCategories);
 router.get('/category-tests', getTestsByCategory);
 router.get('/body-parts', getBodyPartsList);
 router.get('/body-part-tests', getTestsByBodyPart);
+// 2. Public Discovery Routes (No auth token required for browsing)
+router.get('/main-categories', getMainCategories);
+router.get('/main-category-tests', getTestsByMainCategory);
 
 router.get('/suggestions', getSearchSuggestions); //user/labs/suggestions?query=Labname
 router.get('/lab-suggestions', getLabSuggestions); //user/labs/lab-suggestions?query=Labname
