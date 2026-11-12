@@ -21,7 +21,10 @@ const masterPackageSchema = new mongoose.Schema({
     // Content
     detailedDescription: [{ sectionTitle: String, sectionContent: String }],
     faqs: [{ question: String, answer: String }],
-
+      isAdminCreated: {
+    type: Boolean,
+    default: true
+},
     // Marketing & Filters
     gender: { type: String, enum: ['Male', 'Female', 'Both'], default: 'Both' },
     ageGroup: { type: String, default: 'All' },

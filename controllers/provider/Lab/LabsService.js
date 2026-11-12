@@ -305,151 +305,25 @@ const saveLabPackage = async (req, res) => {
         res.status(500).json({ success: false, message: error.message }); 
     }
 };
-// @desc    Get All Packages for Vendor (Merged: Vendor's Active Inventory + Admin Master Packages Available to Add)
-// @route   GET /provider/labs/services/packages/my-packages
-// @access  Private (Lab / clinic-lab )
+// =========================================================================
+// 2. VENDOR ACTIVE INVENTORY PACKAGES (Only What This Lab Has Added)
+// Endpoint: GET /provider/labs/services/packages/my-packages
+// =========================================================================
 const getMyPackages = async (req, res) => {
     try {
         const labId = req.user.id;
-        const { search, category, mainCategory, filter = 'all' } = req.query;
 
-        // =========================================================================
-        // 1. Fetch Vendor's Already Added Packages (from LabPackage collection)
-        // =========================================================================
-        let labQuery = { labId };
-        if (mainCategory && mainCategory.trim() !== '') {
-            labQuery.mainCategory = new RegExp(`^${mainCategory.trim()}$`, 'i');
-        }
-        if (category && category.trim() !== '') {
-            labQuery.category = new RegExp(`^${category.trim()}$`, 'i');
-        }
-        if (search && search.trim() !== '') {
-            labQuery.packageName = new RegExp(search.trim(), 'i');
-        }
-
-        const myPackages = await LabPackage.find(labQuery)
-            .populate('tests', 'testName testCode sampleType mainCategory standardMRP parameters')
-            .populate('masterPackageId')
+        // Sirf is vendor ki apni inventory se data fetch hoga
+        const packages = await LabPackage.find({ labId })
+            .populate('tests', 'testName testCode sampleType standardMRP')
             .sort({ createdAt: -1 })
             .lean();
-
-        // Map to track which Master Packages are already in inventory
-        const addedMasterPackageIds = new Set();
-        const formattedMyPackages = myPackages.map(pkg => {
-            if (pkg.masterPackageId) {
-                const mId = pkg.masterPackageId._id ? pkg.masterPackageId._id.toString() : pkg.masterPackageId.toString();
-                addedMasterPackageIds.add(mId);
-            }
-            return {
-                ...pkg,
-                isAdded: true,                      // 👈 Already in Vendor Inventory
-                isInInventory: true,
-                isCustom: pkg.isCustom || false,
-                totalTestsIncluded: Array.isArray(pkg.tests) ? pkg.tests.length : (pkg.totalTestsIncluded || 0),
-                masterPackageId: pkg.masterPackageId?._id || pkg.masterPackageId || null,
-                labPackageId: pkg._id
-            };
-        });
-
-        // Agar vendor sirf apne added packages dekhna chahta hai (?filter=added)
-        if (filter === 'added' || filter === 'my-inventory') {
-            return res.status(200).json({
-                success: true,
-                count: formattedMyPackages.length,
-                totalAdded: formattedMyPackages.length,
-                data: formattedMyPackages
-            });
-        }
-
-        // =========================================================================
-        // 2. Fetch Admin Master Packages (from MasterLabPackage collection)
-        // =========================================================================
-        let masterQuery = { isActive: { $ne: false } };
-        if (mainCategory && mainCategory.trim() !== '') {
-            masterQuery.mainCategory = new RegExp(`^${mainCategory.trim()}$`, 'i');
-        }
-        if (category && category.trim() !== '') {
-            masterQuery.category = new RegExp(`^${category.trim()}$`, 'i');
-        }
-        if (search && search.trim() !== '') {
-            masterQuery.packageName = new RegExp(search.trim(), 'i');
-        }
-
-        const masterPackages = await MasterLabPackage.find(masterQuery)
-            .populate('tests', 'testName testCode sampleType mainCategory standardMRP parameters')
-            .sort({ createdAt: -1 })
-            .lean();
-
-        // =========================================================================
-        // 3. Filter out Admin packages that the vendor has NOT added yet
-        // =========================================================================
-        const unaddedMasterPackages = [];
-        for (const mPkg of masterPackages) {
-            const mIdStr = mPkg._id.toString();
-
-            // Agar vendor ne ye package pehle se add nahi kiya hai:
-            if (!addedMasterPackageIds.has(mIdStr)) {
-                unaddedMasterPackages.push({
-                    _id: mPkg._id,                     // Frontend list rendering key
-                    masterPackageId: mPkg._id,         // 👈 Ye ID vendor POST /packages/save mein bhejega
-                    labPackageId: null,                // Abhi inventory mein nahi hai
-                    labId: labId,
-                    isAdded: false,                    // 👈 Shows "+ Add to My Lab" button in UI
-                    isInInventory: false,
-                    isCustom: false,
-                    packageName: mPkg.packageName,
-                    mrp: mPkg.standardMRP || 0,
-                    discountPercent: 0,
-                    offerPrice: mPkg.standardMRP || 0,
-                    reportTime: mPkg.reportTime || "24 Hours",
-                    tests: mPkg.tests || [],
-                    totalTestsIncluded: Array.isArray(mPkg.tests) ? mPkg.tests.length : 0,
-                    sampleType: mPkg.sampleTypes || ['Blood'],
-                    sampleTypes: mPkg.sampleTypes || ['Blood'],
-                    shortDescription: mPkg.shortDescription || "",
-                    longDescription: mPkg.longDescription || "",
-                    mainCategory: mPkg.mainCategory || "Pathology",
-                    category: mPkg.category || "Full Body",
-                    isFastingRequired: mPkg.isFastingRequired || false,
-                    fastingDuration: mPkg.fastingDuration || "",
-                    preparations: mPkg.preparations || [],
-                    detailedDescription: mPkg.detailedDescription || [],
-                    faqs: mPkg.faqs || [],
-                    gender: mPkg.gender || "Both",
-                    ageGroup: mPkg.ageGroup || "All",
-                    tags: mPkg.tags || [],
-                    lifestyleTags: mPkg.lifestyleTags || [],
-                    packageImage: mPkg.packageImage || null,
-                    isActive: true,
-                    createdAt: mPkg.createdAt,
-                    updatedAt: mPkg.updatedAt
-                });
-            }
-        }
-
-        // Agar vendor sirf unadded packages dekhna chahe (?filter=available)
-        if (filter === 'available') {
-            return res.status(200).json({
-                success: true,
-                count: unaddedMasterPackages.length,
-                totalAvailableToAdd: unaddedMasterPackages.length,
-                data: unaddedMasterPackages
-            });
-        }
-
-        // =========================================================================
-        // 4. Combined List (Added inventory packages first + New Admin packages)
-        // =========================================================================
-        const combinedList = [...formattedMyPackages, ...unaddedMasterPackages];
 
         res.status(200).json({
             success: true,
-            count: combinedList.length,
-            totalAdded: formattedMyPackages.length,
-            totalAvailableToAdd: unaddedMasterPackages.length,
-            data: combinedList
+            count: packages.length,
+            data: packages
         });
-
     } catch (error) {
         console.error("getMyPackages Error:", error);
         res.status(500).json({ success: false, message: error.message });
@@ -484,16 +358,21 @@ const getMasterTestDetails = async (req, res) => {
 
 
 
-// @desc    Get All Master Lab Packages (Admin created catalog for Vendors to add to their inventory)
-// @route   GET /provider/labs/services/packages/master-packages
-// @access  Public / Lab Vendor
+// =========================================================================
+// 1. BROWSE MASTER PACKAGES (Admin + Vendor Created Catalog)
+// Endpoint: GET /provider/labs/services/packages/master-packages
+// Supports Tabs: ?isAdminCreated=true (Admin Tab) OR ?isAdminCreated=false
+// =========================================================================
 const getMasterPackages = async (req, res) => {
     try {
-        const { search, category, mainCategory, page, limit } = req.query;
-        const vendorId = req.user?.id || req.user?._id;
+        const { search, category, mainCategory, isAdminCreated } = req.query;
 
-        // 1. Safe Filter: Matches active packages (matches true, missing, or undefined)
         let query = { isActive: { $ne: false } };
+
+        // Tab Filter: Admin vs Others
+        if (isAdminCreated !== undefined) {
+            query.isAdminCreated = (isAdminCreated === 'true' || isAdminCreated === true);
+        }
 
         if (search && search.trim() !== '') {
             query.packageName = new RegExp(search.trim(), 'i');
@@ -505,58 +384,22 @@ const getMasterPackages = async (req, res) => {
             query.mainCategory = new RegExp(`^${mainCategory.trim()}$`, 'i');
         }
 
-        // 2. Fetch Packages with populated tests details
-        let packageQuery = MasterLabPackage.find(query)
-            .populate('tests', 'testName testCode sampleType mainCategory standardMRP parameters')
-            .sort({ createdAt: -1 });
+        const masterPackages = await MasterLabPackage.find(query)
+            .populate('tests', 'testName testCode sampleType standardMRP mainCategory')
+            .sort({ createdAt: -1 })
+            .lean();
 
-        if (page && limit) {
-            const pageNum = parseInt(page) || 1;
-            const limitNum = parseInt(limit) || 20;
-            packageQuery = packageQuery.skip((pageNum - 1) * limitNum).limit(limitNum);
-        }
-
-        const masterPackages = await packageQuery.lean();
-
-        // 3. Check which packages this vendor has ALREADY added in their own inventory (LabPackage)
-        let vendorAddedPackageMap = new Map();
-        if (vendorId) {
-            const myPackages = await LabPackage.find({
-                labId: vendorId,
-                masterPackageId: { $ne: null }
-            }).select('_id masterPackageId mrp offerPrice discountPercent isActive').lean();
-
-            myPackages.forEach(p => {
-                if (p.masterPackageId) {
-                    vendorAddedPackageMap.set(p.masterPackageId.toString(), p);
-                }
-            });
-        }
-
-        // 4. Attach status flag (isAddedToMyInventory)
-        const formattedData = masterPackages.map(pkg => {
-            const myListing = vendorAddedPackageMap.get(pkg._id.toString());
-            return {
-                ...pkg,
-                totalTests: Array.isArray(pkg.tests) ? pkg.tests.length : 0,
-                isAddedToMyInventory: Boolean(myListing),
-                myInventoryDetails: myListing ? {
-                    labPackageId: myListing._id,
-                    mrp: myListing.mrp,
-                    offerPrice: myListing.offerPrice,
-                    discountPercent: myListing.discountPercent,
-                    isActive: myListing.isActive
-                } : null
-            };
-        });
-
-        const total = await MasterLabPackage.countDocuments(query);
+        // Ensure isAdminCreated is always a boolean in the output
+        const formattedPackages = masterPackages.map(pkg => ({
+            ...pkg,
+            isAdminCreated: pkg.isAdminCreated !== undefined ? pkg.isAdminCreated : true,
+            totalTestsIncluded: Array.isArray(pkg.tests) ? pkg.tests.length : 0
+        }));
 
         res.status(200).json({
             success: true,
-            count: formattedData.length,
-            total,
-            data: formattedData
+            count: formattedPackages.length,
+            data: formattedPackages
         });
     } catch (error) {
         console.error("getMasterPackages Error:", error);
