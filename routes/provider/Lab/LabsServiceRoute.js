@@ -37,8 +37,7 @@ router.get('/tests/my-tests', protect('lab'), getMyTests);
 
 // --- LAB PACKAGES ---
 router.post('/packages/save', protect('lab'), labServiceUploads, saveLabPackage);
-router.get('/packages/my-packages', protect('lab'), getMyPackages);
-
+router.get('/packages/my-packages', protect(['lab', 'clinic-lab',]), getMyPackages);
 // --- DELETE ---
 router.delete('/delete/:type/:id', protect('lab'), deleteService);
 
