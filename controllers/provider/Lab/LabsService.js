@@ -341,20 +341,127 @@ const getMasterTestDetails = async (req, res) => {
 
 
 
+// @desc    Get All Master Lab Packages (Admin created catalog for Vendors to add to their inventory)
+// @route   GET /provider/labs/services/packages/master-packages
+// @access  Public / Lab Vendor
 const getMasterPackages = async (req, res) => {
     try {
-        const packages = await MasterLabPackage.find({ isActive: true });
-        res.json({ success: true, data: packages });
-    } catch (error) { res.status(500).json({ message: error.message }); }           
-}
-// 5. GET SPECIFIC MASTER PACKAGE DETAILS (Figma logic: Auto-fill fields)
-// endpoint: GET /provider/lab/services/master-package-details/:id
+        const { search, category, mainCategory, page, limit } = req.query;
+        const vendorId = req.user?.id || req.user?._id;
+
+        // 1. Safe Filter: Matches active packages (matches true, missing, or undefined)
+        let query = { isActive: { $ne: false } };
+
+        if (search && search.trim() !== '') {
+            query.packageName = new RegExp(search.trim(), 'i');
+        }
+        if (category && category.trim() !== '') {
+            query.category = new RegExp(`^${category.trim()}$`, 'i');
+        }
+        if (mainCategory && mainCategory.trim() !== '') {
+            query.mainCategory = new RegExp(`^${mainCategory.trim()}$`, 'i');
+        }
+
+        // 2. Fetch Packages with populated tests details
+        let packageQuery = MasterLabPackage.find(query)
+            .populate('tests', 'testName testCode sampleType mainCategory standardMRP parameters')
+            .sort({ createdAt: -1 });
+
+        if (page && limit) {
+            const pageNum = parseInt(page) || 1;
+            const limitNum = parseInt(limit) || 20;
+            packageQuery = packageQuery.skip((pageNum - 1) * limitNum).limit(limitNum);
+        }
+
+        const masterPackages = await packageQuery.lean();
+
+        // 3. Check which packages this vendor has ALREADY added in their own inventory (LabPackage)
+        let vendorAddedPackageMap = new Map();
+        if (vendorId) {
+            const myPackages = await LabPackage.find({
+                labId: vendorId,
+                masterPackageId: { $ne: null }
+            }).select('_id masterPackageId mrp offerPrice discountPercent isActive').lean();
+
+            myPackages.forEach(p => {
+                if (p.masterPackageId) {
+                    vendorAddedPackageMap.set(p.masterPackageId.toString(), p);
+                }
+            });
+        }
+
+        // 4. Attach status flag (isAddedToMyInventory)
+        const formattedData = masterPackages.map(pkg => {
+            const myListing = vendorAddedPackageMap.get(pkg._id.toString());
+            return {
+                ...pkg,
+                totalTests: Array.isArray(pkg.tests) ? pkg.tests.length : 0,
+                isAddedToMyInventory: Boolean(myListing),
+                myInventoryDetails: myListing ? {
+                    labPackageId: myListing._id,
+                    mrp: myListing.mrp,
+                    offerPrice: myListing.offerPrice,
+                    discountPercent: myListing.discountPercent,
+                    isActive: myListing.isActive
+                } : null
+            };
+        });
+
+        const total = await MasterLabPackage.countDocuments(query);
+
+        res.status(200).json({
+            success: true,
+            count: formattedData.length,
+            total,
+            data: formattedData
+        });
+    } catch (error) {
+        console.error("getMasterPackages Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// @desc    Get Single Master Package Details (Populates tests for Add-to-Inventory Modal)
+// @route   GET /provider/labs/services/packages/master-details/:id
+// @access  Public / Lab Vendor
 const getMasterPackageDetails = async (req, res) => {
     try {
-        const pkg = await MasterLabPackage.findById(req.params.id).populate('tests');
-        if (!pkg) return res.status(404).json({ message: "Not found" });
-        res.json({ success: true, data: pkg });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+        const { id } = req.params;
+        const vendorId = req.user?.id || req.user?._id;
+
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({ success: false, message: "Invalid Package ID format." });
+        }
+
+        const pkg = await MasterLabPackage.findById(id)
+            .populate('tests', 'testName testCode sampleType mainCategory standardMRP parameters')
+            .lean();
+
+        if (!pkg) {
+            return res.status(404).json({ success: false, message: "Master Package not found." });
+        }
+
+        let myListing = null;
+        if (vendorId) {
+            myListing = await LabPackage.findOne({
+                labId: vendorId,
+                masterPackageId: id
+            }).select('_id mrp offerPrice discountPercent isActive').lean();
+        }
+
+        res.status(200).json({
+            success: true,
+            data: {
+                ...pkg,
+                totalTests: Array.isArray(pkg.tests) ? pkg.tests.length : 0,
+                isAddedToMyInventory: Boolean(myListing),
+                myInventoryDetails: myListing || null
+            }
+        });
+    } catch (error) {
+        console.error("getMasterPackageDetails Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
 };
 
 const submitNewMasterRequest = async (req, res) => {
