@@ -4,6 +4,7 @@ const Wallet = require('../../../models/Wallet');
 const MasterReportTemplate = require('../../../models/MasterReportTemplate');
 const LabPrescriptionRequest = require('../../../models/LabPrescriptionRequest'); 
 const MasterLabTest = require('../../../models/MasterLabTest'); 
+const Driver = require('../../../models/Driver');
 const moment = require('moment');
 const fs = require('fs');
 const path = require('path');
