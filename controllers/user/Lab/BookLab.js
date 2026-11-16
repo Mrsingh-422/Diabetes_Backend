@@ -1829,22 +1829,29 @@ const uploadPrescriptionFlow = async (req, res) => {
         res.json({ success: true, message: "Lab will review and suggest tests", bookingId: booking.bookingId });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
-
-// @desc    Get Logged-in User Lab Bookings (Preserves active view when sample is in transit to lab)
+// =========================================================================
+// 1. GET USER BOOKINGS LIST (Lightweight / Card View Summary)
 // @route   GET /user/labs/my-bookings
 // @access  Private (User)
+// =========================================================================
 const getMyBookings = async (req, res) => {
     try {
         const userId = req.user.id;
-        const { tab = 'Active' } = req.query;
+        const { tab = 'Active', page = 1, limit = 20 } = req.query;
+
+        const pageNum = parseInt(page) || 1;
+        const limitNum = parseInt(limit) || 20;
+        const skip = (pageNum - 1) * limitNum;
 
         let query = { userId };
 
-        // 🚨 BUG FIX: Include both new statuses in Active bookings tab
         if (tab === 'Active' || tab === 'Upcoming') {
             query.status = { 
                 $in: [
-                    'Pending', 
+                    'Prescription Uploaded',
+                    'Under Review',
+                    'Tests Added',
+                    'Pending',
                     'Confirmed', 
                     'Phlebotomist Assigned', 
                     'Arrived', 
@@ -1860,17 +1867,73 @@ const getMyBookings = async (req, res) => {
             query.status = { $in: ['Completed', 'Cancelled', 'No-Show'] };
         }
 
-        const bookings = await LabBooking.find(query)
-            .populate('labId', 'name city profileImage phone')
-            .populate('phlebotomistId', 'name phone vehicleNumber')
-            .sort({ createdAt: -1 })
-            .lean();
+        const [total, bookings] = await Promise.all([
+            LabBooking.countDocuments(query),
+            LabBooking.find(query)
+                .populate('labId', 'name city profileImage phone')
+                .populate('phlebotomistId', 'name phone vehicleNumber')
+                .populate('items.tests.testId', 'testName')
+                .populate('items.packages.packageId', 'packageName')
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(limitNum)
+                .lean()
+        ]);
+
+        // 🌟 LIGHTWEIGHT MAPPING: Clean response designed for fast mobile card rendering
+        const formattedBookings = bookings.map(b => {
+            const testNames = (b.items?.tests || []).map(t => t.name || t.testId?.testName).filter(Boolean);
+            const packageNames = (b.items?.packages || []).map(p => p.name || p.packageId?.packageName).filter(Boolean);
+            const allItems = [...testNames, ...packageNames];
+
+            return {
+                _id: b._id,
+                bookingId: b.bookingId,
+                bookingType: b.bookingType,
+                collectionType: b.collectionType,
+                status: b.status,
+                appointmentDate: b.appointmentDate,
+                appointmentTime: b.appointmentTime,
+                lab: {
+                    _id: b.labId?._id || null,
+                    name: b.labId?.name || "Diagnostic Lab",
+                    city: b.labId?.city || "",
+                    phone: b.labId?.phone || "",
+                    profileImage: b.labId?.profileImage || null
+                },
+                patientsSummary: {
+                    primaryPatientName: b.patients?.[0]?.name || "Self",
+                    totalPatients: b.patients?.length || 1
+                },
+                itemsSummary: {
+                    totalItems: allItems.length,
+                    displayNames: allItems.slice(0, 2),
+                    hasMore: allItems.length > 2
+                },
+                totalAmount: b.billSummary?.totalAmount || 0,
+                paymentMethod: b.paymentMethod,
+                paymentStatus: b.paymentStatus,
+                isRapid: (b.billSummary?.rapidDeliveryCharge || 0) > 0,
+                phlebotomist: b.phlebotomistId ? {
+                    name: b.phlebotomistId.name,
+                    phone: b.phlebotomistId.phone,
+                    vehicleNumber: b.phlebotomistId.vehicleNumber
+                } : null,
+                pickupOtp: b.tracking?.otp || null,
+                isAllReportsUploaded: b.status === 'Completed',
+                hasAnyReport: (b.patientReports && b.patientReports.length > 0) || Boolean(b.reportFile),
+                createdAt: b.createdAt
+            };
+        });
 
         res.status(200).json({
             success: true,
-            count: bookings.length,
+            total,
+            count: formattedBookings.length,
+            currentPage: pageNum,
+            totalPages: Math.ceil(total / limitNum),
             tab,
-            data: bookings
+            data: formattedBookings
         });
     } catch (error) {
         console.error("Get My Bookings Error:", error);
@@ -1878,9 +1941,11 @@ const getMyBookings = async (req, res) => {
     }
 };
 
-// @desc    Get Lab Booking Full Tracking & Multi-Patient Reports for Patient App
+// =========================================================================
+// 2. GET FULL BOOKING DETAILS WITH TIMELINE TRACKING
 // @route   GET /user/labs/details/:id/track
 // @access  Private (User)
+// =========================================================================
 const getBookingDetails = async (req, res) => {
     try {
         const { id } = req.params;
@@ -1903,8 +1968,7 @@ const getBookingDetails = async (req, res) => {
             return res.status(404).json({ success: false, message: "Booking record not found." });
         }
 
-        // 🚨 MULTI-PATIENT REPORTS STRUCTURE FOR FRONTEND CARDS
-        // Maps each patient to their specific report if available
+        // 1. Multi-Patient Reports Mapping
         const patientsWithReports = (booking.patients || []).map(p => {
             const matchedReport = (booking.patientReports || []).find(pr => String(pr.patientId) === String(p.patientId));
             return {
@@ -1918,13 +1982,91 @@ const getBookingDetails = async (req, res) => {
             };
         });
 
+        // 2. 🌟 FULL LIFECYCLE TIMELINE TRACKER
+        const isCancelled = booking.status === 'Cancelled';
+        const isPrescription = booking.bookingType === 'Prescription-Based';
+        const isVisitLab = booking.collectionType === 'Visit Lab';
+
+        let milestoneSteps = [];
+
+        if (isPrescription) {
+            milestoneSteps.push(
+                { key: 'Prescription Uploaded', title: 'Prescription Uploaded', desc: 'Prescription uploaded for doctor/lab evaluation.', time: booking.createdAt },
+                { key: 'Under Review', title: 'Under Review', desc: 'Laboratory is verifying prescribed tests.', time: null },
+                { key: 'Tests Added', title: 'Tests Quoted', desc: 'Quotation prepared for tests and charges.', time: null },
+                { key: 'Pending', title: 'Awaiting Payment', desc: 'Awaiting payment confirmation to proceed.', time: null }
+            );
+        }
+
+        milestoneSteps.push({
+            key: 'Confirmed',
+            title: 'Booking Confirmed',
+            desc: isVisitLab ? 'Appointment confirmed for center visit.' : 'Booking confirmed for home sample collection.',
+            time: booking.createdAt
+        });
+
+        if (!isVisitLab) {
+            milestoneSteps.push(
+                { key: 'Phlebotomist Assigned', title: 'Phlebotomist Assigned', desc: 'Phlebotomist assigned for home visit.', time: booking.assignedAt || null },
+                { key: 'Arrived', title: 'Arrived at Location', desc: 'Phlebotomist reached your address.', time: booking.arrivedAt || null },
+                { key: 'Sample Collected', title: 'Sample Collected', desc: 'Blood/diagnostic sample successfully drawn.', time: booking.collectedAt || null },
+                { key: 'Sample on the way to lab', title: 'Sample In-Transit', desc: 'Specimen in temperature-controlled transit to lab.', time: booking.sampleTransitStartedAt || null }
+            );
+        }
+
+        milestoneSteps.push(
+            { key: 'Sample Delivered to Lab', title: 'Delivered to Lab', desc: 'Sample safely received at diagnostic testing desk.', time: booking.sampleDeliveredToLabAt || booking.depositedAt || null },
+            { key: 'Testing', title: 'Testing in Progress', desc: 'Sample loaded into automated analyzer.', time: null },
+            { key: 'Report Generated', title: 'Report Generated', desc: 'Results evaluated by laboratory pathologist.', time: null },
+            { key: 'Completed', title: 'Completed', desc: 'All diagnostic test reports are ready for download.', time: null }
+        );
+
+        // Map status order indices
+        const statusAliasMap = { 'Sample Deposited': 'Sample Delivered to Lab' };
+        const activeKey = statusAliasMap[booking.status] || booking.status;
+        const currentIdx = milestoneSteps.findIndex(s => s.key === activeKey);
+
+        const timeline = milestoneSteps.map((step, idx) => {
+            const isCompleted = currentIdx !== -1 ? idx <= currentIdx : false;
+            const isCurrent = step.key === activeKey;
+            return {
+                stepNumber: idx + 1,
+                statusKey: step.key,
+                title: step.title,
+                description: step.desc,
+                timestamp: step.time || (isCurrent ? booking.updatedAt : null),
+                isCompleted: !isCancelled && isCompleted,
+                isCurrent: !isCancelled && isCurrent
+            };
+        });
+
+        if (isCancelled) {
+            timeline.push({
+                stepNumber: timeline.length + 1,
+                statusKey: 'Cancelled',
+                title: 'Booking Cancelled',
+                description: booking.cancelReason || 'Booking was cancelled.',
+                timestamp: booking.updatedAt,
+                isCompleted: true,
+                isCurrent: true,
+                isFailed: true
+            });
+        }
+
         return res.status(200).json({
             success: true,
             data: {
                 ...booking,
-                reportFile: booking.reportFile, // Overall / Latest report PDF
-                patientReports: booking.patientReports || [], // Dedicated array
-                patientsWithReports, // 👈 Clean list for UI buttons: Download per patient
+                trackingTimeline: {
+                    currentStatus: booking.status,
+                    currentStepNumber: isCancelled ? timeline.length : (currentIdx !== -1 ? currentIdx + 1 : 1),
+                    totalSteps: timeline.length,
+                    isCancelled,
+                    steps: timeline
+                },
+                reportFile: booking.reportFile,
+                patientReports: booking.patientReports || [],
+                patientsWithReports,
                 isAllReportsUploaded: booking.status === 'Completed'
             }
         });
@@ -1935,9 +2077,11 @@ const getBookingDetails = async (req, res) => {
     }
 };
 
-// @desc    Cancel Lab Booking by Patient (Blocks cancellation after blood sample is drawn)
+// =========================================================================
+// 3. CANCEL LAB BOOKING (Anti-Sample Loss Guard + Refund Initiation)
 // @route   PUT /user/labs/cancel/:id
 // @access  Private (User)
+// =========================================================================
 const cancelBooking = async (req, res) => {
     try {
         const { id } = req.params;
@@ -1955,8 +2099,8 @@ const cancelBooking = async (req, res) => {
             return res.status(404).json({ success: false, message: "Booking record not found." });
         }
 
-        // 🚨 BUSINESS LOGIC GUARD: Cannot cancel after sample is already collected or delivered to lab!
-        const postCollectionStatuses = [
+        // 🚨 STRICT STATUS GUARD: Cannot cancel once blood sample has been drawn!
+        const nonCancellableStatuses = [
             'Sample Collected', 
             'Sample on the way to lab', 
             'Sample Delivered to Lab', 
@@ -1966,36 +2110,61 @@ const cancelBooking = async (req, res) => {
             'Completed'
         ];
 
-        if (postCollectionStatuses.includes(booking.status)) {
+        if (nonCancellableStatuses.includes(booking.status)) {
             return res.status(400).json({
                 success: false,
-                message: `Cancellation Denied: Your blood/diagnostic sample has already been collected (Current Status: '${booking.status}'). The diagnostic procedure cannot be cancelled.`
+                errorType: "SAMPLE_ALREADY_COLLECTED",
+                message: `Cancellation Denied: Your blood/diagnostic specimen has already been drawn (Current Status: '${booking.status}'). Collected samples cannot be cancelled.`
             });
         }
 
         if (booking.status === 'Cancelled' || booking.status === 'No-Show') {
-            return res.status(400).json({ success: false, message: `Booking is already in '${booking.status}' state.` });
+            return res.status(400).json({ 
+                success: false, 
+                message: `This booking is already marked as '${booking.status}'.` 
+            });
         }
 
-        // Release Phlebotomist if assigned
+        // Release Phlebotomist if one was assigned
         if (booking.phlebotomistId) {
-            await Driver.findByIdAndUpdate(booking.phlebotomistId, { $set: { status: 'Available', isOnline: true } });
+            await Driver.findByIdAndUpdate(booking.phlebotomistId, { 
+                $set: { status: 'Available', isOnline: true } 
+            });
         }
 
         booking.status = 'Cancelled';
-        booking.cancelReason = reason || "Cancelled by patient before sample collection.";
+        booking.cancelReason = reason ? String(reason).trim() : "Cancelled by patient before sample collection.";
         
-        // Payout refund queue
+        // Auto-queue refund if paid online
         if (booking.paymentStatus === 'Paid') {
             booking.paymentStatus = 'Refund-Initiated';
         }
 
+        // Refund Subscription free delivery quota if one was consumed
+        if (booking.billSummary?.deliveryCharge === 0 && booking.collectionType === 'Home Collection') {
+            await refundBenefitCount(userId, 'freeLabDeliveriesCount');
+        }
+
         await booking.save();
+
+        // Push Alert to Lab Vendor
+        try {
+            await sendPushNotification(
+                booking.labId,
+                'lab',
+                "Booking Cancelled by Patient",
+                `Booking #${booking.bookingId} was cancelled by the patient before sample collection. Reason: "${booking.cancelReason}".`,
+                { bookingId: booking._id.toString(), type: 'lab_booking_cancelled' }
+            );
+        } catch (e) {}
 
         res.status(200).json({
             success: true,
             message: "Lab booking cancelled successfully before sample collection. Refund initiated if paid online.",
-            data: booking
+            bookingId: booking.bookingId,
+            status: booking.status,
+            cancelReason: booking.cancelReason,
+            paymentStatus: booking.paymentStatus
         });
     } catch (error) {
         console.error("Cancel Booking Error:", error);

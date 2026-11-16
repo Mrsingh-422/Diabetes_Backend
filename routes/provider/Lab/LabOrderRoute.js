@@ -6,7 +6,8 @@ const { protect } = require('../../../middleware/authMiddleware');
 const { labDocUploads, labReportUpload } = require('../../../middleware/multer'); 
 const { 
     getLabStats, 
-    getOrders, 
+    getOrders,
+    getOrderDetails, // 👈 Added 
     handleOrderAction, 
     assignStaff, 
     updateProgressStatus, 
@@ -39,6 +40,8 @@ router.get('/dashboard', protect('provider'), getLabStats);
 
 // Get orders list (supports status & priority filters)
 router.get('/orders', protect('provider'), getOrders); 
+router.get('/order-details/:orderId', protect('provider'), getOrderDetails); // 👈 Full single order details
+
 
 // Accept/Reject booking
 router.patch('/order-action/:orderId', protect('provider'), handleOrderAction);

@@ -70,9 +70,11 @@ const getLabStats = async (req, res) => {
     }
 };
 
-// @desc    Get Lab Orders with Status Filters (Preserves visibility in transit & in lab)
+// =========================================================================
+// 1. GET ORDERS LIST (Lightweight / Card View Summary)
 // @route   GET /provider/labs/orders
 // @access  Private (Lab)
+// =========================================================================
 const getOrders = async (req, res) => {
     try {
         const labId = req.user.id;
@@ -84,7 +86,6 @@ const getOrders = async (req, res) => {
 
         let query = { labId };
 
-        // 🚨 BUG FIX: Map both new statuses into the vendor Active / Testing tabs
         if (tab === 'Active' || tab === 'In-Progress') {
             query.status = { 
                 $in: [
@@ -100,7 +101,6 @@ const getOrders = async (req, res) => {
                 ] 
             };
         } else if (tab === 'In-Lab') {
-            // Samples that arrived at lab and are ready for analyzer
             query.status = { $in: ['Sample Delivered to Lab', 'Sample Deposited', 'Testing', 'Report Generated'] };
         } else if (tab === 'Completed') {
             query.status = 'Completed';
@@ -118,25 +118,107 @@ const getOrders = async (req, res) => {
             LabBooking.countDocuments(query),
             LabBooking.find(query)
                 .populate('userId', 'name phone email profilePic')
-                .populate('phlebotomistId', 'name phone vehicleNumber vehicleType status location')
-                .populate('items.tests.testId', 'testName sampleType discountPrice amount')
-                .populate('items.packages.packageId', 'packageName offerPrice mrp')
+                .populate('phlebotomistId', 'name phone vehicleNumber status')
+                .populate('items.tests.testId', 'testName')
+                .populate('items.packages.packageId', 'packageName')
                 .sort({ createdAt: -1 })
                 .skip(skip)
                 .limit(limitNum)
                 .lean()
         ]);
 
+        // 🌟 LIGHTWEIGHT MAPPING: Sirf Card ke kaam ki zaroori fields
+        const formattedOrders = orders.map(order => {
+            const testNames = (order.items?.tests || []).map(t => t.name || t.testId?.testName).filter(Boolean);
+            const packageNames = (order.items?.packages || []).map(p => p.name || p.packageId?.packageName).filter(Boolean);
+            const allItems = [...testNames, ...packageNames];
+
+            return {
+                _id: order._id,
+                bookingId: order.bookingId,
+                bookingType: order.bookingType,
+                collectionType: order.collectionType,
+                status: order.status,
+                appointmentDate: order.appointmentDate,
+                appointmentTime: order.appointmentTime,
+                user: {
+                    name: order.userId?.name || "Customer",
+                    phone: order.userId?.phone || "",
+                    profilePic: order.userId?.profilePic || null
+                },
+                patientSummary: {
+                    primaryPatientName: order.patients?.[0]?.name || "Patient",
+                    totalPatients: order.patients?.length || 1
+                },
+                itemsSummary: {
+                    totalItems: allItems.length,
+                    displayNames: allItems.slice(0, 2), // First 2 items list
+                    hasMore: allItems.length > 2
+                },
+                totalAmount: order.billSummary?.totalAmount || 0,
+                paymentMethod: order.paymentMethod,
+                paymentStatus: order.paymentStatus,
+                isRapid: (order.billSummary?.rapidDeliveryCharge || 0) > 0,
+                phlebotomist: order.phlebotomistId ? {
+                    _id: order.phlebotomistId._id,
+                    name: order.phlebotomistId.name,
+                    phone: order.phlebotomistId.phone,
+                    status: order.phlebotomistId.status
+                } : null,
+                createdAt: order.createdAt
+            };
+        });
+
         res.status(200).json({
             success: true,
             total,
-            count: orders.length,
+            count: formattedOrders.length,
             currentPage: pageNum,
             totalPages: Math.ceil(total / limitNum),
-            data: orders
+            data: formattedOrders
         });
     } catch (error) {
         console.error("Get Lab Orders Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// =========================================================================
+// 2. 🌟 NEW API: GET SINGLE ORDER FULL DETAILS (Order Details Screen)
+// @route   GET /provider/labs/order-details/:orderId
+// @access  Private (Lab)
+// =========================================================================
+const getOrderDetails = async (req, res) => {
+    try {
+        const { orderId } = req.params;
+        const labId = req.user.id;
+
+        const isObjectId = mongoose.isValidObjectId(orderId);
+        const query = {
+            labId,
+            ...(isObjectId ? { _id: orderId } : { bookingId: String(orderId).trim() })
+        };
+
+        const order = await LabBooking.findOne(query)
+            .populate('userId', 'name phone email profilePic gender age')
+            .populate('phlebotomistId', 'name phone vehicleNumber vehicleType status location profilePic')
+            .populate('items.tests.testId', 'testName sampleType discountPrice amount mainCategory reportTime parameters')
+            .populate('items.packages.packageId', 'packageName offerPrice mrp sampleTypes reportTime tests')
+            .lean();
+
+        if (!order) {
+            return res.status(404).json({ 
+                success: false, 
+                message: "Order not found or you are not authorized to view this booking." 
+            });
+        }
+
+        res.status(200).json({
+            success: true,
+            data: order // 👈 Poora detailed schema with breakdown, patients, tracking timestamps etc.
+        });
+    } catch (error) {
+        console.error("Get Order Details Error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
@@ -1708,6 +1790,7 @@ const getPhlebotomistActiveDetail = async (req, res) => {
 module.exports = { 
     getLabStats, 
     getOrders, 
+    getOrderDetails,
     handleOrderAction, 
     assignStaff, 
     updateProgressStatus, 
