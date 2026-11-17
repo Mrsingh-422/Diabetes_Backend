@@ -8,10 +8,14 @@ const {
     getMyClinicDoctors,
     updateClinicDoctor, 
     toggleDoctorDutyStatus,
-    removeClinicDoctor
+    removeClinicDoctor,
+    loginClinicDoctor
 } = require('../../controllers/clinic/clinicDoctorController');
 
 // Base Route: /api/clinic/doctors
+
+// 0. Clinic Doctor Login (Public)
+router.post('/login', loginClinicDoctor);
 
 // 1. Add Doctor (Multi-file upload with protect('clinic'))
 router.post('/add', protect('clinic'), clinicDoctorUploads, addClinicDoctor);

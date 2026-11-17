@@ -6,6 +6,164 @@ const bcrypt = require('bcryptjs');
 const { deleteFile } = require('../../utils/fileHandler');
 const { notifyAdminsAndVendor } = require('../../utils/notification');
 
+// Top imports mein add karein:
+const jwt = require('jsonwebtoken');
+
+// Helper: Generate JWT Token (Same as authClinic & clinicAmbulance)
+const generateToken = (id, role) => {
+    const expiry = process.env.NODE_ENV === 'development' ? '36500d' : '30d';
+    return jwt.sign({ id, role }, process.env.JWT_SECRET, { expiresIn: expiry });
+};
+// ==========================================
+// 6. LOGIN CLINIC DOCTOR (Public)
+// Endpoint: POST /api/clinic/doctors/login
+// ==========================================
+const loginClinicDoctor = async (req, res) => {
+    try {
+        const { email, phone, identifier, password, fcmToken } = req.body || {};
+
+        // 1. Build Login Identifier Query (Supports email, phone, or identifier)
+        let query = {};
+        if (email) {
+            query = { email: String(email).toLowerCase().trim() };
+        } else if (phone) {
+            query = { phone: String(phone).trim() };
+        } else if (identifier) {
+            const cleanId = String(identifier).trim();
+            query = {
+                $or: [
+                    { email: cleanId.toLowerCase() },
+                    { phone: cleanId }
+                ]
+            };
+        } else {
+            return res.status(400).json({
+                success: false,
+                message: "Email or Phone number is required."
+            });
+        }
+
+        if (!password) {
+            return res.status(400).json({
+                success: false,
+                message: "Password is required."
+            });
+        }
+
+        // 2. Find Doctor & Verify Password
+        const doctor = await Doctor.findOne(query).select('+password');
+        if (!doctor || !doctor.password || !(await bcrypt.compare(String(password), doctor.password))) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid Credentials"
+            });
+        }
+
+        // 3. Ensure Doctor belongs to a Clinic ('clinic-doctor')
+        if (doctor.role !== 'clinic-doctor' && !doctor.clinicId) {
+            return res.status(403).json({
+                success: false,
+                message: "Access Denied: This account is not registered as a clinic doctor."
+            });
+        }
+
+        // 4. Account Active Check
+        if (doctor.isActive === false) {
+            return res.status(403).json({
+                success: false,
+                message: "Access Denied: Your doctor account is inactive. Please contact your clinic or administrator."
+            });
+        }
+
+        // 5. Associated Clinic Check
+        let clinicInfo = null;
+        if (doctor.clinicId) {
+            clinicInfo = await Clinic.findById(doctor.clinicId)
+                .select('name clinicName email phoneNumber address city state image posterimage isActive Accountverify profileStatus')
+                .lean();
+
+            if (clinicInfo && clinicInfo.isActive === false) {
+                return res.status(403).json({
+                    success: false,
+                    message: "Access Denied: Your associated clinic account is currently inactive."
+                });
+            }
+        }
+
+        // 6. Profile Approval Status Check (Same flow as authClinic.js)
+        if (doctor.profileStatus === 'Pending') {
+            return res.status(200).json({
+                success: true,
+                fullAccess: false,
+                profileStatus: 'Pending',
+                message: "Your profile is under review. Please wait for Admin approval."
+            });
+        }
+
+        if (doctor.profileStatus === 'Incomplete') {
+            return res.status(200).json({
+                success: true,
+                fullAccess: false,
+                profileStatus: 'Incomplete',
+                message: "Profile is incomplete. Please contact your clinic to complete verification."
+            });
+        }
+
+        if (doctor.profileStatus === 'Rejected') {
+            return res.status(200).json({
+                success: true,
+                fullAccess: false,
+                profileStatus: 'Rejected',
+                rejectionReason: doctor.rejectionReason || "No specific reason provided.",
+                message: `Application Rejected: ${doctor.rejectionReason || "Please contact your clinic administrator."}`
+            });
+        }
+
+        // 7. Generate or Reuse JWT Token (Development Mode safe)
+        let token = null;
+        if (process.env.NODE_ENV === 'development' && doctor.token) {
+            try {
+                jwt.verify(doctor.token, process.env.JWT_SECRET);
+                token = doctor.token;
+            } catch (err) {
+                token = null;
+            }
+        }
+
+        if (!token) {
+            token = generateToken(doctor._id, doctor.role || 'clinic-doctor');
+            doctor.token = token;
+        }
+
+        if (fcmToken) {
+            doctor.fcmToken = fcmToken;
+        }
+
+        await doctor.save();
+
+        const responseData = doctor.toObject();
+        delete responseData.password;
+        responseData.clinicDetails = clinicInfo;
+
+        return res.status(200).json({
+            success: true,
+            fullAccess: true,
+            message: "Login successful",
+            token,
+            role: doctor.role,
+            profileStatus: doctor.profileStatus,
+            data: responseData
+        });
+
+    } catch (error) {
+        console.error("Login Clinic Doctor Error:", error);
+        return res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+};
+
 // ==========================================
 // 1. REGISTER NEW CLINIC DOCTOR (Sends to Admin for Approval)
 // Endpoint: POST /api/clinic/doctors/add
@@ -519,5 +677,6 @@ module.exports = {
     getMyClinicDoctors,
     updateClinicDoctor,
     toggleDoctorDutyStatus,
-    removeClinicDoctor
+    removeClinicDoctor,
+    loginClinicDoctor
 };
