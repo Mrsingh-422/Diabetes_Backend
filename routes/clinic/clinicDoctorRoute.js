@@ -9,7 +9,9 @@ const {
     updateClinicDoctor, 
     toggleDoctorDutyStatus,
     removeClinicDoctor,
-    loginClinicDoctor
+    loginClinicDoctor,
+    assignAppointmentToClinicDoctor,
+    configureDoctorOpdScheduleByClinic
 } = require('../../controllers/clinic/clinicDoctorController');
 
 // Base Route: /api/clinic/doctors
@@ -29,7 +31,14 @@ router.put('/update/:id', protect('clinic'), clinicDoctorUploads, updateClinicDo
 // 3. Toggle Doctor Duty Status (On Duty / Off Duty)
 router.patch('/:id/duty-status', protect('clinic'), toggleDoctorDutyStatus);
 
-// 4. Remove Doctor
+
+// 4. Assign Appointment to Clinic Doctor
+router.put('/assign-appointment', protect('clinic'), assignAppointmentToClinicDoctor);
+
+// 5. Configure Doctor OPD Cabin, Fee & Sync Availability
+router.put('/configure-opd/:doctorId', protect('clinic'), configureDoctorOpdScheduleByClinic);
+
+// 6. Remove Doctor
 router.delete('/:id', protect('clinic'), removeClinicDoctor);
 
 module.exports = router;

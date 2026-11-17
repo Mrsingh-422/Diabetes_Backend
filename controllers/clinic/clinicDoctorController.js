@@ -1,13 +1,15 @@
 // controllers/clinic/clinicDoctorController.js
+const mongoose = require('mongoose');
 const Doctor = require('../../models/Doctor');
 const Clinic = require('../../models/Clinic');
+const Appointment = require('../../models/Appointment');
+const Availability = require('../../models/Availability');
 const ProfileUpdateRequest = require('../../models/ProfileUpdateRequest');
 const bcrypt = require('bcryptjs');
-const { deleteFile } = require('../../utils/fileHandler');
-const { notifyAdminsAndVendor } = require('../../utils/notification');
-
-// Top imports mein add karein:
 const jwt = require('jsonwebtoken');
+const { deleteFile } = require('../../utils/fileHandler');
+const { notifyAdminsAndVendor, sendPushNotification } = require('../../utils/notification');
+
 
 // Helper: Generate JWT Token (Same as authClinic & clinicAmbulance)
 const generateToken = (id, role) => {
@@ -672,11 +674,337 @@ const removeClinicDoctor = async (req, res) => {
     }
 };
 
+// ==========================================
+// 7. CLINIC ASSIGNS APPOINTMENT TO CLINIC DOCTOR
+// @route   PUT /api/clinic/doctors/assign-appointment
+// @access  Private (Clinic)
+// ==========================================
+const assignAppointmentToClinicDoctor = async (req, res) => {
+    try {
+        const clinicId = req.user.id;
+        const {
+            appointmentId,
+            doctorId,
+            appointmentDate,
+            appointmentTime,
+            notes
+        } = req.body || {};
+
+        // 1. Validate Required IDs
+        if (!appointmentId || !doctorId) {
+            return res.status(400).json({
+                success: false,
+                message: "appointmentId and doctorId are required."
+            });
+        }
+
+        if (!mongoose.Types.ObjectId.isValid(doctorId)) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid doctorId format."
+            });
+        }
+
+        // 2. Verify Doctor belongs to this Clinic & is Eligible
+        const doctor = await Doctor.findOne({ _id: doctorId, clinicId });
+        if (!doctor) {
+            return res.status(404).json({
+                success: false,
+                message: "Doctor not found in your clinic."
+            });
+        }
+
+        if (doctor.isActive === false) {
+            return res.status(400).json({
+                success: false,
+                message: `Dr. ${doctor.name} account is currently inactive.`
+            });
+        }
+
+        if (doctor.profileStatus !== 'Approved') {
+            return res.status(400).json({
+                success: false,
+                message: `Dr. ${doctor.name} profile is '${doctor.profileStatus}'. Only Approved doctors can be assigned appointments.`
+            });
+        }
+
+        // 3. Find Appointment belonging to this Clinic (supports _id or bookingId)
+        const apptQuery = mongoose.Types.ObjectId.isValid(appointmentId)
+            ? { $or: [{ _id: appointmentId }, { bookingId: appointmentId }], clinicId }
+            : { bookingId: appointmentId, clinicId };
+
+        const appointment = await Appointment.findOne(apptQuery);
+        if (!appointment) {
+            return res.status(404).json({
+                success: false,
+                message: "Appointment not found or does not belong to your clinic."
+            });
+        }
+
+        const blockedStatuses = ['Completed', 'Cancelled-By-User', 'Cancelled-By-Doctor', 'Cancelled-By-Clinic'];
+        if (blockedStatuses.includes(appointment.status)) {
+            return res.status(400).json({
+                success: false,
+                message: `Cannot assign doctor because appointment is already '${appointment.status}'.`
+            });
+        }
+
+        const now = new Date();
+        const previousDoctorId = appointment.doctorId ? appointment.doctorId.toString() : null;
+
+        // 4. Close previous open shift in treatmentHistory (if reassigning)
+        if (previousDoctorId && previousDoctorId !== doctor._id.toString()) {
+            const historyArr = appointment.treatmentHistory || [];
+            for (let i = historyArr.length - 1; i >= 0; i--) {
+                if (!historyArr[i].endTime) {
+                    historyArr[i].endTime = now;
+                    if (historyArr[i].startTime) {
+                        const diffMins = Math.max(0, Math.floor((now - new Date(historyArr[i].startTime)) / 60000));
+                        const hrs = Math.floor(diffMins / 60);
+                        const mins = diffMins % 60;
+                        historyArr[i].durationDisplay = hrs > 0 ? `${hrs} hr ${mins} mins` : `${mins} mins`;
+                    }
+                    break;
+                }
+            }
+        }
+
+        // 5. Log Assignment in treatmentHistory
+        if (!previousDoctorId) {
+            appointment.treatmentHistory.push({
+                fromDoctorId: null,
+                toDoctorId: doctor._id,
+                action: 'Initial-Assignment',
+                notes: notes || `Assigned to ${doctor.name} by Clinic`,
+                startTime: now
+            });
+        } else if (previousDoctorId !== doctor._id.toString()) {
+            appointment.treatmentHistory.push({
+                fromDoctorId: appointment.doctorId,
+                toDoctorId: doctor._id,
+                action: 'Transfer-Accepted',
+                notes: notes || `Reassigned to ${doctor.name} by Clinic`,
+                startTime: now
+            });
+        }
+
+        // 6. Update Appointment Fields
+        appointment.doctorId = doctor._id;
+        appointment.pendingDoctorId = null;
+
+        if (appointmentDate) {
+            appointment.appointmentDate = new Date(appointmentDate);
+        }
+        if (appointmentTime) {
+            appointment.appointmentTime = String(appointmentTime).trim();
+        }
+        if (['Pending', 'Clinic-Pending'].includes(appointment.status)) {
+            appointment.status = 'Confirmed';
+        }
+
+        await appointment.save();
+
+        // 7. Notify Assigned Clinic Doctor (Non-blocking)
+        try {
+            const patientName = appointment.patients?.[0]?.patientName || "Patient";
+            await sendPushNotification(
+                doctor._id,
+                'doctor',
+                "New Appointment Assigned",
+                `Clinic assigned ${appointment.bookingType} (#${appointment.bookingId}) for ${patientName} to you.`,
+                {
+                    appointmentId: String(appointment._id),
+                    bookingId: String(appointment.bookingId || ""),
+                    type: "CLINIC_APPOINTMENT_ASSIGNED"
+                }
+            );
+        } catch (notifErr) {
+            console.error("Doctor Push Notification Error:", notifErr.message);
+        }
+
+        const populatedAppointment = await Appointment.findById(appointment._id)
+            .populate('doctorId', 'name speciality qualification profileImage phone dutyStatus')
+            .populate('clinicId', 'name clinicName city address')
+            .populate('userId', 'name phone email')
+            .lean();
+
+        return res.status(200).json({
+            success: true,
+            message: `Appointment #${appointment.bookingId} successfully assigned to ${doctor.name}.`,
+            data: populatedAppointment
+        });
+
+    } catch (error) {
+        console.error("Assign Appointment To Clinic Doctor Error:", error);
+        return res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+};
+
+// ==========================================
+// 8. CLINIC SETS DOCTOR'S OPD CABIN, FEE, SCHEDULE & SYNCS AVAILABILITY
+// @route   PUT /api/clinic/doctors/configure-opd/:doctorId
+// @access  Private (Clinic)
+// ==========================================
+const configureDoctorOpdScheduleByClinic = async (req, res) => {
+    try {
+        const clinicId = req.user.id;
+        const { doctorId } = req.params;
+        const {
+            roomNumber,
+            slotDuration,
+            opdFee,
+            availability,
+            isOpdEnabled,
+            premiumSlots,
+            startTime,
+            endTime,
+            offDays,
+            morningSlots,
+            afternoonSlots,
+            eveningSlots
+        } = req.body || {};
+
+        if (!mongoose.Types.ObjectId.isValid(doctorId)) {
+            return res.status(400).json({ success: false, message: "Invalid doctorId format." });
+        }
+
+        const doctor = await Doctor.findOne({ _id: doctorId, clinicId }).lean();
+        if (!doctor) {
+            return res.status(404).json({
+                success: false,
+                message: "Doctor not found in this clinic."
+            });
+        }
+
+        const safeObjectParse = (val, defaultVal = {}) => {
+            if (!val) return defaultVal;
+            if (typeof val === 'object' && val !== null) return val;
+            if (typeof val === 'string') {
+                try {
+                    const parsed = JSON.parse(val);
+                    if (typeof parsed === 'object' && parsed !== null) return parsed;
+                } catch (e) {}
+            }
+            return defaultVal;
+        };
+
+        let currentConsultation = safeObjectParse(doctor.consultationStatus, { online: true, clinic: true, home: false });
+        let isClinicAvail = doctor.isClinicAvailable !== undefined ? doctor.isClinicAvailable : true;
+
+        if (isOpdEnabled !== undefined) {
+            const enabledBool = (isOpdEnabled === true || isOpdEnabled === 'true');
+            currentConsultation.clinic = enabledBool;
+            isClinicAvail = enabledBool;
+        }
+
+        let currentFees = safeObjectParse(doctor.fees, { online: 0, clinic: 500, home: 0 });
+        if (opdFee !== undefined) {
+            currentFees.clinic = Math.max(0, parseInt(opdFee, 10) || 0);
+        }
+
+        let currentDepartment = safeObjectParse(doctor.department, { isNormal: true, isEmergency: false, roomNumber: "Cabin 1" });
+        if (roomNumber !== undefined) {
+            currentDepartment.roomNumber = String(roomNumber).trim();
+        }
+
+        const resolvedSlotDuration = slotDuration !== undefined
+            ? Math.max(5, parseInt(slotDuration, 10) || 15)
+            : (doctor.slotDuration || 30);
+
+        const updatePayload = {
+            consultationStatus: currentConsultation,
+            isClinicAvailable: isClinicAvail,
+            fees: currentFees,
+            department: currentDepartment,
+            slotDuration: resolvedSlotDuration
+        };
+
+        let parsedAvailabilityArray = doctor.availability || [];
+        if (availability !== undefined) {
+            parsedAvailabilityArray = Array.isArray(availability)
+                ? availability
+                : (typeof availability === 'string' ? safeObjectParse(availability, []) : []);
+            updatePayload.availability = parsedAvailabilityArray;
+        }
+
+        // 1. Update Doctor Document
+        await Doctor.collection.updateOne(
+            { _id: new mongoose.Types.ObjectId(doctorId) },
+            { $set: updatePayload }
+        );
+
+        // 2. Sync Slot Duration, Start/End Times & Premium Slots in Availability Collection
+        const availabilitySyncFields = {
+            vendorId: new mongoose.Types.ObjectId(doctorId),
+            vendorType: 'Doctor',
+            clinicId: new mongoose.Types.ObjectId(clinicId),
+            slotDuration: resolvedSlotDuration
+        };
+
+        if (startTime) {
+            availabilitySyncFields.startTime = String(startTime).trim();
+        } else if (parsedAvailabilityArray.length > 0 && parsedAvailabilityArray[0].startTime) {
+            availabilitySyncFields.startTime = parsedAvailabilityArray[0].startTime;
+        }
+
+        if (endTime) {
+            availabilitySyncFields.endTime = String(endTime).trim();
+        } else if (parsedAvailabilityArray.length > 0 && parsedAvailabilityArray[0].endTime) {
+            availabilitySyncFields.endTime = parsedAvailabilityArray[0].endTime;
+        }
+
+        if (offDays !== undefined) {
+            availabilitySyncFields.offDays = Array.isArray(offDays) ? offDays : safeObjectParse(offDays, []);
+        }
+
+        if (premiumSlots !== undefined) {
+            availabilitySyncFields.premiumSlots = Array.isArray(premiumSlots) ? premiumSlots : safeObjectParse(premiumSlots, []);
+        }
+
+        if (morningSlots !== undefined) {
+            availabilitySyncFields.morningSlots = (morningSlots === true || morningSlots === 'true');
+        }
+        if (afternoonSlots !== undefined) {
+            availabilitySyncFields.afternoonSlots = (afternoonSlots === true || afternoonSlots === 'true');
+        }
+        if (eveningSlots !== undefined) {
+            availabilitySyncFields.eveningSlots = (eveningSlots === true || eveningSlots === 'true');
+        }
+
+        await Availability.findOneAndUpdate(
+            { vendorId: doctorId },
+            { $set: availabilitySyncFields },
+            { upsert: true, new: true }
+        );
+
+        const updatedDoctor = await Doctor.findById(doctorId)
+            .select('name speciality fees department slotDuration availability consultationStatus isClinicAvailable')
+            .lean();
+
+        return res.status(200).json({
+            success: true,
+            message: `OPD Configuration and Slots synced for ${updatedDoctor.name}.`,
+            data: updatedDoctor
+        });
+
+    } catch (error) {
+        console.error("Configure Doctor OPD Schedule By Clinic Error:", error);
+        return res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+};
 module.exports = {
     addClinicDoctor,
     getMyClinicDoctors,
     updateClinicDoctor,
     toggleDoctorDutyStatus,
     removeClinicDoctor,
-    loginClinicDoctor
+    loginClinicDoctor,
+    assignAppointmentToClinicDoctor,
+    configureDoctorOpdScheduleByClinic
 };
