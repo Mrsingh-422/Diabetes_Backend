@@ -308,7 +308,8 @@ app.use('/api/clinic/lab',  require('./routes/clinic/clinicLabRoute')); // Clini
 app.use('/api/clinic/ambulance-slots', require('./routes/clinic/clinicAmbulanceSlotsRoute'));
 app.use('/api/clinic/coupons', require('./routes/clinic/clinicCouponRoute'));
 
-
+////////////////// Clinic Doctor Panel Routes /////////////////////
+app.use('/api/clinic/doctor-panel', require('./routes/clinic/clinicDoctorPannel/clinicDocAppointmentRoute'));
 
 
 ////////////////////////////// Food Routes User /////////////////////////////////
