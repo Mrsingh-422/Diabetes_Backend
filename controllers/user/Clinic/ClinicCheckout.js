@@ -10,10 +10,10 @@ const Ward = require('../../../models/Ward');
 const Bed = require('../../../models/Bed');
 
 const crypto = require('crypto');
-const { 
-    createRazorpayOrder, 
-    verifyRazorpaySignature, 
-    fetchAndMapRazorpayPayment 
+const {
+    createRazorpayOrder,
+    verifyRazorpaySignature,
+    fetchAndMapRazorpayPayment
 } = require('../../../utils/razorpay');
 
 // ==========================================
@@ -54,7 +54,7 @@ const calculateClinicBillHelper = async ({
         verifiedDoctor = await Doctor.findById(doctorId).select('name speciality qualification fees profileImage averageRating dutyStatus');
         if (verifiedDoctor) {
             const mode = doctor.mode || 'clinic';
-            
+
             if (mode === 'video' || mode === 'Video Consult' || mode === 'online' || mode === 'videoConsultFee') {
                 doctorFee = Number(verifiedDoctor.fees?.online || doctor.fee || 500);
             } else if (mode === 'home' || mode === 'Home Visit' || mode === 'homeVisitFee') {
@@ -98,7 +98,7 @@ const calculateClinicBillHelper = async ({
     let verifiedAmbulance = null;
     if (bookingType === 'EMERGENCY' && ambulance && ambulance.ambulanceId) {
         const ambDoc = await Ambulance.findById(ambulance.ambulanceId);
-        
+
         const rideType = ambulance.rideType || 'ONE-WAY RIDE';
         let ridePrice = 0;
 
@@ -211,9 +211,9 @@ const calculateClinicBill = async (req, res) => {
         const couponCode = body.couponCode;
 
         if (!clinicId) {
-            return res.status(400).json({ 
-                success: false, 
-                message: "Clinic ID (clinicId) is required." 
+            return res.status(400).json({
+                success: false,
+                message: "Clinic ID (clinicId) is required."
             });
         }
 
@@ -266,9 +266,9 @@ const bookClinicOrder = async (req, res) => {
         const paymentMethod = body.paymentMethod || 'Online';
 
         if (!clinicId) {
-            return res.status(400).json({ 
-                success: false, 
-                message: "Clinic ID (clinicId) is required." 
+            return res.status(400).json({
+                success: false,
+                message: "Clinic ID (clinicId) is required."
             });
         }
 
@@ -290,11 +290,11 @@ const bookClinicOrder = async (req, res) => {
         // Home Visit address check
         const selectedMode = doctor?.mode || consultationType;
         const isHomeVisit = selectedMode === 'Home Visit' || selectedMode === 'homeVisitFee' || selectedMode === 'home';
-        
+
         if (isHomeVisit && (!address || !address.phone || !address.city || !address.houseNo)) {
-            return res.status(400).json({ 
-                success: false, 
-                message: "Complete address with phone, house number, and city is mandatory for Doctor Home Visits." 
+            return res.status(400).json({
+                success: false,
+                message: "Complete address with phone, house number, and city is mandatory for Doctor Home Visits."
             });
         }
 
@@ -339,13 +339,15 @@ const bookClinicOrder = async (req, res) => {
             rzpOrder = await createRazorpayOrder(totalPayable, `cln_${tempBookingId}_${Date.now()}`);
         }
 
+        const userSelectedDoctorId = doctor?.doctorId || doctor?._id || calculation.verifiedDoctor?._id || null;
+
         // Create Master Appointment Document
         const newAppointment = await Appointment.create({
             bookingId: tempBookingId,
             userId,
             clinicId,
-            doctorId: doctor?.doctorId || doctor?._id || calculation.verifiedDoctor?._id,
-            
+            doctorId: userSelectedDoctorId,
+            isDoctorSelectedAlready: Boolean(userSelectedDoctorId),
             wardId: targetWardId,
             bedId: targetBedId,
             ambulanceId: targetAmbulanceId,
@@ -356,7 +358,7 @@ const bookClinicOrder = async (req, res) => {
             consultationType: isHomeVisit ? 'Home Visit' : (selectedMode === 'video' || selectedMode === 'Video Consult' || selectedMode === 'videoConsultFee' ? 'Video Consult' : 'Clinic Visit'),
             appointmentDate: appointmentDate ? new Date(appointmentDate) : (ward?.startDate ? new Date(ward.startDate) : new Date()),
             appointmentTime: appointmentTime || homeVisitDetails?.preferredTime || "10:30 AM",
-            
+
             patients: [{
                 patientName: patient?.memberName || req.user?.name || "Myself (Primary Account)",
                 patientAge: Number(patient?.age) || 30,
@@ -474,12 +476,12 @@ const bookClinicOrder = async (req, res) => {
 const verifyClinicPayment = async (req, res) => {
     try {
         const userId = req.user.id;
-        const { 
-            appointmentId, 
-            bookingId, 
-            razorpayOrderId, 
-            razorpayPaymentId, 
-            razorpaySignature 
+        const {
+            appointmentId,
+            bookingId,
+            razorpayOrderId,
+            razorpayPaymentId,
+            razorpaySignature
         } = req.body;
 
         const targetId = appointmentId || bookingId;
@@ -612,10 +614,10 @@ const getSingleClinicBooking = async (req, res) => {
             $or: [{ _id: id }, { bookingId: id }],
             userId
         })
-        .populate('clinicId', 'name clinicName city state address phoneNumber image posterimage')
-        .populate('doctorId', 'name speciality qualification experienceYears languages fees profileImage')
-        .populate('ambulanceId', 'name vehicleNumber vehicleType phone driverName pricing')
-        .lean();
+            .populate('clinicId', 'name clinicName city state address phoneNumber image posterimage')
+            .populate('doctorId', 'name speciality qualification experienceYears languages fees profileImage')
+            .populate('ambulanceId', 'name vehicleNumber vehicleType phone driverName pricing')
+            .lean();
 
         if (!booking) {
             return res.status(404).json({ success: false, message: "Clinic booking not found." });

@@ -362,7 +362,7 @@ const getClinicBookings = async (req, res) => {
         const totalDocs = await Appointment.countDocuments(query);
 
         const bookings = await Appointment.find(query)
-            .select('_id bookingId bookingType consultationType status paymentStatus totalAmount appointmentDate appointmentTime wardName bedNumber startDate endDate clinicId doctorId patients address createdAt')
+            .select('_id bookingId bookingType consultationType status paymentStatus totalAmount appointmentDate appointmentTime wardName bedNumber startDate endDate clinicId doctorId isDoctorSelectedAlready patients address createdAt')
             .populate('clinicId', 'name clinicName city image')
             .populate('doctorId', 'name speciality profileImage')
             .populate('userId', 'name phone')
@@ -399,6 +399,7 @@ const getClinicBookings = async (req, res) => {
                 patientAge: primaryPatient?.patientAge || null,
                 patientGender: primaryPatient?.gender || null,
                 wardInfo: b.wardName ? `${b.wardName} (Bed #${b.bedNumber})` : null,
+                isDoctorSelectedAlready: Boolean(b.isDoctorSelectedAlready),
                 doctor: {
                     _id: b.doctorId?._id,
                     name: b.doctorId?.name || "Attending Specialist",
@@ -507,6 +508,7 @@ const getClinicDirectBookings = async (req, res) => {
                 paymentMethod: b.paymentMethod,
                 appointmentDate: b.appointmentDate ? new Date(b.appointmentDate).toISOString().split('T')[0] : null,
                 appointmentTime: b.appointmentTime || "10:30 AM",
+                isDoctorSelectedAlready: Boolean(b.isDoctorSelectedAlready),
 
                 // 🏨 Ward & Bed Stay Information
                 stayDetails: {

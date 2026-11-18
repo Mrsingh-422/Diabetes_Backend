@@ -11,7 +11,9 @@ const {
     removeClinicDoctor,
     loginClinicDoctor,
     assignAppointmentToClinicDoctor,
-    configureDoctorOpdScheduleByClinic
+    reassignAppointmentToClinicDoctor,
+    configureDoctorOpdScheduleByClinic,
+    getAvailableClinicDoctors
 } = require('../../controllers/clinic/clinicDoctorController');
 
 // Base Route: /api/clinic/doctors
@@ -31,9 +33,13 @@ router.put('/update/:id', protect('clinic'), clinicDoctorUploads, updateClinicDo
 // 3. Toggle Doctor Duty Status (On Duty / Off Duty)
 router.patch('/:id/duty-status', protect('clinic'), toggleDoctorDutyStatus);
 
+router.get('/available', protect('clinic'), getAvailableClinicDoctors);
+
+
 
 // 4. Assign Appointment to Clinic Doctor
 router.put('/assign-appointment', protect('clinic'), assignAppointmentToClinicDoctor);
+router.put('/reassign-appointment', protect('clinic'), reassignAppointmentToClinicDoctor);
 
 // 5. Configure Doctor OPD Cabin, Fee & Sync Availability
 router.put('/configure-opd/:doctorId', protect('clinic'), configureDoctorOpdScheduleByClinic);

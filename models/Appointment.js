@@ -4,6 +4,7 @@ const mongoose = require('mongoose');
 const appointmentSchema = new mongoose.Schema({
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     doctorId: { type: mongoose.Schema.Types.ObjectId, ref: 'Doctor' },
+    isDoctorSelectedAlready: { type: Boolean, default: false }, 
     clinicId: { type: mongoose.Schema.Types.ObjectId, ref: 'Clinic', default: null },
     bedId: { type: mongoose.Schema.Types.ObjectId, ref: 'Bed', default: null }, // For hospital admissions
     wardId: { type: mongoose.Schema.Types.ObjectId, ref: 'Ward', default: null }, // For hospital admissions

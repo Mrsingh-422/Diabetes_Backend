@@ -705,7 +705,7 @@ const assignAppointmentToClinicDoctor = async (req, res) => {
             });
         }
 
-        // 2. Verify Doctor belongs to this Clinic & is Eligible
+        // 2. Verify Doctor belongs to this Clinic & is Free/Eligible
         const doctor = await Doctor.findOne({ _id: doctorId, clinicId });
         if (!doctor) {
             return res.status(404).json({
@@ -717,14 +717,21 @@ const assignAppointmentToClinicDoctor = async (req, res) => {
         if (doctor.isActive === false) {
             return res.status(400).json({
                 success: false,
-                message: `Dr. ${doctor.name} account is currently inactive.`
+                message: `${doctor.name} account is currently inactive.`
             });
         }
 
         if (doctor.profileStatus !== 'Approved') {
             return res.status(400).json({
                 success: false,
-                message: `Dr. ${doctor.name} profile is '${doctor.profileStatus}'. Only Approved doctors can be assigned appointments.`
+                message: `${doctor.name} profile is '${doctor.profileStatus}'. Only Approved doctors can be assigned appointments.`
+            });
+        }
+
+        if (['Busy', 'Off Duty', 'On Leave'].includes(doctor.dutyStatus)) {
+            return res.status(400).json({
+                success: false,
+                message: `${doctor.name} is currently '${doctor.dutyStatus}' and cannot be assigned.`
             });
         }
 
@@ -751,8 +758,9 @@ const assignAppointmentToClinicDoctor = async (req, res) => {
 
         const now = new Date();
         const previousDoctorId = appointment.doctorId ? appointment.doctorId.toString() : null;
+        const hasHistory = Array.isArray(appointment.treatmentHistory) && appointment.treatmentHistory.length > 0;
 
-        // 4. Close previous open shift in treatmentHistory (if reassigning)
+        // 4. Close previous open shift in treatmentHistory (if switching doctor)
         if (previousDoctorId && previousDoctorId !== doctor._id.toString()) {
             const historyArr = appointment.treatmentHistory || [];
             for (let i = historyArr.length - 1; i >= 0; i--) {
@@ -770,12 +778,15 @@ const assignAppointmentToClinicDoctor = async (req, res) => {
         }
 
         // 5. Log Assignment in treatmentHistory
-        if (!previousDoctorId) {
+        if (!previousDoctorId || !hasHistory) {
+            // Covers both fresh assignment AND clinic confirming user's pre-selected doctor
             appointment.treatmentHistory.push({
                 fromDoctorId: null,
                 toDoctorId: doctor._id,
                 action: 'Initial-Assignment',
-                notes: notes || `Assigned to ${doctor.name} by Clinic`,
+                notes: notes || (previousDoctorId === doctor._id.toString()
+                    ? `User-selected doctor (${doctor.name}) confirmed & assigned by Clinic`
+                    : `Assigned to ${doctor.name} by Clinic`),
                 startTime: now
             });
         } else if (previousDoctorId !== doctor._id.toString()) {
@@ -836,6 +847,241 @@ const assignAppointmentToClinicDoctor = async (req, res) => {
 
     } catch (error) {
         console.error("Assign Appointment To Clinic Doctor Error:", error);
+        return res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+};
+
+// ==========================================
+// 10. CLINIC REASSIGNS APPOINTMENT TO ANOTHER FREE CLINIC DOCTOR
+// @route   PUT /api/clinic/doctors/reassign-appointment
+// @access  Private (Clinic)
+// ==========================================
+const reassignAppointmentToClinicDoctor = async (req, res) => {
+    try {
+        const clinicId = req.user.id;
+        const {
+            appointmentId,
+            newDoctorId,
+            doctorId, // Alias support
+            reason,
+            notes,
+            appointmentDate,
+            appointmentTime
+        } = req.body || {};
+
+        const targetDoctorId = newDoctorId || doctorId;
+        const reassignReason = (reason || notes || "").trim();
+
+        // 1. Validate Required Fields
+        if (!appointmentId || !targetDoctorId) {
+            return res.status(400).json({
+                success: false,
+                message: "appointmentId and newDoctorId (or doctorId) are required."
+            });
+        }
+
+        if (!mongoose.Types.ObjectId.isValid(targetDoctorId)) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid newDoctorId format."
+            });
+        }
+
+        // 2. Find Appointment belonging to this Clinic (supports _id or bookingId)
+        const apptQuery = mongoose.Types.ObjectId.isValid(appointmentId)
+            ? { $or: [{ _id: appointmentId }, { bookingId: appointmentId }], clinicId }
+            : { bookingId: appointmentId, clinicId };
+
+        const appointment = await Appointment.findOne(apptQuery);
+        if (!appointment) {
+            return res.status(404).json({
+                success: false,
+                message: "Appointment not found or does not belong to your clinic."
+            });
+        }
+
+        const blockedStatuses = ['Completed', 'Cancelled-By-User', 'Cancelled-By-Doctor', 'Cancelled-By-Clinic', 'No-Show'];
+        if (blockedStatuses.includes(appointment.status)) {
+            return res.status(400).json({
+                success: false,
+                message: `Cannot reassign doctor because appointment status is '${appointment.status}'.`
+            });
+        }
+
+        // 3. Ensure Appointment Already Had an Assigned Doctor
+        if (!appointment.doctorId) {
+            return res.status(400).json({
+                success: false,
+                message: "No doctor is currently assigned to this appointment. Please use the Assign Appointment API instead."
+            });
+        }
+
+        const previousDoctorId = appointment.doctorId.toString();
+
+        // 4. Prevent Reassigning to the Same Doctor
+        if (previousDoctorId === String(targetDoctorId)) {
+            return res.status(400).json({
+                success: false,
+                message: "Appointment is already assigned to this doctor. Please select a different doctor to reassign."
+            });
+        }
+
+        // 5. Verify New Doctor belongs to Clinic, is Approved, Active, and Free
+        const newDoctor = await Doctor.findOne({ _id: targetDoctorId, clinicId });
+        if (!newDoctor) {
+            return res.status(404).json({
+                success: false,
+                message: "Target doctor not found in your clinic."
+            });
+        }
+
+        if (newDoctor.isActive === false) {
+            return res.status(400).json({
+                success: false,
+                message: `${newDoctor.name} account is currently inactive.`
+            });
+        }
+
+        if (newDoctor.profileStatus !== 'Approved') {
+            return res.status(400).json({
+                success: false,
+                message: `${newDoctor.name} profile is '${newDoctor.profileStatus}'. Only Approved doctors can be assigned.`
+            });
+        }
+
+        if (['Busy', 'Off Duty', 'On Leave'].includes(newDoctor.dutyStatus)) {
+            return res.status(400).json({
+                success: false,
+                message: `${newDoctor.name} is currently '${newDoctor.dutyStatus}' and not free for reassignment.`
+            });
+        }
+
+        const previousDoctor = await Doctor.findById(previousDoctorId).select('name speciality').lean();
+        const prevDocName = previousDoctor?.name || "Previous Doctor";
+        const now = new Date();
+
+        // 6. Close Previous Doctor's Active Shift in treatmentHistory
+        if (!Array.isArray(appointment.treatmentHistory)) {
+            appointment.treatmentHistory = [];
+        }
+
+        for (let i = appointment.treatmentHistory.length - 1; i >= 0; i--) {
+            if (!appointment.treatmentHistory[i].endTime) {
+                appointment.treatmentHistory[i].endTime = now;
+                if (appointment.treatmentHistory[i].startTime) {
+                    const diffMins = Math.max(0, Math.floor((now - new Date(appointment.treatmentHistory[i].startTime)) / 60000));
+                    const hrs = Math.floor(diffMins / 60);
+                    const mins = diffMins % 60;
+                    appointment.treatmentHistory[i].durationDisplay = hrs > 0
+                        ? `${hrs} hr ${mins} mins (Reassigned)`
+                        : `${mins} mins (Reassigned)`;
+                } else {
+                    appointment.treatmentHistory[i].durationDisplay = "Reassigned";
+                }
+                break;
+            }
+        }
+
+        // 7. Push New Doctor Assignment Log in treatmentHistory
+        const logNote = reassignReason
+            ? `Reassigned from ${prevDocName} to ${newDoctor.name} by Clinic. Reason: ${reassignReason}`
+            : `Reassigned from ${prevDocName} to ${newDoctor.name} by Clinic.`;
+
+        appointment.treatmentHistory.push({
+            fromDoctorId: previousDoctorId,
+            toDoctorId: newDoctor._id,
+            action: 'Transfer-Accepted',
+            notes: logNote,
+            startTime: now
+        });
+
+        // 8. Update Appointment Fields
+        appointment.doctorId = newDoctor._id;
+        appointment.pendingDoctorId = null;
+
+        if (appointmentDate) {
+            appointment.appointmentDate = new Date(appointmentDate);
+        }
+        if (appointmentTime) {
+            appointment.appointmentTime = String(appointmentTime).trim();
+        }
+        if (['Pending', 'Clinic-Pending'].includes(appointment.status)) {
+            appointment.status = 'Confirmed';
+        }
+
+        await appointment.save();
+
+        // 9. Send Non-Blocking Notifications to New Doctor, Previous Doctor & Patient
+        const patientName = appointment.patients?.[0]?.patientName || "Patient";
+        Promise.allSettled([
+            sendPushNotification(
+                newDoctor._id,
+                'doctor',
+                "Appointment Reassigned to You",
+                `Clinic reassigned ${appointment.bookingType} (#${appointment.bookingId}) for ${patientName} to you.`,
+                {
+                    appointmentId: String(appointment._id),
+                    bookingId: String(appointment.bookingId || ""),
+                    type: "CLINIC_APPOINTMENT_REASSIGNED"
+                }
+            ),
+            sendPushNotification(
+                previousDoctorId,
+                'doctor',
+                "Appointment Reassigned",
+                `Appointment #${appointment.bookingId} (${patientName}) has been reassigned to ${newDoctor.name}.`,
+                {
+                    appointmentId: String(appointment._id),
+                    bookingId: String(appointment.bookingId || ""),
+                    type: "CLINIC_APPOINTMENT_MOVED"
+                }
+            ),
+            appointment.userId
+                ? sendPushNotification(
+                    appointment.userId,
+                    'user',
+                    "Doctor Updated for Your Appointment",
+                    `Your appointment #${appointment.bookingId} has been reassigned to ${newDoctor.name} (${newDoctor.speciality || 'Specialist'}).`,
+                    {
+                        appointmentId: String(appointment._id),
+                        bookingId: String(appointment.bookingId || ""),
+                        type: "APPOINTMENT_DOCTOR_REASSIGNED"
+                    }
+                )
+                : Promise.resolve()
+        ]).catch((err) => console.error("Reassign Notification Error:", err.message));
+
+        // 10. Return Populated Updated Appointment
+        const populatedAppointment = await Appointment.findById(appointment._id)
+            .populate('doctorId', 'name speciality qualification profileImage phone dutyStatus')
+            .populate('clinicId', 'name clinicName city address')
+            .populate('userId', 'name phone email')
+            .lean();
+
+        return res.status(200).json({
+            success: true,
+            message: `Appointment #${appointment.bookingId} successfully reassigned from ${prevDocName} to ${newDoctor.name}.`,
+            reassignmentSummary: {
+                previousDoctor: {
+                    _id: previousDoctorId,
+                    name: prevDocName
+                },
+                newDoctor: {
+                    _id: newDoctor._id,
+                    name: newDoctor.name,
+                    speciality: newDoctor.speciality
+                },
+                reason: reassignReason || "Reassigned by Clinic",
+                reassignedAt: now
+            },
+            data: populatedAppointment
+        });
+
+    } catch (error) {
+        console.error("Reassign Appointment To Clinic Doctor Error:", error);
         return res.status(500).json({
             success: false,
             message: error.message
@@ -998,6 +1244,136 @@ const configureDoctorOpdScheduleByClinic = async (req, res) => {
         });
     }
 };
+
+// ==========================================
+// 9. GET FREE / ON-DUTY CLINIC DOCTORS (Prioritizes User-Selected Doctor First)
+// @route   GET /api/clinic/doctors/available?appointmentId=...&search=...&speciality=...
+// @access  Private (Clinic)
+// ==========================================
+const getAvailableClinicDoctors = async (req, res) => {
+    try {
+        const clinicId = req.user.id;
+        const { appointmentId, selectedDoctorId, search, speciality } = req.query;
+
+        let targetSelectedDoctorId = null;
+        let isDoctorSelectedAlready = false;
+        let selectedDoctorWarning = null;
+
+        // 1. Check if Appointment has a user-selected doctor
+        if (appointmentId && String(appointmentId).trim() !== '') {
+            const cleanApptId = String(appointmentId).trim();
+            const apptQuery = mongoose.Types.ObjectId.isValid(cleanApptId)
+                ? { $or: [{ _id: cleanApptId }, { bookingId: cleanApptId }], clinicId }
+                : { bookingId: cleanApptId, clinicId };
+
+            const appointment = await Appointment.findOne(apptQuery)
+                .select('doctorId isDoctorSelectedAlready treatmentHistory')
+                .lean();
+
+            if (!appointment) {
+                return res.status(404).json({
+                    success: false,
+                    message: "Appointment not found in your clinic."
+                });
+            }
+
+            const hasClinicAssigned = Array.isArray(appointment.treatmentHistory) && appointment.treatmentHistory.length > 0;
+
+            if (
+                appointment.doctorId &&
+                (
+                    appointment.isDoctorSelectedAlready === true ||
+                    (appointment.isDoctorSelectedAlready === undefined && !hasClinicAssigned)
+                )
+            ) {
+                targetSelectedDoctorId = appointment.doctorId.toString();
+                isDoctorSelectedAlready = true;
+            }
+        } else if (selectedDoctorId && mongoose.Types.ObjectId.isValid(selectedDoctorId)) {
+            targetSelectedDoctorId = String(selectedDoctorId);
+            isDoctorSelectedAlready = true;
+        }
+
+        // 2. Build Free Doctors Filter (Exclude Busy, Off Duty, On Leave)
+        const doctorQuery = {
+            clinicId,
+            isActive: true,
+            profileStatus: 'Approved',
+            dutyStatus: { $nin: ['Busy', 'Off Duty', 'On Leave'] }
+        };
+
+        if (speciality && String(speciality).trim() !== '') {
+            doctorQuery.speciality = new RegExp(String(speciality).trim(), 'i');
+        }
+
+        if (search && String(search).trim() !== '') {
+            const regex = new RegExp(String(search).trim(), 'i');
+            doctorQuery.$or = [
+                { name: regex },
+                { speciality: regex },
+                { qualification: regex }
+            ];
+        }
+
+        // 3. Fetch Free Clinic Doctors
+        const freeDoctors = await Doctor.find(doctorQuery)
+            .select('_id name profileImage speciality qualification experienceYears gender dutyStatus fees consultationStatus isClinicAvailable isOnlineAvailable isHomeAvailable averageRating totalReviews department')
+            .sort({ averageRating: -1, createdAt: -1 })
+            .lean();
+
+        // 4. Check if User-Selected Doctor is currently Busy / Off Duty / On Leave
+        if (isDoctorSelectedAlready && targetSelectedDoctorId) {
+            const isSelectedDoctorInFreeList = freeDoctors.some(
+                (doc) => doc._id.toString() === targetSelectedDoctorId
+            );
+
+            if (!isSelectedDoctorInFreeList) {
+                const selectedDocRecord = await Doctor.findOne({ _id: targetSelectedDoctorId, clinicId })
+                    .select('name dutyStatus isActive profileStatus')
+                    .lean();
+
+                if (selectedDocRecord) {
+                    selectedDoctorWarning = `User selected ${selectedDocRecord.name}, who is currently '${selectedDocRecord.dutyStatus || 'Unavailable'}'. Please select another free doctor.`;
+                }
+            }
+        }
+
+        // 5. Attach `isDoctorSelectedAlready` per doctor & Sort selected doctor FIRST
+        const formattedDoctors = freeDoctors.map((doc) => {
+            const isThisSelected = Boolean(
+                isDoctorSelectedAlready &&
+                targetSelectedDoctorId &&
+                doc._id.toString() === targetSelectedDoctorId
+            );
+
+            return {
+                ...doc,
+                isDoctorSelectedAlready: isThisSelected
+            };
+        });
+
+        formattedDoctors.sort((a, b) => {
+            if (a.isDoctorSelectedAlready === b.isDoctorSelectedAlready) return 0;
+            return a.isDoctorSelectedAlready ? -1 : 1; // Selected doctor always at index 0
+        });
+
+        return res.status(200).json({
+            success: true,
+            isDoctorSelectedAlready,
+            selectedDoctorId: targetSelectedDoctorId,
+            selectedDoctorWarning,
+            count: formattedDoctors.length,
+            data: formattedDoctors
+        });
+
+    } catch (error) {
+        console.error("Get Available Clinic Doctors Error:", error);
+        return res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+};
 module.exports = {
     addClinicDoctor,
     getMyClinicDoctors,
@@ -1006,5 +1382,7 @@ module.exports = {
     removeClinicDoctor,
     loginClinicDoctor,
     assignAppointmentToClinicDoctor,
-    configureDoctorOpdScheduleByClinic
+    reassignAppointmentToClinicDoctor,
+    configureDoctorOpdScheduleByClinic,
+    getAvailableClinicDoctors
 };
