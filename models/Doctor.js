@@ -40,7 +40,17 @@ const doctorSchema = new mongoose.Schema({
         registrationNo: { type: String, default: "" }, // 👈 Registration No
         stateName: { type: String, default: "" }       // 👈 State Name
     }],
-
+      
+     // Leave Applications (For Clinic/Hospital Doctors)
+    leaves: [{
+        startDate: { type: Date, required: true },
+        endDate: { type: Date, required: true },
+        reason: { type: String, required: true, trim: true },
+        status: { type: String, enum: ['Pending', 'Approved', 'Rejected'], default: 'Pending' },
+        rejectionReason: { type: String, default: "" },
+        appliedAt: { type: Date, default: Date.now },
+        reviewedAt: { type: Date, default: null }
+    }],
     speciality: { type: String, default: null },
     licenseNumber: { type: String, default: null },
     councilNumber: { type: String, default: null },
