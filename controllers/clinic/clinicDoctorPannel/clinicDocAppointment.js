@@ -13,6 +13,8 @@ const Pharmacy = require('../../../models/Pharmacy');
 const Lab = require('../../../models/Lab');
 const LabTest = require('../../../models/LabTest');
 const LabPackage = require('../../../models/LabPackage');
+const MasterLabTest = require('../../../models/MasterLabTest');
+const MasterLabPackage = require('../../../models/MasterLabPackage');
 const mongoose = require('mongoose');
 const moment = require('moment');
 const { sendPushNotification } = require('../../../utils/notification');
@@ -1084,143 +1086,97 @@ const recordClinicAppointmentVitals = async (req, res) => {
 };
 
 // ==========================================
-// 6. GET MEDICINES (Clinic Pharmacy Inventory + Master Catalog Search)
+// 6. GET ALL MEDICINES FROM DATABASE (With Optional Clinic Pharmacy Stock Badge)
 // @route   GET /api/clinic/doctor-panel/appointments/medicines
 // ==========================================
 const getClinicDoctorMedicines = async (req, res) => {
     try {
         const clinicId = req.user.clinicId || null;
-        const { search = '', page = 1, limit = 25, clinicOnly = 'false' } = req.query;
+        const { search = '', page = 1, limit = 50, all = 'false' } = req.query;
 
-        const pageNum = Math.max(1, parseInt(page, 10) || 1);
-        const limitNum = Math.max(1, parseInt(limit, 10) || 25);
-        const skip = (pageNum - 1) * limitNum;
         const cleanSearch = String(search || '').trim();
+        const fetchAll = all === 'true' || String(limit).toLowerCase() === 'all';
+        const pageNum = Math.max(1, parseInt(page, 10) || 1);
+        const limitNum = Math.max(1, parseInt(limit, 10) || 50);
+        const skip = (pageNum - 1) * limitNum;
 
-        // 1. Check if this Clinic has an internal Clinic Pharmacy
-        const clinicPharmacy = clinicId
-            ? await Pharmacy.findOne({ clinicId, isClinic: true, isActive: true })
-                .select('_id name phone address')
-                .lean()
-            : null;
-
-        let inventoryMap = new Map();
-        let clinicMedicineList = [];
-
-        if (clinicPharmacy) {
-            const invItems = await MedicineInventory.find({
-                pharmacyId: clinicPharmacy._id,
-                is_available: true,
-                stock_quantity: { $gt: 0 }
-            })
-                .populate('medicineId', 'name salt_composition manufacturers packaging mrp best_price prescription_required image_url primary_use')
-                .lean();
-
-            invItems.forEach((inv) => {
-                if (!inv.medicineId) return;
-                const med = inv.medicineId;
-
-                if (cleanSearch) {
-                    const regex = new RegExp(cleanSearch, 'i');
-                    if (!regex.test(med.name || '') && !regex.test(med.salt_composition || '')) {
-                        return;
-                    }
-                }
-
-                const formatted = {
-                    _id: med._id,
-                    inventoryId: inv._id,
-                    name: med.name,
-                    saltComposition: med.salt_composition || "",
-                    manufacturers: med.manufacturers || "",
-                    packaging: med.packaging || "1 Strip",
-                    primaryUse: med.primary_use || "",
-                    prescriptionRequired: med.prescription_required || "No",
-                    mrp: Number(inv.mrp || med.mrp || 0),
-                    sellingPrice: Number(inv.vendor_price || inv.mrp || med.best_price || 0),
-                    stockQuantity: inv.stock_quantity || 0,
-                    batchNumber: inv.batch_number,
-                    expiryDate: inv.expiry_date || null,
-                    imageUrl: Array.isArray(med.image_url) && med.image_url.length > 0 ? med.image_url[0] : null,
-                    inClinicPharmacy: true
-                };
-
-                inventoryMap.set(String(med._id), formatted);
-                clinicMedicineList.push(formatted);
-            });
-        }
-
-        // If clinicOnly=true, return only Clinic Pharmacy stocked medicines
-        if (clinicOnly === 'true') {
-            const paginated = clinicMedicineList.slice(skip, skip + limitNum);
-            return res.status(200).json({
-                success: true,
-                hasClinicPharmacy: Boolean(clinicPharmacy),
-                clinicPharmacy,
-                totalDocs: clinicMedicineList.length,
-                totalPages: Math.ceil(clinicMedicineList.length / limitNum) || 1,
-                currentPage: pageNum,
-                count: paginated.length,
-                data: paginated
-            });
-        }
-
-        // 2. Fetch from Master Medicine Catalog (flagging items stocked in Clinic Pharmacy)
+        // 1. Query ALL medicines directly from Master Medicine DB Collection
         const masterQuery = {};
         if (cleanSearch) {
             const regex = new RegExp(cleanSearch, 'i');
             masterQuery.$or = [
                 { name: regex },
                 { salt_composition: regex },
-                { primary_use: regex }
+                { primary_use: regex },
+                { manufacturers: regex }
             ];
         }
 
-        const [totalMaster, masterMedicines] = await Promise.all([
-            Medicine.countDocuments(masterQuery),
-            Medicine.find(masterQuery)
-                .select('name salt_composition manufacturers packaging mrp best_price prescription_required image_url primary_use')
-                .sort({ name: 1 })
-                .skip(skip)
-                .limit(limitNum)
-                .lean()
-        ]);
+        const totalDocs = await Medicine.countDocuments(masterQuery);
 
-        const masterFormatted = masterMedicines.map((med) => {
-            if (inventoryMap.has(String(med._id))) {
-                return inventoryMap.get(String(med._id));
-            }
+        let medQuery = Medicine.find(masterQuery)
+            .select('name salt_composition manufacturers packaging mrp best_price prescription_required image_url primary_use')
+            .sort({ name: 1 });
+
+        if (!fetchAll) {
+            medQuery = medQuery.skip(skip).limit(limitNum);
+        }
+
+        const medicines = await medQuery.lean();
+
+        // 2. Check Clinic Pharmacy only to attach stock/price metadata (Never filters out DB medicines)
+        const clinicPharmacy = clinicId
+            ? await Pharmacy.findOne({ clinicId, isClinic: true, isActive: true })
+                .select('_id name phone address')
+                .lean()
+            : null;
+
+        let inventoryByMedicineId = new Map();
+        if (clinicPharmacy && medicines.length > 0) {
+            const medicineIds = medicines.map((m) => m._id);
+            const invItems = await MedicineInventory.find({
+                pharmacyId: clinicPharmacy._id,
+                medicineId: { $in: medicineIds },
+                is_available: true,
+                stock_quantity: { $gt: 0 }
+            }).lean();
+
+            invItems.forEach((inv) => {
+                inventoryByMedicineId.set(String(inv.medicineId), inv);
+            });
+        }
+
+        // 3. Format All DB Medicines
+        const formattedMedicines = medicines.map((med) => {
+            const inv = inventoryByMedicineId.get(String(med._id)) || null;
             return {
                 _id: med._id,
-                inventoryId: null,
-                name: med.name,
+                inventoryId: inv ? inv._id : null,
+                name: med.name || "",
                 saltComposition: med.salt_composition || "",
                 manufacturers: med.manufacturers || "",
                 packaging: med.packaging || "1 Strip",
                 primaryUse: med.primary_use || "",
                 prescriptionRequired: med.prescription_required || "No",
-                mrp: Number(med.mrp || 0),
-                sellingPrice: Number(med.best_price || med.mrp || 0),
-                stockQuantity: 0,
-                batchNumber: null,
-                expiryDate: null,
+                mrp: Number(inv?.mrp || med.mrp || 0),
+                sellingPrice: Number(inv?.vendor_price || inv?.mrp || med.best_price || med.mrp || 0),
+                stockQuantity: inv ? (inv.stock_quantity || 0) : 0,
+                batchNumber: inv ? inv.batch_number : null,
+                expiryDate: inv ? (inv.expiry_date || null) : null,
                 imageUrl: Array.isArray(med.image_url) && med.image_url.length > 0 ? med.image_url[0] : null,
-                inClinicPharmacy: false
+                inClinicPharmacy: Boolean(inv)
             };
         });
-
-        // Sort Clinic Pharmacy stocked items first
-        masterFormatted.sort((a, b) => Number(b.inClinicPharmacy) - Number(a.inClinicPharmacy));
 
         return res.status(200).json({
             success: true,
             hasClinicPharmacy: Boolean(clinicPharmacy),
             clinicPharmacy,
-            totalDocs: totalMaster,
-            totalPages: Math.ceil(totalMaster / limitNum) || 1,
-            currentPage: pageNum,
-            count: masterFormatted.length,
-            data: masterFormatted
+            totalDocs,
+            totalPages: fetchAll ? 1 : (Math.ceil(totalDocs / limitNum) || 1),
+            currentPage: fetchAll ? 1 : pageNum,
+            count: formattedMedicines.length,
+            data: formattedMedicines
         });
     } catch (error) {
         console.error("Get Clinic Doctor Medicines Error:", error);
@@ -1229,7 +1185,7 @@ const getClinicDoctorMedicines = async (req, res) => {
 };
 
 // ==========================================
-// 7. GET CLINIC LAB TESTS & PACKAGES
+// 7. GET ALL LAB TESTS & PACKAGES (Clinic Lab + All Master DB Tests)
 // @route   GET /api/clinic/doctor-panel/appointments/lab-tests
 // ==========================================
 const getClinicDoctorLabTests = async (req, res) => {
@@ -1237,90 +1193,161 @@ const getClinicDoctorLabTests = async (req, res) => {
         const clinicId = req.user.clinicId || null;
         const { search = '', category = '' } = req.query;
 
+        const cleanSearch = String(search || '').trim();
+        const cleanCategory = String(category || '').trim();
+
         const clinicLab = clinicId
             ? await Lab.findOne({ clinicId, isClinic: true, isActive: true })
                 .select('_id name phone address isHomeCollectionAvailable isRapidServiceAvailable')
                 .lean()
             : null;
 
-        if (!clinicLab) {
-            return res.status(200).json({
-                success: true,
-                hasClinicLab: false,
-                clinicLab: null,
-                message: "No active Clinic Lab registered under this clinic.",
-                testsCount: 0,
-                packagesCount: 0,
-                tests: [],
-                packages: []
+        let clinicTests = [];
+        let clinicPackages = [];
+        const coveredMasterTestIds = [];
+        const coveredMasterPackageIds = [];
+
+        // 1. Fetch Clinic Lab's configured tests & packages (if Clinic Lab exists)
+        if (clinicLab) {
+            const testQuery = { labId: clinicLab._id, isActive: true };
+            const pkgQuery = { labId: clinicLab._id, isActive: true };
+
+            if (cleanSearch) {
+                const regex = new RegExp(cleanSearch, 'i');
+                testQuery.$or = [{ testName: regex }, { mainCategory: regex }, { description: regex }];
+                pkgQuery.$or = [{ packageName: regex }, { category: regex }, { shortDescription: regex }];
+            }
+            if (cleanCategory) {
+                const catRegex = new RegExp(cleanCategory, 'i');
+                testQuery.mainCategory = catRegex;
+                pkgQuery.category = catRegex;
+            }
+
+            const [cTests, cPackages] = await Promise.all([
+                LabTest.find(testQuery)
+                    .select('_id masterTestId testName mainCategory sampleType testType reportTime amount discountPercent discountPrice precaution description')
+                    .sort({ testName: 1 })
+                    .lean(),
+                LabPackage.find(pkgQuery)
+                    .select('_id masterPackageId packageName mainCategory category totalTestsIncluded sampleTypes reportTime mrp discountPercent offerPrice precaution shortDescription isFastingRequired fastingDuration')
+                    .sort({ packageName: 1 })
+                    .lean()
+            ]);
+
+            clinicTests = cTests.map((t) => {
+                if (t.masterTestId) coveredMasterTestIds.push(t.masterTestId);
+                return {
+                    _id: t._id,
+                    masterTestId: t.masterTestId || null,
+                    itemType: 'LabTest',
+                    name: t.testName,
+                    category: t.mainCategory || 'Pathology',
+                    sampleType: t.sampleType || "Blood",
+                    testType: t.testType || "Both",
+                    reportTime: t.reportTime || "24 Hours",
+                    mrp: Number(t.amount || 0),
+                    price: Number(t.discountPrice || t.amount || 0),
+                    precaution: t.precaution || "",
+                    inClinicLab: true
+                };
+            });
+
+            clinicPackages = cPackages.map((p) => {
+                if (p.masterPackageId) coveredMasterPackageIds.push(p.masterPackageId);
+                return {
+                    _id: p._id,
+                    masterPackageId: p.masterPackageId || null,
+                    itemType: 'LabPackage',
+                    name: p.packageName,
+                    category: p.category || p.mainCategory || 'Full Body',
+                    totalTestsIncluded: p.totalTestsIncluded || 0,
+                    sampleTypes: p.sampleTypes || [],
+                    reportTime: p.reportTime || "24 Hours",
+                    isFastingRequired: Boolean(p.isFastingRequired),
+                    fastingDuration: p.fastingDuration || "",
+                    mrp: Number(p.mrp || 0),
+                    price: Number(p.offerPrice || p.mrp || 0),
+                    precaution: p.precaution || "",
+                    inClinicLab: true
+                };
             });
         }
 
-        const cleanSearch = String(search || '').trim();
-        const cleanCategory = String(category || '').trim();
-
-        const testQuery = { labId: clinicLab._id, isActive: true };
-        const pkgQuery = { labId: clinicLab._id, isActive: true };
+        // 2. Fetch ALL remaining Master Tests & Packages from DB so doctor sees all DB tests
+        const masterTestQuery = {
+            isActive: true,
+            ...(coveredMasterTestIds.length > 0 ? { _id: { $nin: coveredMasterTestIds } } : {})
+        };
+        const masterPkgQuery = {
+            isActive: true,
+            ...(coveredMasterPackageIds.length > 0 ? { _id: { $nin: coveredMasterPackageIds } } : {})
+        };
 
         if (cleanSearch) {
             const regex = new RegExp(cleanSearch, 'i');
-            testQuery.$or = [{ testName: regex }, { mainCategory: regex }, { description: regex }];
-            pkgQuery.$or = [{ packageName: regex }, { category: regex }, { shortDescription: regex }];
+            masterTestQuery.$or = [{ testName: regex }, { mainCategory: regex }, { category: regex }, { testCode: regex }];
+            masterPkgQuery.$or = [{ packageName: regex }, { mainCategory: regex }, { category: regex }, { shortDescription: regex }];
         }
-
         if (cleanCategory) {
             const catRegex = new RegExp(cleanCategory, 'i');
-            testQuery.mainCategory = catRegex;
-            pkgQuery.category = catRegex;
+            masterTestQuery.mainCategory = catRegex;
+            masterPkgQuery.category = catRegex;
         }
 
-        const [tests, packages] = await Promise.all([
-            LabTest.find(testQuery)
-                .select('_id testName mainCategory sampleType testType reportTime amount discountPercent discountPrice precaution description')
+        const [masterTests, masterPackages] = await Promise.all([
+            MasterLabTest.find(masterTestQuery)
+                .select('_id testName testCode mainCategory category sampleType pretestPreparation standardMRP')
                 .sort({ testName: 1 })
                 .lean(),
-            LabPackage.find(pkgQuery)
-                .select('_id packageName mainCategory category totalTestsIncluded sampleTypes reportTime mrp discountPercent offerPrice precaution shortDescription isFastingRequired fastingDuration')
+            MasterLabPackage.find(masterPkgQuery)
+                .select('_id packageName mainCategory category tests sampleTypes reportTime isFastingRequired fastingDuration preparations standardMRP')
                 .sort({ packageName: 1 })
                 .lean()
         ]);
 
-        const formattedTests = tests.map((t) => ({
-            _id: t._id,
+        const formattedMasterTests = masterTests.map((mt) => ({
+            _id: mt._id,
+            masterTestId: mt._id,
             itemType: 'LabTest',
-            name: t.testName,
-            category: t.mainCategory,
-            sampleType: t.sampleType || "Blood",
-            testType: t.testType || "Both",
-            reportTime: t.reportTime || "24 Hours",
-            mrp: Number(t.amount || 0),
-            price: Number(t.discountPrice || t.amount || 0),
-            precaution: t.precaution || ""
+            name: mt.testName,
+            category: mt.mainCategory || mt.category || 'Pathology',
+            sampleType: mt.sampleType || "Blood",
+            testType: "Both",
+            reportTime: "24 Hours",
+            mrp: Number(mt.standardMRP || 0),
+            price: Number(mt.standardMRP || 0),
+            precaution: mt.pretestPreparation || "",
+            inClinicLab: false
         }));
 
-        const formattedPackages = packages.map((p) => ({
-            _id: p._id,
+        const formattedMasterPackages = masterPackages.map((mp) => ({
+            _id: mp._id,
+            masterPackageId: mp._id,
             itemType: 'LabPackage',
-            name: p.packageName,
-            category: p.category || p.mainCategory,
-            totalTestsIncluded: p.totalTestsIncluded || 0,
-            sampleTypes: p.sampleTypes || [],
-            reportTime: p.reportTime || "24 Hours",
-            isFastingRequired: Boolean(p.isFastingRequired),
-            fastingDuration: p.fastingDuration || "",
-            mrp: Number(p.mrp || 0),
-            price: Number(p.offerPrice || p.mrp || 0),
-            precaution: p.precaution || ""
+            name: mp.packageName,
+            category: mp.category || mp.mainCategory || 'Full Body',
+            totalTestsIncluded: Array.isArray(mp.tests) ? mp.tests.length : 0,
+            sampleTypes: mp.sampleTypes || [],
+            reportTime: mp.reportTime || "24 Hours",
+            isFastingRequired: Boolean(mp.isFastingRequired),
+            fastingDuration: mp.fastingDuration || "",
+            mrp: Number(mp.standardMRP || 0),
+            price: Number(mp.standardMRP || 0),
+            precaution: Array.isArray(mp.preparations) ? mp.preparations.join(', ') : "",
+            inClinicLab: false
         }));
+
+        const allTests = [...clinicTests, ...formattedMasterTests];
+        const allPackages = [...clinicPackages, ...formattedMasterPackages];
 
         return res.status(200).json({
             success: true,
-            hasClinicLab: true,
+            hasClinicLab: Boolean(clinicLab),
             clinicLab,
-            testsCount: formattedTests.length,
-            packagesCount: formattedPackages.length,
-            tests: formattedTests,
-            packages: formattedPackages
+            testsCount: allTests.length,
+            packagesCount: allPackages.length,
+            tests: allTests,
+            packages: allPackages
         });
     } catch (error) {
         console.error("Get Clinic Doctor Lab Tests Error:", error);
@@ -1328,8 +1355,9 @@ const getClinicDoctorLabTests = async (req, res) => {
     }
 };
 
+
 // ==========================================
-// 8. PRESCRIBE PATIENT IN OPD (Creates Prescription + Links to Appointment)
+// 8. PRESCRIBE PATIENT IN OPD (Without advisedInvestigations & dietPlanPdf)
 // @route   POST /api/clinic/doctor-panel/appointments/:id/prescribe
 // ==========================================
 const prescribeClinicAppointment = async (req, res) => {
@@ -1368,7 +1396,6 @@ const prescribeClinicAppointment = async (req, res) => {
             chiefComplaints,
             diagnosis,
             medicines,
-            advisedInvestigations,
             adviceGiven,
             advice,
             specialInstructions,
@@ -1378,7 +1405,6 @@ const prescribeClinicAppointment = async (req, res) => {
             markCompleted = false
         } = req.body || {};
 
-        // Parse Medicines
         let rawMedicines = [];
         if (typeof medicines === 'string') {
             try { rawMedicines = JSON.parse(medicines); } catch (e) { rawMedicines = []; }
@@ -1396,7 +1422,6 @@ const prescribeClinicAppointment = async (req, res) => {
                 instructions: String(m.instructions || m.administrationTiming || "").trim()
             }));
 
-        // Parse Diagnosis
         let parsedDiagnosis = [];
         if (typeof diagnosis === 'string') {
             try {
@@ -1409,7 +1434,6 @@ const prescribeClinicAppointment = async (req, res) => {
             parsedDiagnosis = diagnosis.map((d) => String(d).trim()).filter(Boolean);
         }
 
-        // Parse Optional Vitals
         let parsedVitals = null;
         if (vitals) {
             let vObj = vitals;
@@ -1429,21 +1453,16 @@ const prescribeClinicAppointment = async (req, res) => {
             }
         }
 
-        // Handle PDF Uploads
+        // Single Prescription PDF Upload (No dietPlanPdf)
         let prescriptionPdfPath = null;
-        let dietPlanPdfPath = null;
-        if (req.files) {
-            if (req.files.prescriptionPdf?.[0]) {
-                prescriptionPdfPath = `/uploads/doctor_prescriptions/${req.files.prescriptionPdf[0].filename}`;
-            }
-            if (req.files.dietPlanPdf?.[0]) {
-                dietPlanPdfPath = `/uploads/diet_plans/${req.files.dietPlanPdf[0].filename}`;
-            }
+        if (req.file) {
+            prescriptionPdfPath = `/uploads/doctor_prescriptions/${req.file.filename}`;
+        } else if (req.files && req.files.prescriptionPdf?.[0]) {
+            prescriptionPdfPath = `/uploads/doctor_prescriptions/${req.files.prescriptionPdf[0].filename}`;
         }
 
         const resolvedAdvice = adviceGiven || advice || "";
 
-        // Create Prescription Record
         const newPrescription = await Prescription.create({
             appointmentId: appointment._id,
             doctorId,
@@ -1451,20 +1470,16 @@ const prescribeClinicAppointment = async (req, res) => {
             chiefComplaints: chiefComplaints || appointment.clinicalSummary?.chiefComplaint || appointment.bookingReason || "",
             diagnosis: parsedDiagnosis,
             medicines: parsedMedicines,
-            advisedInvestigations: advisedInvestigations || "None",
             adviceGiven: resolvedAdvice,
             specialInstructions: specialInstructions || "",
             nextAppointment: nextAppointment || "",
             pdfUrl: prescriptionPdfPath,
-            dietPlanPdf: dietPlanPdfPath,
             additionalNotes: additionalNotes || ""
         });
 
-        // Link Prescription & Update Clinical Summary on Appointment
         if (!appointment.clinicalSummary) appointment.clinicalSummary = {};
         if (chiefComplaints) appointment.clinicalSummary.chiefComplaint = chiefComplaints;
         if (parsedDiagnosis.length > 0) appointment.clinicalSummary.diagnosis = parsedDiagnosis.join(', ');
-        if (advisedInvestigations) appointment.clinicalSummary.investigation = advisedInvestigations;
         if (resolvedAdvice) appointment.clinicalSummary.treatmentResult = resolvedAdvice;
         if (parsedVitals) appointment.clinicalSummary.vitals = parsedVitals;
 
@@ -1510,6 +1525,7 @@ const prescribeClinicAppointment = async (req, res) => {
         return res.status(500).json({ success: false, message: error.message });
     }
 };
+
 
 // ==========================================
 // 9. SEND PRESCRIBED MEDICINES TO CLINIC PHARMACY
@@ -1654,7 +1670,7 @@ const sendAppointmentToClinicPharmacy = async (req, res) => {
 };
 
 // ==========================================
-// 10. SEND PRESCRIBED TESTS TO CLINIC LAB
+// 10. SEND PRESCRIBED TESTS TO CLINIC LAB (Supports Clinic Lab + Master DB Tests)
 // @route   POST /api/clinic/doctor-panel/appointments/:id/send-to-lab
 // ==========================================
 const sendAppointmentToClinicLab = async (req, res) => {
@@ -1704,22 +1720,30 @@ const sendAppointmentToClinicLab = async (req, res) => {
 
             if (item.packageId && mongoose.Types.ObjectId.isValid(item.packageId)) {
                 const pkg = await LabPackage.findById(item.packageId).select('packageName offerPrice mrp').lean();
+                const masterPkg = !pkg
+                    ? await MasterLabPackage.findById(item.packageId).select('packageName standardMRP').lean()
+                    : null;
+
                 formattedTests.push({
                     testId: null,
-                    packageId: item.packageId,
+                    packageId: pkg ? item.packageId : null,
                     itemType: 'LabPackage',
-                    name: String(item.name || pkg?.packageName || "Lab Package").trim(),
-                    price: Number(item.price || pkg?.offerPrice || pkg?.mrp || 0),
+                    name: String(item.name || pkg?.packageName || masterPkg?.packageName || "Lab Package").trim(),
+                    price: Number(item.price || pkg?.offerPrice || pkg?.mrp || masterPkg?.standardMRP || 0),
                     instructions: String(item.instructions || "").trim()
                 });
             } else if (item.testId && mongoose.Types.ObjectId.isValid(item.testId)) {
                 const testDoc = await LabTest.findById(item.testId).select('testName discountPrice amount').lean();
+                const masterTest = !testDoc
+                    ? await MasterLabTest.findById(item.testId).select('testName standardMRP').lean()
+                    : null;
+
                 formattedTests.push({
-                    testId: item.testId,
+                    testId: testDoc ? item.testId : null,
                     packageId: null,
                     itemType: 'LabTest',
-                    name: String(item.name || testDoc?.testName || "Lab Test").trim(),
-                    price: Number(item.price || testDoc?.discountPrice || testDoc?.amount || 0),
+                    name: String(item.name || testDoc?.testName || masterTest?.testName || "Lab Test").trim(),
+                    price: Number(item.price || testDoc?.discountPrice || testDoc?.amount || masterTest?.standardMRP || 0),
                     instructions: String(item.instructions || "").trim()
                 });
             } else if (item.name && String(item.name).trim() !== "") {

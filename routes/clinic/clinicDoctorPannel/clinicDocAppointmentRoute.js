@@ -2,7 +2,7 @@
 const express = require('express');
 const router = express.Router();
 const { protect } = require('../../../middleware/authMiddleware');
-const { hospitalPrescriptionUploads } = require('../../../middleware/multer');
+const { docPrescriptionUpload } = require('../../../middleware/multer');
 
 const {
     getClinicDoctorAppointments,
@@ -43,7 +43,7 @@ router.patch('/appointments/:id/respond', protect('clinic-doctor'), respondToAss
 // --- OPD EXAMINATION, VITALS & PRESCRIPTION ---
 router.patch('/appointments/:id/start-consultation', protect('clinic-doctor'), startClinicConsultation);
 router.patch('/appointments/:id/vitals', protect('clinic-doctor'), recordClinicAppointmentVitals);
-router.post('/appointments/:id/prescribe', protect('clinic-doctor'), hospitalPrescriptionUploads, prescribeClinicAppointment);
+router.post('/appointments/:id/prescribe', protect('clinic-doctor'), docPrescriptionUpload, prescribeClinicAppointment);
 router.patch('/appointments/:id/complete-consultation', protect('clinic-doctor'), completeClinicConsultation);
 
 // --- REFERRALS: CLINIC PHARMACY, CLINIC LAB & ADMISSION ---
