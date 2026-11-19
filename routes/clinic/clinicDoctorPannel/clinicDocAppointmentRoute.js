@@ -4,7 +4,8 @@ const router = express.Router();
 const { protect } = require('../../../middleware/authMiddleware');
 const {
     getClinicDoctorAppointments,
-    getClinicDoctorAppointmentById
+    getClinicDoctorAppointmentById,
+    respondToAssignedAppointment
 } = require('../../../controllers/clinic/clinicDoctorPannel/clinicDocAppointment');
 
 // Base Route: /api/clinic/doctor-panel
@@ -14,5 +15,8 @@ router.get('/appointments', protect('clinic-doctor'), getClinicDoctorAppointment
 
 // 2. Get Single Appointment Full Details by _id or bookingId
 router.get('/appointments/:id', protect('clinic-doctor'), getClinicDoctorAppointmentById);
+router.get('/appointments/:id/respond', protect('clinic-doctor'), respondToAssignedAppointment); // For doctor to accept/reject the appointment
+
+
 
 module.exports = router;
