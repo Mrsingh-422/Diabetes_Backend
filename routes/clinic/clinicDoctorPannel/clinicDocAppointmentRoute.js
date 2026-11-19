@@ -2,23 +2,58 @@
 const express = require('express');
 const router = express.Router();
 const { protect } = require('../../../middleware/authMiddleware');
+const { hospitalPrescriptionUploads } = require('../../../middleware/multer');
 
 const {
     getClinicDoctorAppointments,
     getClinicDoctorAppointmentById,
-    respondToAssignedAppointment
+    respondToAssignedAppointment,
+    startClinicConsultation,
+    recordClinicAppointmentVitals,
+    getClinicDoctorMedicines,
+    getClinicDoctorLabTests,
+    prescribeClinicAppointment,
+    sendAppointmentToClinicPharmacy,
+    sendAppointmentToClinicLab,
+    getClinicDoctorAvailableBeds,
+    referAppointmentToAdmission,
+    getAvailableSecondaryClinicDoctors,
+    addSecondaryDoctorOrOpinion,
+    respondToSecondaryDoctorRequest,
+    submitSecondaryDoctorOpinion,
+    completeClinicConsultation
 } = require('../../../controllers/clinic/clinicDoctorPannel/clinicDocAppointment');
 
 // Base Route: /api/clinic/doctor-panel
 
-// --- APPOINTMENTS ---
-router.get('/appointments', protect('clinic-doctor'), getClinicDoctorAppointments);
+// --- LOOKUP / CATALOG ROUTES (Must stay before /appointments/:id) ---
+router.get('/appointments/medicines', protect('clinic-doctor'), getClinicDoctorMedicines);
+router.get('/appointments/lab-tests', protect('clinic-doctor'), getClinicDoctorLabTests);
+router.get('/appointments/available-beds', protect('clinic-doctor'), getClinicDoctorAvailableBeds);
+router.get('/appointments/available-doctors', protect('clinic-doctor'), getAvailableSecondaryClinicDoctors);
 
-// Accept or Reject (with reason) assigned appointment
+// --- LIST & RESPOND ---
+router.get('/appointments', protect('clinic-doctor'), getClinicDoctorAppointments);
 router.patch('/appointments/respond', protect('clinic-doctor'), respondToAssignedAppointment);
+
+// --- SINGLE APPOINTMENT DETAILS ---
+router.get('/appointments/:id', protect('clinic-doctor'), getClinicDoctorAppointmentById);
 router.patch('/appointments/:id/respond', protect('clinic-doctor'), respondToAssignedAppointment);
 
-// Get Single Appointment Full Details by _id or bookingId
-router.get('/appointments/:id', protect('clinic-doctor'), getClinicDoctorAppointmentById);
+// --- OPD EXAMINATION, VITALS & PRESCRIPTION ---
+router.patch('/appointments/:id/start-consultation', protect('clinic-doctor'), startClinicConsultation);
+router.patch('/appointments/:id/vitals', protect('clinic-doctor'), recordClinicAppointmentVitals);
+router.post('/appointments/:id/prescribe', protect('clinic-doctor'), hospitalPrescriptionUploads, prescribeClinicAppointment);
+router.patch('/appointments/:id/complete-consultation', protect('clinic-doctor'), completeClinicConsultation);
+
+// --- REFERRALS: CLINIC PHARMACY, CLINIC LAB & ADMISSION ---
+router.post('/appointments/:id/send-to-pharmacy', protect('clinic-doctor'), sendAppointmentToClinicPharmacy);
+router.post('/appointments/:id/send-to-lab', protect('clinic-doctor'), sendAppointmentToClinicLab);
+router.post('/appointments/:id/refer-admission', protect('clinic-doctor'), referAppointmentToAdmission);
+
+// --- SECONDARY DOCTOR & SECOND OPINION WORKFLOW ---
+router.post('/appointments/:id/add-secondary-doctor', protect('clinic-doctor'), addSecondaryDoctorOrOpinion);
+router.patch('/appointments/:id/secondary-doctor/respond', protect('clinic-doctor'), respondToSecondaryDoctorRequest);
+router.post('/appointments/:id/secondary-doctor/opinion', protect('clinic-doctor'), submitSecondaryDoctorOpinion);
 
 module.exports = router;
