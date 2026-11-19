@@ -690,7 +690,6 @@ const assignAppointmentToClinicDoctor = async (req, res) => {
             notes
         } = req.body || {};
 
-        // 1. Validate Required IDs
         if (!appointmentId || !doctorId) {
             return res.status(400).json({
                 success: false,
@@ -705,7 +704,6 @@ const assignAppointmentToClinicDoctor = async (req, res) => {
             });
         }
 
-        // 2. Verify Doctor belongs to this Clinic & is Free/Eligible
         const doctor = await Doctor.findOne({ _id: doctorId, clinicId });
         if (!doctor) {
             return res.status(404).json({
@@ -735,7 +733,6 @@ const assignAppointmentToClinicDoctor = async (req, res) => {
             });
         }
 
-        // 3. Find Appointment belonging to this Clinic (supports _id or bookingId)
         const apptQuery = mongoose.Types.ObjectId.isValid(appointmentId)
             ? { $or: [{ _id: appointmentId }, { bookingId: appointmentId }], clinicId }
             : { bookingId: appointmentId, clinicId };
@@ -760,12 +757,14 @@ const assignAppointmentToClinicDoctor = async (req, res) => {
         const previousDoctorId = appointment.doctorId ? appointment.doctorId.toString() : null;
         const hasHistory = Array.isArray(appointment.treatmentHistory) && appointment.treatmentHistory.length > 0;
 
-        // 4. Close previous open shift in treatmentHistory (if switching doctor)
         if (previousDoctorId && previousDoctorId !== doctor._id.toString()) {
             const historyArr = appointment.treatmentHistory || [];
             for (let i = historyArr.length - 1; i >= 0; i--) {
                 if (!historyArr[i].endTime) {
                     historyArr[i].endTime = now;
+                    historyArr[i].acceptanceStatus = historyArr[i].acceptanceStatus === 'Pending-Acceptance'
+                        ? 'Unaccepted-Reassigned'
+                        : 'Replaced-After-Acceptance';
                     if (historyArr[i].startTime) {
                         const diffMins = Math.max(0, Math.floor((now - new Date(historyArr[i].startTime)) / 60000));
                         const hrs = Math.floor(diffMins / 60);
@@ -777,13 +776,13 @@ const assignAppointmentToClinicDoctor = async (req, res) => {
             }
         }
 
-        // 5. Log Assignment in treatmentHistory
         if (!previousDoctorId || !hasHistory) {
-            // Covers both fresh assignment AND clinic confirming user's pre-selected doctor
             appointment.treatmentHistory.push({
                 fromDoctorId: null,
                 toDoctorId: doctor._id,
                 action: 'Initial-Assignment',
+                acceptanceStatus: 'Pending-Acceptance',
+                assignedAt: now,
                 notes: notes || (previousDoctorId === doctor._id.toString()
                     ? `User-selected doctor (${doctor.name}) confirmed & assigned by Clinic`
                     : `Assigned to ${doctor.name} by Clinic`),
@@ -794,14 +793,18 @@ const assignAppointmentToClinicDoctor = async (req, res) => {
                 fromDoctorId: appointment.doctorId,
                 toDoctorId: doctor._id,
                 action: 'Transfer-Accepted',
+                acceptanceStatus: 'Pending-Acceptance',
+                assignedAt: now,
                 notes: notes || `Reassigned to ${doctor.name} by Clinic`,
                 startTime: now
             });
         }
 
-        // 6. Update Appointment Fields
         appointment.doctorId = doctor._id;
         appointment.pendingDoctorId = null;
+        appointment.doctorAcceptanceStatus = 'Pending'; // 👈 Reset for new doctor response
+        appointment.doctorRejectionReason = "";
+        appointment.doctorRespondedAt = null;
 
         if (appointmentDate) {
             appointment.appointmentDate = new Date(appointmentDate);
@@ -815,7 +818,6 @@ const assignAppointmentToClinicDoctor = async (req, res) => {
 
         await appointment.save();
 
-        // 7. Notify Assigned Clinic Doctor (Non-blocking)
         try {
             const patientName = appointment.patients?.[0]?.patientName || "Patient";
             await sendPushNotification(
@@ -865,7 +867,7 @@ const reassignAppointmentToClinicDoctor = async (req, res) => {
         const {
             appointmentId,
             newDoctorId,
-            doctorId, // Alias support
+            doctorId,
             reason,
             notes,
             appointmentDate,
@@ -875,7 +877,6 @@ const reassignAppointmentToClinicDoctor = async (req, res) => {
         const targetDoctorId = newDoctorId || doctorId;
         const reassignReason = (reason || notes || "").trim();
 
-        // 1. Validate Required Fields
         if (!appointmentId || !targetDoctorId) {
             return res.status(400).json({
                 success: false,
@@ -890,7 +891,6 @@ const reassignAppointmentToClinicDoctor = async (req, res) => {
             });
         }
 
-        // 2. Find Appointment belonging to this Clinic (supports _id or bookingId)
         const apptQuery = mongoose.Types.ObjectId.isValid(appointmentId)
             ? { $or: [{ _id: appointmentId }, { bookingId: appointmentId }], clinicId }
             : { bookingId: appointmentId, clinicId };
@@ -911,7 +911,6 @@ const reassignAppointmentToClinicDoctor = async (req, res) => {
             });
         }
 
-        // 3. Ensure Appointment Already Had an Assigned Doctor
         if (!appointment.doctorId) {
             return res.status(400).json({
                 success: false,
@@ -921,7 +920,6 @@ const reassignAppointmentToClinicDoctor = async (req, res) => {
 
         const previousDoctorId = appointment.doctorId.toString();
 
-        // 4. Prevent Reassigning to the Same Doctor
         if (previousDoctorId === String(targetDoctorId)) {
             return res.status(400).json({
                 success: false,
@@ -929,7 +927,6 @@ const reassignAppointmentToClinicDoctor = async (req, res) => {
             });
         }
 
-        // 5. Verify New Doctor belongs to Clinic, is Approved, Active, and Free
         const newDoctor = await Doctor.findOne({ _id: targetDoctorId, clinicId });
         if (!newDoctor) {
             return res.status(404).json({
@@ -963,7 +960,6 @@ const reassignAppointmentToClinicDoctor = async (req, res) => {
         const prevDocName = previousDoctor?.name || "Previous Doctor";
         const now = new Date();
 
-        // 6. Close Previous Doctor's Active Shift in treatmentHistory
         if (!Array.isArray(appointment.treatmentHistory)) {
             appointment.treatmentHistory = [];
         }
@@ -971,6 +967,9 @@ const reassignAppointmentToClinicDoctor = async (req, res) => {
         for (let i = appointment.treatmentHistory.length - 1; i >= 0; i--) {
             if (!appointment.treatmentHistory[i].endTime) {
                 appointment.treatmentHistory[i].endTime = now;
+                appointment.treatmentHistory[i].acceptanceStatus = appointment.treatmentHistory[i].acceptanceStatus === 'Pending-Acceptance'
+                    ? 'Unaccepted-Reassigned'
+                    : 'Replaced-After-Acceptance';
                 if (appointment.treatmentHistory[i].startTime) {
                     const diffMins = Math.max(0, Math.floor((now - new Date(appointment.treatmentHistory[i].startTime)) / 60000));
                     const hrs = Math.floor(diffMins / 60);
@@ -985,7 +984,6 @@ const reassignAppointmentToClinicDoctor = async (req, res) => {
             }
         }
 
-        // 7. Push New Doctor Assignment Log in treatmentHistory
         const logNote = reassignReason
             ? `Reassigned from ${prevDocName} to ${newDoctor.name} by Clinic. Reason: ${reassignReason}`
             : `Reassigned from ${prevDocName} to ${newDoctor.name} by Clinic.`;
@@ -994,13 +992,17 @@ const reassignAppointmentToClinicDoctor = async (req, res) => {
             fromDoctorId: previousDoctorId,
             toDoctorId: newDoctor._id,
             action: 'Transfer-Accepted',
+            acceptanceStatus: 'Pending-Acceptance',
+            assignedAt: now,
             notes: logNote,
             startTime: now
         });
 
-        // 8. Update Appointment Fields
         appointment.doctorId = newDoctor._id;
         appointment.pendingDoctorId = null;
+        appointment.doctorAcceptanceStatus = 'Pending'; // 👈 Reset for new doctor response
+        appointment.doctorRejectionReason = "";
+        appointment.doctorRespondedAt = null;
 
         if (appointmentDate) {
             appointment.appointmentDate = new Date(appointmentDate);
@@ -1014,7 +1016,6 @@ const reassignAppointmentToClinicDoctor = async (req, res) => {
 
         await appointment.save();
 
-        // 9. Send Non-Blocking Notifications to New Doctor, Previous Doctor & Patient
         const patientName = appointment.patients?.[0]?.patientName || "Patient";
         Promise.allSettled([
             sendPushNotification(
@@ -1054,7 +1055,6 @@ const reassignAppointmentToClinicDoctor = async (req, res) => {
                 : Promise.resolve()
         ]).catch((err) => console.error("Reassign Notification Error:", err.message));
 
-        // 10. Return Populated Updated Appointment
         const populatedAppointment = await Appointment.findById(appointment._id)
             .populate('doctorId', 'name speciality qualification profileImage phone dutyStatus')
             .populate('clinicId', 'name clinicName city address')
@@ -1088,7 +1088,6 @@ const reassignAppointmentToClinicDoctor = async (req, res) => {
         });
     }
 };
-
 // ==========================================
 // 8. CLINIC SETS DOCTOR'S OPD CABIN, FEE, SCHEDULE & SYNCS AVAILABILITY
 // @route   PUT /api/clinic/doctors/configure-opd/:doctorId

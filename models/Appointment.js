@@ -5,6 +5,13 @@ const appointmentSchema = new mongoose.Schema({
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     doctorId: { type: mongoose.Schema.Types.ObjectId, ref: 'Doctor' },
     isDoctorSelectedAlready: { type: Boolean, default: false }, 
+      doctorAcceptanceStatus: {
+        type: String,
+        enum: ['Pending', 'Accepted', 'Rejected'],
+        default: 'Pending'
+    },
+    doctorRejectionReason: { type: String, default: "" },
+    doctorRespondedAt: { type: Date, default: null },
     clinicId: { type: mongoose.Schema.Types.ObjectId, ref: 'Clinic', default: null },
     bedId: { type: mongoose.Schema.Types.ObjectId, ref: 'Bed', default: null }, // For hospital admissions
     wardId: { type: mongoose.Schema.Types.ObjectId, ref: 'Ward', default: null }, // For hospital admissions

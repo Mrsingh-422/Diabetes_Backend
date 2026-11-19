@@ -9,6 +9,7 @@ const Ward = require('../../../models/Ward');
 const Bed = require('../../../models/Bed');
 const mongoose = require('mongoose');
 const moment = require('moment');
+const { sendPushNotification } = require('../../../utils/notification');
 
 // ==========================================
 // Helper 1: Human-readable shift duration
@@ -42,7 +43,7 @@ const enrichTreatmentHistory = (historyArray = [], appointmentStatus = 'Pending'
     ].includes(appointmentStatus);
 
     return (historyArray || []).map((item, index) => {
-        const startRef = item.startTime || item.timestamp;
+        const startRef = item.assignedAt || item.startTime || item.timestamp;
         const endRef = item.endTime || null;
         const isLastEntry = index === historyArray.length - 1;
 
@@ -62,7 +63,9 @@ const enrichTreatmentHistory = (historyArray = [], appointmentStatus = 'Pending'
             fromDoctorSpeciality: item.fromDoctorId?.speciality || null,
             toDoctorName: item.toDoctorId?.name || "Assigned Doctor",
             toDoctorSpeciality: item.toDoctorId?.speciality || null,
-            isCurrentlyActive: Boolean(!endRef && !isCaseClosed && isLastEntry),
+            acceptanceStatus: item.acceptanceStatus || 'Pending-Acceptance',
+            isCurrentlyActive: Boolean(!endRef && !isCaseClosed && isLastEntry && item.acceptanceStatus === 'Accepted'),
+            isAwaitingAcceptance: Boolean(!endRef && !isCaseClosed && isLastEntry && item.acceptanceStatus === 'Pending-Acceptance'),
             durationDisplay: computedDuration
         };
     });
@@ -324,6 +327,11 @@ const getClinicDoctorAppointments = async (req, res) => {
                 ? appt.treatmentHistory[appt.treatmentHistory.length - 1]
                 : null;
 
+            const isPendingHandover = Boolean(
+                appt.pendingDoctorId && appt.pendingDoctorId.toString() === String(doctorId)
+            );
+            const acceptanceState = appt.doctorAcceptanceStatus || 'Pending';
+
             return {
                 _id: appt._id,
                 bookingId: appt.bookingId,
@@ -331,6 +339,7 @@ const getClinicDoctorAppointments = async (req, res) => {
                 categoryTag,
                 consultationType: appt.consultationType || 'Clinic Visit',
                 status: appt.status,
+                doctorAcceptanceStatus: acceptanceState,
                 triageLevel: appt.triageLevel || null,
                 bookingReason: appt.bookingReason || patientProfile.reasonForVisit || "",
                 isDoctorSelectedAlready: Boolean(appt.isDoctorSelectedAlready),
@@ -380,9 +389,12 @@ const getClinicDoctorAppointments = async (req, res) => {
 
                 // Shift / Assignment Meta
                 assignmentMeta: {
+                    doctorAcceptanceStatus: acceptanceState,
                     lastAction: latestHistory?.action || null,
-                    assignedAt: latestHistory?.startTime || latestHistory?.timestamp || appt.createdAt,
-                    isPendingHandover: Boolean(appt.pendingDoctorId && appt.pendingDoctorId.toString() === String(doctorId))
+                    assignedAt: latestHistory?.assignedAt || latestHistory?.startTime || latestHistory?.timestamp || appt.createdAt,
+                    isPendingHandover,
+                    canRespondToAssignment: (acceptanceState === 'Pending' || isPendingHandover) &&
+                        !['Completed', 'Cancelled-By-User', 'Cancelled-By-Doctor', 'Cancelled-By-Clinic', 'No-Show'].includes(appt.status)
                 },
 
                 createdAt: appt.createdAt,
@@ -606,6 +618,7 @@ const getClinicDoctorAppointmentById = async (req, res) => {
                 (m) => m.doctorId && m.doctorId._id?.toString() === String(doctorId)
             )
             : null;
+        const acceptanceState = appointment.doctorAcceptanceStatus || 'Pending';
 
         return res.status(200).json({
             success: true,
@@ -624,6 +637,9 @@ const getClinicDoctorAppointmentById = async (req, res) => {
                 doctorPermissions: {
                     isPrimaryDoctor,
                     isPendingHandoverTarget,
+                    doctorAcceptanceStatus: acceptanceState,
+                    canRespondToAssignment: (isPrimaryDoctor && acceptanceState === 'Pending' || isPendingHandoverTarget) &&
+                        !['Completed', 'Cancelled-By-User', 'Cancelled-By-Doctor', 'Cancelled-By-Clinic', 'No-Show'].includes(appointment.status),
                     isBedsideSpecialist: Boolean(myBedsideEntry),
                     bedsideRequestStatus: myBedsideEntry?.status || null
                 }
@@ -639,7 +655,310 @@ const getClinicDoctorAppointmentById = async (req, res) => {
     }
 };
 
+// ==========================================
+// 3. CLINIC DOCTOR ACCEPTS OR REJECTS (WITH REASON) ASSIGNED APPOINTMENT
+// @route   PATCH /api/clinic/doctor-panel/appointments/respond
+// @route   PATCH /api/clinic/doctor-panel/appointments/:id/respond
+// @access  Private (Clinic Doctor)
+// ==========================================
+const respondToAssignedAppointment = async (req, res) => {
+    try {
+        const doctorId = req.user.id;
+        const clinicId = req.user.clinicId || null;
+
+        const targetApptId = req.params.id || req.body?.appointmentId || req.body?.bookingId;
+        const rawAction = req.body?.action || req.body?.status;
+        const reason = req.body?.reason || req.body?.rejectionReason || req.body?.notes || "";
+
+        if (!targetApptId || String(targetApptId).trim() === '') {
+            return res.status(400).json({
+                success: false,
+                message: "appointmentId (or bookingId) is required."
+            });
+        }
+
+        // Normalize Action ('Accept' or 'Reject')
+        const cleanAction = String(rawAction || '').trim().toLowerCase();
+        let normalizedAction = null;
+        if (['accept', 'accepted'].includes(cleanAction)) {
+            normalizedAction = 'Accepted';
+        } else if (['reject', 'rejected', 'decline', 'declined'].includes(cleanAction)) {
+            normalizedAction = 'Rejected';
+        }
+
+        if (!normalizedAction) {
+            return res.status(400).json({
+                success: false,
+                message: "Valid action ('Accept' or 'Reject') is required."
+            });
+        }
+
+        // Strict validation: Rejection reason is mandatory when rejecting
+        const cleanReason = String(reason || '').trim();
+        if (normalizedAction === 'Rejected' && cleanReason === '') {
+            return res.status(400).json({
+                success: false,
+                message: "Rejection reason is mandatory when rejecting an assigned appointment."
+            });
+        }
+
+        // Locate appointment assigned to this Clinic Doctor (either primary doctorId or handover pendingDoctorId)
+        const cleanTarget = String(targetApptId).trim();
+        const idFilter = mongoose.Types.ObjectId.isValid(cleanTarget)
+            ? { $or: [{ _id: cleanTarget }, { bookingId: cleanTarget }] }
+            : { bookingId: cleanTarget };
+
+        const appointment = await Appointment.findOne({
+            ...idFilter,
+            ...(clinicId ? { clinicId } : {}),
+            $or: [
+                { doctorId: doctorId },
+                { pendingDoctorId: doctorId }
+            ]
+        });
+
+        if (!appointment) {
+            return res.status(404).json({
+                success: false,
+                message: "Assigned appointment not found for you in this clinic."
+            });
+        }
+
+        const closedStatuses = ['Completed', 'Cancelled-By-User', 'Cancelled-By-Doctor', 'Cancelled-By-Clinic', 'No-Show'];
+        if (closedStatuses.includes(appointment.status)) {
+            return res.status(400).json({
+                success: false,
+                message: `Cannot respond because appointment is already '${appointment.status}'.`
+            });
+        }
+
+        const isPendingHandover = Boolean(
+            appointment.pendingDoctorId && appointment.pendingDoctorId.toString() === String(doctorId)
+        );
+        const isCurrentDoctor = Boolean(
+            appointment.doctorId && appointment.doctorId.toString() === String(doctorId)
+        );
+
+        const now = new Date();
+        if (!Array.isArray(appointment.treatmentHistory)) {
+            appointment.treatmentHistory = [];
+        }
+
+        // ==========================================
+        // CASE A: DOCTOR ACCEPTS APPOINTMENT
+        // ==========================================
+        if (normalizedAction === 'Accepted') {
+            if (!isPendingHandover && isCurrentDoctor && appointment.doctorAcceptanceStatus === 'Accepted') {
+                return res.status(400).json({
+                    success: false,
+                    message: "You have already accepted this appointment."
+                });
+            }
+
+            const previousDoctorId = isPendingHandover && appointment.doctorId
+                ? appointment.doctorId.toString()
+                : null;
+
+            let updatedExistingLog = false;
+
+            for (let i = appointment.treatmentHistory.length - 1; i >= 0; i--) {
+                const logItem = appointment.treatmentHistory[i];
+                if (!logItem) continue;
+
+                // If there is an open assignment log for THIS doctor awaiting acceptance
+                if (
+                    logItem.toDoctorId &&
+                    String(logItem.toDoctorId) === String(doctorId) &&
+                    !logItem.endTime &&
+                    logItem.acceptanceStatus !== 'Accepted'
+                ) {
+                    const assignedTime = logItem.assignedAt || logItem.startTime || logItem.timestamp || appointment.createdAt;
+                    const waitDuration = formatShiftDuration(assignedTime, now);
+
+                    if (logItem.action === 'Transfer-Initiated') {
+                        logItem.action = 'Transfer-Accepted';
+                    }
+                    logItem.acceptanceStatus = 'Accepted';
+                    logItem.acceptedAt = now;
+                    logItem.startTime = logItem.startTime || now;
+                    logItem.unacceptedWaitDuration = waitDuration;
+                    logItem.durationDisplay = "Active Duty";
+                    logItem.notes = cleanReason
+                        ? `${logItem.notes || ''} | [Accepted by ${req.user.name} after ${waitDuration}: ${cleanReason}]`
+                        : `${logItem.notes || ''} | [Accepted by ${req.user.name} after ${waitDuration}]`;
+                    updatedExistingLog = true;
+                } else if (isPendingHandover && !logItem.endTime && String(logItem.toDoctorId) !== String(doctorId)) {
+                    // Close previous doctor's active shift if this was a handover
+                    const startRef = logItem.acceptedAt || logItem.startTime || logItem.timestamp;
+                    logItem.endTime = now;
+                    logItem.acceptanceStatus = 'Completed';
+                    logItem.durationDisplay = `${formatShiftDuration(startRef, now)} (Handed over to ${req.user.name})`;
+                }
+            }
+
+            if (!updatedExistingLog) {
+                const waitDuration = formatShiftDuration(appointment.createdAt, now);
+                appointment.treatmentHistory.push({
+                    fromDoctorId: previousDoctorId || null,
+                    toDoctorId: doctorId,
+                    action: isPendingHandover ? 'Transfer-Accepted' : 'Initial-Assignment',
+                    acceptanceStatus: 'Accepted',
+                    assignedAt: appointment.createdAt || now,
+                    acceptedAt: now,
+                    unacceptedWaitDuration: waitDuration,
+                    notes: cleanReason || `Appointment accepted by ${req.user.name}.`,
+                    timestamp: now,
+                    startTime: now,
+                    endTime: null,
+                    durationDisplay: "Active Duty"
+                });
+            }
+
+            appointment.doctorId = doctorId;
+            appointment.pendingDoctorId = null;
+            appointment.doctorAcceptanceStatus = 'Accepted';
+            appointment.doctorRejectionReason = "";
+            appointment.doctorRespondedAt = now;
+
+            if (['Pending', 'Clinic-Pending'].includes(appointment.status)) {
+                appointment.status = 'Confirmed';
+            }
+
+            await appointment.save();
+
+            // Notify Patient & Previous Doctor (Non-blocking)
+            Promise.allSettled([
+                appointment.userId
+                    ? sendPushNotification(
+                        appointment.userId,
+                        'user',
+                        "Doctor Confirmed Your Appointment",
+                        `${req.user.name} has accepted your ${appointment.bookingType} (#${appointment.bookingId}).`,
+                        {
+                            appointmentId: String(appointment._id),
+                            bookingId: String(appointment.bookingId || ""),
+                            type: "CLINIC_DOCTOR_ACCEPTED_APPOINTMENT"
+                        }
+                    )
+                    : Promise.resolve(),
+                previousDoctorId && previousDoctorId !== String(doctorId)
+                    ? sendPushNotification(
+                        previousDoctorId,
+                        'doctor',
+                        "Handover Accepted",
+                        `${req.user.name} accepted case #${appointment.bookingId}.`,
+                        {
+                            appointmentId: String(appointment._id),
+                            bookingId: String(appointment.bookingId || ""),
+                            type: "HANDOVER_ACCEPTED"
+                        }
+                    )
+                    : Promise.resolve()
+            ]).catch((err) => console.error("Accept Notification Error:", err.message));
+
+            const populatedAppointment = await Appointment.findById(appointment._id)
+                .populate('doctorId', 'name speciality qualification profileImage phone dutyStatus')
+                .populate('clinicId', 'name clinicName city address')
+                .populate('userId', 'name phone email')
+                .lean();
+
+            return res.status(200).json({
+                success: true,
+                action: 'Accepted',
+                doctorAcceptanceStatus: 'Accepted',
+                message: `Appointment #${appointment.bookingId} accepted successfully.`,
+                data: populatedAppointment
+            });
+        }
+
+        // ==========================================
+        // CASE B: DOCTOR REJECTS APPOINTMENT WITH REASON
+        // ==========================================
+        let updatedRejectionLog = false;
+        let waitDurationStr = formatShiftDuration(appointment.createdAt, now);
+
+        for (let i = appointment.treatmentHistory.length - 1; i >= 0; i--) {
+            const logItem = appointment.treatmentHistory[i];
+            if (
+                logItem &&
+                logItem.toDoctorId &&
+                String(logItem.toDoctorId) === String(doctorId) &&
+                !logItem.endTime
+            ) {
+                waitDurationStr = formatShiftDuration(logItem.assignedAt || logItem.startTime || logItem.timestamp, now);
+                logItem.action = 'Transfer-Rejected';
+                logItem.acceptanceStatus = 'Rejected-By-Doctor';
+                logItem.endTime = now;
+                logItem.unacceptedWaitDuration = waitDurationStr;
+                logItem.rejectionReason = cleanReason;
+                logItem.durationDisplay = `Declined after ${waitDurationStr} (Reason: ${cleanReason})`;
+                logItem.notes = `${logItem.notes || ''} | [Declined by ${req.user.name} after ${waitDurationStr}: ${cleanReason}]`;
+                updatedRejectionLog = true;
+                break;
+            }
+        }
+
+        if (!updatedRejectionLog) {
+            appointment.treatmentHistory.push({
+                fromDoctorId: isPendingHandover ? (appointment.doctorId || null) : null,
+                toDoctorId: doctorId,
+                action: 'Transfer-Rejected',
+                acceptanceStatus: 'Rejected-By-Doctor',
+                assignedAt: appointment.createdAt || now,
+                acceptedAt: null,
+                endTime: now,
+                unacceptedWaitDuration: waitDurationStr,
+                rejectionReason: cleanReason,
+                durationDisplay: `Declined after ${waitDurationStr} (Reason: ${cleanReason})`,
+                notes: `Declined by ${req.user.name}. Reason: ${cleanReason}`,
+                timestamp: now,
+                startTime: appointment.createdAt || now
+            });
+        }
+
+        // Clear doctor assignment so Clinic can assign another free doctor
+        if (isPendingHandover) {
+            appointment.pendingDoctorId = null;
+        } else if (isCurrentDoctor) {
+            appointment.doctorId = null;
+            // Move back to Clinic-Pending unless already active IPD/In-Progress
+            if (['Pending', 'Confirmed'].includes(appointment.status)) {
+                appointment.status = 'Clinic-Pending';
+            }
+        }
+
+        appointment.doctorAcceptanceStatus = 'Rejected';
+        appointment.doctorRejectionReason = cleanReason;
+        appointment.doctorRespondedAt = now;
+
+        await appointment.save();
+
+        const populatedAppointment = await Appointment.findById(appointment._id)
+            .populate('doctorId', 'name speciality qualification profileImage phone dutyStatus')
+            .populate('clinicId', 'name clinicName city address')
+            .populate('userId', 'name phone email')
+            .lean();
+
+        return res.status(200).json({
+            success: true,
+            action: 'Rejected',
+            doctorAcceptanceStatus: 'Rejected',
+            rejectionReason: cleanReason,
+            message: `Appointment #${appointment.bookingId} rejected and returned to Clinic for reassignment.`,
+            data: populatedAppointment
+        });
+
+    } catch (error) {
+        console.error("Respond To Assigned Appointment Error:", error);
+        return res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+};
+
 module.exports = {
     getClinicDoctorAppointments,
-    getClinicDoctorAppointmentById
+    getClinicDoctorAppointmentById,
+    respondToAssignedAppointment
 };
