@@ -195,46 +195,63 @@ const getClinicDoctorAppointments = async (req, res) => {
         const limitNum = Math.max(1, parseInt(limit, 10) || 20);
         const skip = (pageNum - 1) * limitNum;
 
-        let query = {};
-        if (tab === 'handover') {
-            query.pendingDoctorId = doctorId;
-        } else if (tab === 'bedside') {
-            query['bedsideCareTeam.doctorId'] = doctorId;
+        const andConditions = [];
+
+        // 1. Base Ownership Filter
+        const normalizedTab = String(tab || 'all').toLowerCase();
+        if (normalizedTab === 'handover') {
+            andConditions.push({ pendingDoctorId: doctorId });
+        } else if (normalizedTab === 'bedside') {
+            andConditions.push({ 'bedsideCareTeam.doctorId': doctorId });
+        } else if (normalizedTab === 'all') {
+            andConditions.push({
+                $or: [
+                    { doctorId: doctorId },
+                    { pendingDoctorId: doctorId },
+                    { 'bedsideCareTeam.doctorId': doctorId }
+                ]
+            });
         } else {
-            query.doctorId = doctorId;
+            andConditions.push({ doctorId: doctorId });
         }
 
         if (clinicId) {
-            query.clinicId = clinicId;
+            andConditions.push({ clinicId });
         }
 
-        const normalizedTab = String(tab || 'all').toLowerCase();
+        // 2. Tab / Booking Type Filter
         if (bookingType && String(bookingType).trim() !== '') {
-            query.bookingType = String(bookingType).trim();
+            andConditions.push({ bookingType: String(bookingType).trim() });
         } else if (normalizedTab === 'opd') {
-            query.bookingType = 'Appointment';
+            andConditions.push({ bookingType: 'Appointment' });
         } else if (normalizedTab === 'ipd') {
-            query.bookingType = 'Admission';
+            andConditions.push({ bookingType: 'Admission' });
         } else if (normalizedTab === 'emergency') {
-            query.$or = [
-                { bookingType: 'Emergency' },
-                { triageLevel: 'Emergency' }
-            ];
+            andConditions.push({
+                $or: [
+                    { bookingType: 'Emergency' },
+                    { triageLevel: 'Emergency' }
+                ]
+            });
         }
 
+        // 3. Status Filter
         if (status && String(status).trim() !== '') {
             const cleanStatus = String(status).trim();
             if (cleanStatus.toLowerCase() === 'active') {
-                query.status = { $in: ['Pending', 'Clinic-Pending', 'Confirmed', 'In-Progress', 'Discharge-Pending', 'Rescheduled'] };
+                andConditions.push({
+                    status: { $in: ['Pending', 'Clinic-Pending', 'Confirmed', 'In-Progress', 'Discharge-Pending', 'Rescheduled'] }
+                });
             } else if (cleanStatus.toLowerCase() === 'history') {
-                query.status = { $in: ['Completed', 'Cancelled-By-User', 'Cancelled-By-Doctor', 'Cancelled-By-Clinic', 'No-Show'] };
+                andConditions.push({
+                    status: { $in: ['Completed', 'Cancelled-By-User', 'Cancelled-By-Doctor', 'Cancelled-By-Clinic', 'No-Show'] }
+                });
             } else {
-                query.status = cleanStatus;
+                andConditions.push({ status: cleanStatus });
             }
         }
 
-        const andConditions = [];
-
+        // 4. Optional Date Filter
         if (date && date !== 'all' && String(date).trim() !== '') {
             const targetMoment = String(date).toLowerCase() === 'today' ? moment() : moment(date);
             if (!targetMoment.isValid()) {
@@ -258,6 +275,7 @@ const getClinicDoctorAppointments = async (req, res) => {
             });
         }
 
+        // 5. Search Filter
         if (search && String(search).trim() !== '') {
             const regex = new RegExp(String(search).trim(), 'i');
             andConditions.push({
@@ -273,9 +291,7 @@ const getClinicDoctorAppointments = async (req, res) => {
             });
         }
 
-        if (andConditions.length > 0) {
-            query.$and = andConditions;
-        }
+        const query = andConditions.length > 0 ? { $and: andConditions } : {};
 
         const summaryMatch = { doctorId: new mongoose.Types.ObjectId(doctorId) };
         if (clinicId) summaryMatch.clinicId = new mongoose.Types.ObjectId(clinicId);
@@ -434,7 +450,6 @@ const getClinicDoctorAppointments = async (req, res) => {
         });
     }
 };
-
 // ==========================================
 // 2. GET SINGLE CLINIC DOCTOR APPOINTMENT FULL DETAILS BY ID
 // @route   GET /api/clinic/doctor-panel/appointments/:id
@@ -453,13 +468,18 @@ const getClinicDoctorAppointmentById = async (req, res) => {
             });
         }
 
+        // Fixed: Using $and so idQuery.$or is never overwritten by ownership $or
         const accessQuery = {
-            ...idQuery,
-            ...(clinicId ? { clinicId } : {}),
-            $or: [
-                { doctorId: doctorId },
-                { pendingDoctorId: doctorId },
-                { 'bedsideCareTeam.doctorId': doctorId }
+            $and: [
+                idQuery,
+                ...(clinicId ? [{ clinicId }] : []),
+                {
+                    $or: [
+                        { doctorId: doctorId },
+                        { pendingDoctorId: doctorId },
+                        { 'bedsideCareTeam.doctorId': doctorId }
+                    ]
+                }
             ]
         };
 
@@ -697,12 +717,17 @@ const respondToAssignedAppointment = async (req, res) => {
             });
         }
 
+        // Fixed: Using $and so idFilter.$or is never overwritten
         const appointment = await Appointment.findOne({
-            ...idFilter,
-            ...(clinicId ? { clinicId } : {}),
-            $or: [
-                { doctorId: doctorId },
-                { pendingDoctorId: doctorId }
+            $and: [
+                idFilter,
+                ...(clinicId ? [{ clinicId }] : []),
+                {
+                    $or: [
+                        { doctorId: doctorId },
+                        { pendingDoctorId: doctorId }
+                    ]
+                }
             ]
         });
 
@@ -1029,12 +1054,17 @@ const recordClinicAppointmentVitals = async (req, res) => {
             });
         }
 
+        // Fixed: Using $and so idQuery.$or is never overwritten
         const appointment = await Appointment.findOne({
-            ...idQuery,
-            ...(clinicId ? { clinicId } : {}),
-            $or: [
-                { doctorId },
-                { 'bedsideCareTeam.doctorId': doctorId }
+            $and: [
+                idQuery,
+                ...(clinicId ? [{ clinicId }] : []),
+                {
+                    $or: [
+                        { doctorId },
+                        { 'bedsideCareTeam.doctorId': doctorId }
+                    ]
+                }
             ]
         });
 
@@ -1084,7 +1114,6 @@ const recordClinicAppointmentVitals = async (req, res) => {
         return res.status(500).json({ success: false, message: error.message });
     }
 };
-
 // ==========================================
 // 6. GET ALL MEDICINES FROM DATABASE (With Optional Clinic Pharmacy Stock Badge)
 // @route   GET /api/clinic/doctor-panel/appointments/medicines
