@@ -50,7 +50,12 @@ const availabilitySchema = new mongoose.Schema({
 
     // "Delete" option ke liye: Vendor jin slots ko hide karna chahta hai
     unavailableSlots: [String], // Example: ["10:30", "14:15"]
-
+      blockedSlotsWithReason: [{
+        date: { type: String, required: true }, // "YYYY-MM-DD"
+        time: { type: String, required: true }, // "10:30 AM" or "10:30"
+        reason: { type: String, default: "Doctor unavailable" },
+        blockedAt: { type: Date, default: Date.now }
+    }],
     offDays: [String], // ["Sunday"]
     blockedDates: [String], // Gap Fix: ["2023-12-25", "2024-01-01"] for holidays
 

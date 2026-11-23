@@ -8,6 +8,8 @@ const ProfileUpdateRequest = require('../../models/ProfileUpdateRequest');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { deleteFile } = require('../../utils/fileHandler');
+const moment = require('moment');
+const { generateTimeSlots } = require('../../utils/timeSlotHelper');
 const { notifyAdminsAndVendor, sendPushNotification } = require('../../utils/notification');
 
 
@@ -1088,161 +1090,7 @@ const reassignAppointmentToClinicDoctor = async (req, res) => {
         });
     }
 };
-// ==========================================
-// 8. CLINIC SETS DOCTOR'S OPD CABIN, FEE, SCHEDULE & SYNCS AVAILABILITY
-// @route   PUT /api/clinic/doctors/configure-opd/:doctorId
-// @access  Private (Clinic)
-// ==========================================
-const configureDoctorOpdScheduleByClinic = async (req, res) => {
-    try {
-        const clinicId = req.user.id;
-        const { doctorId } = req.params;
-        const {
-            roomNumber,
-            slotDuration,
-            opdFee,
-            availability,
-            isOpdEnabled,
-            premiumSlots,
-            startTime,
-            endTime,
-            offDays,
-            morningSlots,
-            afternoonSlots,
-            eveningSlots
-        } = req.body || {};
 
-        if (!mongoose.Types.ObjectId.isValid(doctorId)) {
-            return res.status(400).json({ success: false, message: "Invalid doctorId format." });
-        }
-
-        const doctor = await Doctor.findOne({ _id: doctorId, clinicId }).lean();
-        if (!doctor) {
-            return res.status(404).json({
-                success: false,
-                message: "Doctor not found in this clinic."
-            });
-        }
-
-        const safeObjectParse = (val, defaultVal = {}) => {
-            if (!val) return defaultVal;
-            if (typeof val === 'object' && val !== null) return val;
-            if (typeof val === 'string') {
-                try {
-                    const parsed = JSON.parse(val);
-                    if (typeof parsed === 'object' && parsed !== null) return parsed;
-                } catch (e) {}
-            }
-            return defaultVal;
-        };
-
-        let currentConsultation = safeObjectParse(doctor.consultationStatus, { online: true, clinic: true, home: false });
-        let isClinicAvail = doctor.isClinicAvailable !== undefined ? doctor.isClinicAvailable : true;
-
-        if (isOpdEnabled !== undefined) {
-            const enabledBool = (isOpdEnabled === true || isOpdEnabled === 'true');
-            currentConsultation.clinic = enabledBool;
-            isClinicAvail = enabledBool;
-        }
-
-        let currentFees = safeObjectParse(doctor.fees, { online: 0, clinic: 500, home: 0 });
-        if (opdFee !== undefined) {
-            currentFees.clinic = Math.max(0, parseInt(opdFee, 10) || 0);
-        }
-
-        let currentDepartment = safeObjectParse(doctor.department, { isNormal: true, isEmergency: false, roomNumber: "Cabin 1" });
-        if (roomNumber !== undefined) {
-            currentDepartment.roomNumber = String(roomNumber).trim();
-        }
-
-        const resolvedSlotDuration = slotDuration !== undefined
-            ? Math.max(5, parseInt(slotDuration, 10) || 15)
-            : (doctor.slotDuration || 30);
-
-        const updatePayload = {
-            consultationStatus: currentConsultation,
-            isClinicAvailable: isClinicAvail,
-            fees: currentFees,
-            department: currentDepartment,
-            slotDuration: resolvedSlotDuration
-        };
-
-        let parsedAvailabilityArray = doctor.availability || [];
-        if (availability !== undefined) {
-            parsedAvailabilityArray = Array.isArray(availability)
-                ? availability
-                : (typeof availability === 'string' ? safeObjectParse(availability, []) : []);
-            updatePayload.availability = parsedAvailabilityArray;
-        }
-
-        // 1. Update Doctor Document
-        await Doctor.collection.updateOne(
-            { _id: new mongoose.Types.ObjectId(doctorId) },
-            { $set: updatePayload }
-        );
-
-        // 2. Sync Slot Duration, Start/End Times & Premium Slots in Availability Collection
-        const availabilitySyncFields = {
-            vendorId: new mongoose.Types.ObjectId(doctorId),
-            vendorType: 'Doctor',
-            clinicId: new mongoose.Types.ObjectId(clinicId),
-            slotDuration: resolvedSlotDuration
-        };
-
-        if (startTime) {
-            availabilitySyncFields.startTime = String(startTime).trim();
-        } else if (parsedAvailabilityArray.length > 0 && parsedAvailabilityArray[0].startTime) {
-            availabilitySyncFields.startTime = parsedAvailabilityArray[0].startTime;
-        }
-
-        if (endTime) {
-            availabilitySyncFields.endTime = String(endTime).trim();
-        } else if (parsedAvailabilityArray.length > 0 && parsedAvailabilityArray[0].endTime) {
-            availabilitySyncFields.endTime = parsedAvailabilityArray[0].endTime;
-        }
-
-        if (offDays !== undefined) {
-            availabilitySyncFields.offDays = Array.isArray(offDays) ? offDays : safeObjectParse(offDays, []);
-        }
-
-        if (premiumSlots !== undefined) {
-            availabilitySyncFields.premiumSlots = Array.isArray(premiumSlots) ? premiumSlots : safeObjectParse(premiumSlots, []);
-        }
-
-        if (morningSlots !== undefined) {
-            availabilitySyncFields.morningSlots = (morningSlots === true || morningSlots === 'true');
-        }
-        if (afternoonSlots !== undefined) {
-            availabilitySyncFields.afternoonSlots = (afternoonSlots === true || afternoonSlots === 'true');
-        }
-        if (eveningSlots !== undefined) {
-            availabilitySyncFields.eveningSlots = (eveningSlots === true || eveningSlots === 'true');
-        }
-
-        await Availability.findOneAndUpdate(
-            { vendorId: doctorId },
-            { $set: availabilitySyncFields },
-            { upsert: true, new: true }
-        );
-
-        const updatedDoctor = await Doctor.findById(doctorId)
-            .select('name speciality fees department slotDuration availability consultationStatus isClinicAvailable')
-            .lean();
-
-        return res.status(200).json({
-            success: true,
-            message: `OPD Configuration and Slots synced for ${updatedDoctor.name}.`,
-            data: updatedDoctor
-        });
-
-    } catch (error) {
-        console.error("Configure Doctor OPD Schedule By Clinic Error:", error);
-        return res.status(500).json({
-            success: false,
-            message: error.message
-        });
-    }
-};
 
 // ==========================================
 // 9. GET FREE / ON-DUTY CLINIC DOCTORS (Prioritizes User-Selected Doctor First)
@@ -1373,6 +1221,787 @@ const getAvailableClinicDoctors = async (req, res) => {
         });
     }
 };
+
+
+
+////////////////// SLOTs ADD and LEAVE APPROVE ////////////
+
+// ==========================================
+// Helper: Normalize Time String to 24H ("HH:mm") & Day Roster Maps
+// ==========================================
+const FULL_DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+const SHORT_DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const DAY_SHORT_TO_FULL = {
+    mon: 'Monday', monday: 'Monday',
+    tue: 'Tuesday', tuesday: 'Tuesday',
+    wed: 'Wednesday', wednesday: 'Wednesday',
+    thu: 'Thursday', thursday: 'Thursday',
+    fri: 'Friday', friday: 'Friday',
+    sat: 'Saturday', saturday: 'Saturday',
+    sun: 'Sunday', sunday: 'Sunday'
+};
+const DAY_FULL_TO_SHORT = {
+    Monday: 'Mon', Tuesday: 'Tue', Wednesday: 'Wed',
+    Thursday: 'Thu', Friday: 'Fri', Saturday: 'Sat', Sunday: 'Sun'
+};
+
+const normalizeTime24 = (timeStr, fallback = "09:00") => {
+    if (!timeStr) return fallback;
+    const clean = String(timeStr).trim();
+    if (/^\d{1,2}:\d{2}$/.test(clean)) {
+        const [h, m] = clean.split(':').map(Number);
+        return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+    }
+    const parsed = moment(clean, ["hh:mm A", "h:mm A", "HH:mm", "H:mm", "hh:mma", "h:mma"]);
+    return parsed.isValid() ? parsed.format("HH:mm") : fallback;
+};
+// ==========================================
+// Helper: Generate Date-wise Live OPD Slot Grid for a Clinic Doctor
+// ==========================================
+const buildDoctorLiveSlotsForDate = async (doctor, availConfig, targetDateStr) => {
+    const cleanDate = moment(targetDateStr || new Date()).format("YYYY-MM-DD");
+    const targetMoment = moment(cleanDate, "YYYY-MM-DD");
+    const dayFull = targetMoment.format("dddd");
+    const dayShort = targetMoment.format("ddd");
+
+    const offDaysNormalized = (availConfig?.offDays || []).map(
+        (d) => DAY_SHORT_TO_FULL[String(d).trim().toLowerCase()] || d
+    );
+    const blockedDates = availConfig?.blockedDates || [];
+
+    const isApprovedLeaveDate = (doctor.leaves || []).some((l) => {
+        if (l.status !== 'Approved') return false;
+        const lStart = moment(l.startDate).format("YYYY-MM-DD");
+        const lEnd = moment(l.endDate).format("YYYY-MM-DD");
+        return cleanDate >= lStart && cleanDate <= lEnd;
+    });
+
+    const isOpdActive = doctor.isClinicAvailable !== false && doctor.consultationStatus?.clinic !== false;
+    const isOffDay = offDaysNormalized.includes(dayFull);
+    const isBlockedDate = blockedDates.includes(cleanDate) || isApprovedLeaveDate;
+
+    if (!isOpdActive) {
+        return { date: cleanDate, day: dayFull, isClosed: true, reason: "OPD is currently disabled for this doctor.", slots: [] };
+    }
+    if (isBlockedDate) {
+        return { date: cleanDate, day: dayFull, isClosed: true, reason: `Doctor is on Leave / Unavailable on ${cleanDate}.`, slots: [] };
+    }
+    if (isOffDay) {
+        return { date: cleanDate, day: dayFull, isClosed: true, reason: `${dayFull} is marked as Weekly Off.`, slots: [] };
+    }
+
+    const startTime24 = normalizeTime24(availConfig?.startTime, "09:00");
+    const endTime24 = normalizeTime24(availConfig?.endTime, "17:00");
+    const duration = Math.max(5, Number(availConfig?.slotDuration || doctor.slotDuration || 30));
+
+    const rawSlots = generateTimeSlots({
+        startTime: startTime24,
+        endTime: endTime24,
+        slotDuration: duration,
+        morningSlots: availConfig?.morningSlots !== false,
+        afternoonSlots: availConfig?.afternoonSlots !== false,
+        eveningSlots: availConfig?.eveningSlots !== false,
+        unavailableSlots: [],
+        premiumSlots: availConfig?.premiumSlots || []
+    });
+
+    const dayStart = targetMoment.clone().startOf('day').toDate();
+    const dayEnd = targetMoment.clone().endOf('day').toDate();
+
+    const bookedAppts = await Appointment.find({
+        doctorId: doctor._id,
+        bookingType: { $in: ['Appointment', 'Emergency'] },
+        status: { $in: ['Pending', 'Clinic-Pending', 'Confirmed', 'In-Progress', 'Completed'] },
+        appointmentDate: { $gte: dayStart, $lte: dayEnd }
+    }).select('appointmentTime bookingId status patients').lean();
+
+    const bookedMap = {};
+    bookedAppts.forEach((b) => {
+        const t24 = normalizeTime24(b.appointmentTime, "");
+        if (t24) bookedMap[t24] = b;
+    });
+
+    const unavailableSet = new Set(
+        (availConfig?.unavailableSlots || []).map((t) => normalizeTime24(t, t))
+    );
+
+    const dateBlockedMap = {};
+    (availConfig?.blockedSlotsWithReason || []).forEach((b) => {
+        if (b.date === cleanDate) {
+            dateBlockedMap[normalizeTime24(b.time, b.time)] = b.reason || "Blocked by Clinic";
+        }
+    });
+
+    const nowIST = moment().utcOffset("+05:30");
+    const isToday = cleanDate === nowIST.format("YYYY-MM-DD");
+
+    const finalSlots = rawSlots.map((s) => {
+        const t24 = s.slotTime;
+        const formatted12 = moment(t24, "HH:mm").format("hh:mm A");
+        const slotMomentIST = moment.utc(`${cleanDate} ${t24}`, "YYYY-MM-DD HH:mm").utcOffset("+05:30");
+        const isPast = isToday && slotMomentIST.isBefore(nowIST);
+
+        const bookedInfo = bookedMap[t24] || null;
+        const dateBlockReason = dateBlockedMap[t24] || null;
+        const isRecurringBlocked = unavailableSet.has(t24);
+
+        let status = "Available";
+        if (dateBlockReason || isRecurringBlocked) status = "Blocked";
+        else if (bookedInfo) status = "Booked";
+        else if (isPast) status = "Past";
+
+        return {
+            time: formatted12,
+            time24: t24,
+            displayTime: s.displayTime,
+            category: s.category,
+            status,
+            isAvailable: status === "Available",
+            isPremium: s.isPremium,
+            extraFee: s.extraFee,
+            blockReason: dateBlockReason || (isRecurringBlocked ? "Blocked recurring slot" : null),
+            bookedDetails: bookedInfo ? {
+                appointmentId: bookedInfo._id,
+                bookingId: bookedInfo.bookingId,
+                patientName: bookedInfo.patients?.[0]?.patientName || "Patient",
+                status: bookedInfo.status
+            } : null
+        };
+    });
+
+    return {
+        date: cleanDate,
+        day: dayFull,
+        dayShort,
+        isClosed: false,
+        totalSlots: finalSlots.length,
+        availableCount: finalSlots.filter((x) => x.isAvailable).length,
+        bookedCount: finalSlots.filter((x) => x.status === 'Booked').length,
+        blockedCount: finalSlots.filter((x) => x.status === 'Blocked').length,
+        slots: finalSlots
+    };
+};
+
+
+
+// ==========================================
+// 8. CLINIC SETS DOCTOR'S OPD CABIN, WEEKLY ROSTER, SLOTS & SYNCS AVAILABILITY (Without OPD Fee)
+// @route   PUT /api/clinic/doctors/configure-opd/:doctorId
+// @access  Private (Clinic)
+// ==========================================
+const configureDoctorOpdScheduleByClinic = async (req, res) => {
+    try {
+        const clinicId = req.user.id;
+        const { doctorId } = req.params;
+        const {
+            cabinNumber,
+            roomNumber,
+            slotDuration,
+            availability,
+            availableDays,
+            isOpdEnabled,
+            isClinicAvailable,
+            premiumSlots,
+            unavailableSlots,
+            startTime,
+            endTime,
+            offDays,
+            morningSlots,
+            afternoonSlots,
+            eveningSlots
+        } = req.body || {};
+
+        if (!mongoose.Types.ObjectId.isValid(doctorId)) {
+            return res.status(400).json({ success: false, message: "Invalid doctorId format." });
+        }
+
+        const doctor = await Doctor.findOne({ _id: doctorId, clinicId }).lean();
+        if (!doctor) {
+            return res.status(404).json({
+                success: false,
+                message: "Doctor not found in this clinic."
+            });
+        }
+
+        const safeParse = (val, defaultVal = {}) => {
+            if (val === undefined || val === null) return defaultVal;
+            if (typeof val === 'object') return val;
+            if (typeof val === 'string') {
+                try { return JSON.parse(val); } catch (e) { return defaultVal; }
+            }
+            return defaultVal;
+        };
+
+        // 1. OPD Enable / Disable Flag
+        let currentConsultation = safeParse(doctor.consultationStatus, { online: true, clinic: true, home: false });
+        let isClinicAvail = doctor.isClinicAvailable !== undefined ? doctor.isClinicAvailable : true;
+        const opdToggleInput = isOpdEnabled !== undefined ? isOpdEnabled : isClinicAvailable;
+
+        if (opdToggleInput !== undefined) {
+            const enabledBool = (opdToggleInput === true || opdToggleInput === 'true');
+            currentConsultation.clinic = enabledBool;
+            isClinicAvail = enabledBool;
+        }
+
+        // 2. Cabin / Room Number
+        const resolvedCabin = cabinNumber !== undefined
+            ? String(cabinNumber).trim()
+            : (roomNumber !== undefined
+                ? String(roomNumber).trim()
+                : (doctor.cabinNumber || doctor.department?.roomNumber || "Cabin 1"));
+
+        let currentDepartment = safeParse(doctor.department, { isNormal: true, isEmergency: false, roomNumber: resolvedCabin });
+        currentDepartment.roomNumber = resolvedCabin;
+
+        // 3. Slot Duration & Shift Hours
+        const existingAvail = await Availability.findOne({ vendorId: doctorId }).lean();
+
+        const resolvedSlotDuration = slotDuration !== undefined
+            ? Math.max(5, parseInt(slotDuration, 10) || 30)
+            : (doctor.slotDuration || existingAvail?.slotDuration || 30);
+
+        const resolvedStartTime = startTime
+            ? normalizeTime24(startTime, "09:00")
+            : (existingAvail?.startTime || "09:00");
+
+        const resolvedEndTime = endTime
+            ? normalizeTime24(endTime, "17:00")
+            : (existingAvail?.endTime || "17:00");
+
+        if (resolvedStartTime >= resolvedEndTime) {
+            return res.status(400).json({
+                success: false,
+                message: "Shift startTime must be earlier than endTime."
+            });
+        }
+
+        // 4. Weekly Roster: Resolve availableDays <-> offDays <-> doctor.availability
+        let resolvedOffDays = existingAvail?.offDays || [];
+        let parsedAvailabilityArray = doctor.availability || [];
+
+        if (availableDays !== undefined) {
+            const parsedActive = Array.isArray(availableDays)
+                ? availableDays
+                : safeParse(availableDays, []);
+            const activeFullSet = new Set(
+                parsedActive.map((d) => DAY_SHORT_TO_FULL[String(d).trim().toLowerCase()]).filter(Boolean)
+            );
+            resolvedOffDays = FULL_DAYS.filter((fullDay) => !activeFullSet.has(fullDay));
+            parsedAvailabilityArray = FULL_DAYS
+                .filter((fullDay) => activeFullSet.has(fullDay))
+                .map((fullDay) => ({
+                    day: DAY_FULL_TO_SHORT[fullDay],
+                    startTime: resolvedStartTime,
+                    endTime: resolvedEndTime,
+                    isLiveTrackingAvailable: false
+                }));
+        } else if (offDays !== undefined) {
+            const parsedOff = Array.isArray(offDays) ? offDays : safeParse(offDays, []);
+            const offFullSet = new Set(
+                parsedOff.map((d) => DAY_SHORT_TO_FULL[String(d).trim().toLowerCase()]).filter(Boolean)
+            );
+            resolvedOffDays = Array.from(offFullSet);
+            parsedAvailabilityArray = FULL_DAYS
+                .filter((fullDay) => !offFullSet.has(fullDay))
+                .map((fullDay) => ({
+                    day: DAY_FULL_TO_SHORT[fullDay],
+                    startTime: resolvedStartTime,
+                    endTime: resolvedEndTime,
+                    isLiveTrackingAvailable: false
+                }));
+        } else if (availability !== undefined) {
+            parsedAvailabilityArray = Array.isArray(availability)
+                ? availability
+                : safeParse(availability, []);
+            if (parsedAvailabilityArray.length > 0) {
+                const activeFullSet = new Set(
+                    parsedAvailabilityArray.map((a) => DAY_SHORT_TO_FULL[String(a.day).trim().toLowerCase()]).filter(Boolean)
+                );
+                resolvedOffDays = FULL_DAYS.filter((fullDay) => !activeFullSet.has(fullDay));
+            }
+        }
+
+        // 5. Update Doctor Document (Without modifying fees)
+        const updatedDoctor = await Doctor.findByIdAndUpdate(
+            doctorId,
+            {
+                $set: {
+                    cabinNumber: resolvedCabin,
+                    department: currentDepartment,
+                    consultationStatus: currentConsultation,
+                    isClinicAvailable: isClinicAvail,
+                    slotDuration: resolvedSlotDuration,
+                    availability: parsedAvailabilityArray
+                }
+            },
+            { new: true }
+        )
+            .select('name speciality profileImage cabinNumber department slotDuration availability consultationStatus isClinicAvailable dutyStatus leaves')
+            .lean();
+
+        if (resolvedCabin) {
+            await Clinic.findByIdAndUpdate(clinicId, {
+                $addToSet: { cabins: resolvedCabin }
+            });
+        }
+
+        // 6. Sync Availability Collection
+        const availabilitySyncFields = {
+            vendorId: new mongoose.Types.ObjectId(doctorId),
+            vendorType: 'Doctor',
+            clinicId: new mongoose.Types.ObjectId(clinicId),
+            slotDuration: resolvedSlotDuration,
+            startTime: resolvedStartTime,
+            endTime: resolvedEndTime,
+            offDays: resolvedOffDays,
+            morningSlots: morningSlots !== undefined ? (morningSlots === true || morningSlots === 'true') : true,
+            afternoonSlots: afternoonSlots !== undefined ? (afternoonSlots === true || afternoonSlots === 'true') : true,
+            eveningSlots: eveningSlots !== undefined ? (eveningSlots === true || eveningSlots === 'true') : true
+        };
+
+        if (premiumSlots !== undefined) {
+            availabilitySyncFields.premiumSlots = Array.isArray(premiumSlots)
+                ? premiumSlots
+                : safeParse(premiumSlots, []);
+        }
+
+        if (unavailableSlots !== undefined) {
+            const rawUnavail = Array.isArray(unavailableSlots)
+                ? unavailableSlots
+                : safeParse(unavailableSlots, []);
+            availabilitySyncFields.unavailableSlots = rawUnavail.map((t) => normalizeTime24(t, t));
+        }
+
+        const syncedAvail = await Availability.findOneAndUpdate(
+            { vendorId: doctorId },
+            { $set: availabilitySyncFields },
+            { upsert: true, new: true }
+        ).lean();
+
+        // 7. Generate Today's Live Slots Preview
+        const liveSlotsPreview = await buildDoctorLiveSlotsForDate(
+            updatedDoctor,
+            syncedAvail,
+            moment().format("YYYY-MM-DD")
+        );
+
+        return res.status(200).json({
+            success: true,
+            message: `OPD Configuration, Cabin & Slots synced for ${updatedDoctor.name}.`,
+            data: {
+                doctor: updatedDoctor,
+                opdConfig: {
+                    isOpdEnabled: isClinicAvail,
+                    cabinNumber: resolvedCabin,
+                    slotDuration: resolvedSlotDuration,
+                    startTime: resolvedStartTime,
+                    endTime: resolvedEndTime,
+                    startTime12h: moment(resolvedStartTime, "HH:mm").format("hh:mm A"),
+                    endTime12h: moment(resolvedEndTime, "HH:mm").format("hh:mm A"),
+                    offDays: resolvedOffDays,
+                    activeDays: FULL_DAYS.filter((d) => !resolvedOffDays.includes(d))
+                },
+                availabilityConfig: syncedAvail,
+                liveSlotsPreview
+            }
+        });
+
+    } catch (error) {
+        console.error("Configure Doctor OPD Schedule By Clinic Error:", error);
+        return res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+};
+
+// ==========================================
+// 11. CLINIC GETS DOCTOR OPD SETTINGS, CABIN, WEEKLY ROSTER, LIVE SLOTS & LEAVES (Without OPD Fee)
+// @route   GET /api/clinic/doctors/opd-settings/:doctorId?date=YYYY-MM-DD
+// @access  Private (Clinic)
+// ==========================================
+const getDoctorOpdSettingsByClinic = async (req, res) => {
+    try {
+        const clinicId = req.user.id;
+        const { doctorId } = req.params;
+        const { date } = req.query;
+
+        if (!mongoose.Types.ObjectId.isValid(doctorId)) {
+            return res.status(400).json({ success: false, message: "Invalid doctorId format." });
+        }
+
+        const [doctor, clinic, availConfig] = await Promise.all([
+            Doctor.findOne({ _id: doctorId, clinicId })
+                .select('name speciality qualification profileImage cabinNumber department slotDuration availability consultationStatus isClinicAvailable dutyStatus leaves')
+                .lean(),
+            Clinic.findById(clinicId).select('name clinicName cabins totalCabins').lean(),
+            Availability.findOne({ vendorId: doctorId }).lean()
+        ]);
+
+        if (!doctor) {
+            return res.status(404).json({
+                success: false,
+                message: "Doctor not found in this clinic."
+            });
+        }
+
+        const startTime24 = normalizeTime24(availConfig?.startTime, "09:00");
+        const endTime24 = normalizeTime24(availConfig?.endTime, "17:00");
+        const offDays = (availConfig?.offDays || []).map(
+            (d) => DAY_SHORT_TO_FULL[String(d).trim().toLowerCase()] || d
+        );
+        const activeDays = FULL_DAYS.filter((d) => !offDays.includes(d));
+
+        const targetDateStr = date && String(date).trim() !== ''
+            ? moment(date).format("YYYY-MM-DD")
+            : moment().format("YYYY-MM-DD");
+
+        const liveSlots = await buildDoctorLiveSlotsForDate(doctor, availConfig, targetDateStr);
+
+        const leavesSorted = (doctor.leaves || [])
+            .map((l) => ({
+                ...l,
+                startDateFormatted: moment(l.startDate).format("YYYY-MM-DD"),
+                endDateFormatted: moment(l.endDate).format("YYYY-MM-DD")
+            }))
+            .sort((a, b) => new Date(b.appliedAt) - new Date(a.appliedAt));
+
+        return res.status(200).json({
+            success: true,
+            data: {
+                doctor: {
+                    _id: doctor._id,
+                    name: doctor.name,
+                    speciality: doctor.speciality,
+                    qualification: doctor.qualification,
+                    profileImage: doctor.profileImage,
+                    dutyStatus: doctor.dutyStatus || "On Duty",
+                    cabinNumber: doctor.cabinNumber || doctor.department?.roomNumber || "",
+                    isOpdEnabled: doctor.isClinicAvailable !== false && doctor.consultationStatus?.clinic !== false,
+                    slotDuration: Number(availConfig?.slotDuration || doctor.slotDuration || 30)
+                },
+                clinicCabins: clinic?.cabins || [],
+                shiftHours: {
+                    startTime: startTime24,
+                    endTime: endTime24,
+                    startTime12h: moment(startTime24, "HH:mm").format("hh:mm A"),
+                    endTime12h: moment(endTime24, "HH:mm").format("hh:mm A")
+                },
+                weeklyRoster: {
+                    activeDaysCount: activeDays.length,
+                    offDaysCount: offDays.length,
+                    activeDays,
+                    offDays,
+                    daysList: FULL_DAYS.map((dayName) => ({
+                        day: dayName,
+                        shortDay: DAY_FULL_TO_SHORT[dayName],
+                        isActive: !offDays.includes(dayName)
+                    }))
+                },
+                premiumSlots: availConfig?.premiumSlots || [],
+                unavailableSlots: availConfig?.unavailableSlots || [],
+                blockedDates: availConfig?.blockedDates || [],
+                blockedSlotsWithReason: availConfig?.blockedSlotsWithReason || [],
+                liveSlots,
+                leaveRequests: {
+                    totalCount: leavesSorted.length,
+                    pendingCount: leavesSorted.filter((l) => l.status === 'Pending').length,
+                    list: leavesSorted
+                }
+            }
+        });
+    } catch (error) {
+        console.error("Get Doctor OPD Settings By Clinic Error:", error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// ==========================================
+// 12. CLINIC BLOCKS OR UNBLOCKS A SPECIFIC TIME SLOT FOR DOCTOR
+// @route   POST /api/clinic/doctors/opd-slots/toggle-block/:doctorId
+// @access  Private (Clinic)
+// ==========================================
+const toggleDoctorOpdSlotBlockByClinic = async (req, res) => {
+    try {
+        const clinicId = req.user.id;
+        const { doctorId } = req.params;
+        const { timeSlot, time, action, date, reason } = req.body || {};
+
+        const rawTime = timeSlot || time;
+        if (!mongoose.Types.ObjectId.isValid(doctorId)) {
+            return res.status(400).json({ success: false, message: "Invalid doctorId format." });
+        }
+        if (!rawTime || !action || !['block', 'unblock'].includes(String(action).toLowerCase())) {
+            return res.status(400).json({
+                success: false,
+                message: "timeSlot (e.g. '10:30 AM' or '10:30') and action ('block' or 'unblock') are required."
+            });
+        }
+
+        const doctor = await Doctor.findOne({ _id: doctorId, clinicId }).select('_id name').lean();
+        if (!doctor) {
+            return res.status(404).json({ success: false, message: "Doctor not found in this clinic." });
+        }
+
+        const cleanAction = String(action).toLowerCase();
+        const time24 = normalizeTime24(rawTime, String(rawTime).trim());
+
+        // CASE A: Date-specific block/unblock
+        if (date && String(date).trim() !== '') {
+            const cleanDate = moment(date).format("YYYY-MM-DD");
+            if (!moment(cleanDate, "YYYY-MM-DD", true).isValid()) {
+                return res.status(400).json({ success: false, message: "Invalid date format. Use YYYY-MM-DD." });
+            }
+
+            const avail = await Availability.findOneAndUpdate(
+                { vendorId: doctorId },
+                {
+                    $set: { vendorType: 'Doctor', clinicId },
+                    $pull: { blockedSlotsWithReason: { date: cleanDate, time: time24 } }
+                },
+                { upsert: true, new: true }
+            );
+
+            if (cleanAction === 'block') {
+                avail.blockedSlotsWithReason.push({
+                    date: cleanDate,
+                    time: time24,
+                    reason: reason ? String(reason).trim() : "Blocked by Clinic Admin",
+                    blockedAt: new Date()
+                });
+                await avail.save();
+            }
+
+            return res.status(200).json({
+                success: true,
+                message: `Slot ${moment(time24, "HH:mm").format("hh:mm A")} on ${cleanDate} ${cleanAction === 'block' ? 'blocked' : 'unblocked'} for ${doctor.name}.`,
+                blockedSlotsWithReason: avail.blockedSlotsWithReason
+            });
+        }
+
+        // CASE B: Recurring daily slot block/unblock
+        const updateOp = cleanAction === 'block'
+            ? { $set: { vendorType: 'Doctor', clinicId }, $addToSet: { unavailableSlots: time24 } }
+            : { $pull: { unavailableSlots: time24 } };
+
+        const config = await Availability.findOneAndUpdate(
+            { vendorId: doctorId },
+            updateOp,
+            { upsert: true, new: true }
+        ).lean();
+
+        return res.status(200).json({
+            success: true,
+            message: `Recurring slot ${moment(time24, "HH:mm").format("hh:mm A")} ${cleanAction === 'block' ? 'blocked' : 'unblocked'} for ${doctor.name}.`,
+            unavailableSlots: config.unavailableSlots || []
+        });
+    } catch (error) {
+        console.error("Toggle Doctor OPD Slot Block Error:", error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// ==========================================
+// 13. CLINIC GETS DOCTOR LEAVE APPLICATIONS (All Doctors or Specific Doctor)
+// @route   GET /api/clinic/doctors/leaves
+// @route   GET /api/clinic/doctors/leaves/:doctorId
+// @access  Private (Clinic)
+// ==========================================
+const getClinicDoctorLeaves = async (req, res) => {
+    try {
+        const clinicId = req.user.id;
+        const targetDoctorId = req.params.doctorId || req.query.doctorId || null;
+        const { status } = req.query; // Optional: 'Pending' | 'Approved' | 'Rejected'
+
+        const doctorFilter = { clinicId };
+        if (targetDoctorId) {
+            if (!mongoose.Types.ObjectId.isValid(targetDoctorId)) {
+                return res.status(400).json({ success: false, message: "Invalid doctorId format." });
+            }
+            doctorFilter._id = targetDoctorId;
+        }
+
+        const doctors = await Doctor.find(doctorFilter)
+            .select('_id name speciality qualification profileImage cabinNumber leaves')
+            .lean();
+
+        let allLeaveRequests = [];
+        doctors.forEach((doc) => {
+            (doc.leaves || []).forEach((leave) => {
+                if (status && String(leave.status).toLowerCase() !== String(status).trim().toLowerCase()) {
+                    return;
+                }
+                const daysCount = Math.max(
+                    1,
+                    moment(leave.endDate).startOf('day').diff(moment(leave.startDate).startOf('day'), 'days') + 1
+                );
+
+                allLeaveRequests.push({
+                    leaveId: leave._id,
+                    doctorId: doc._id,
+                    doctorName: doc.name,
+                    speciality: doc.speciality,
+                    profileImage: doc.profileImage,
+                    cabinNumber: doc.cabinNumber || "",
+                    startDate: moment(leave.startDate).format("YYYY-MM-DD"),
+                    endDate: moment(leave.endDate).format("YYYY-MM-DD"),
+                    totalDays: daysCount,
+                    reason: leave.reason,
+                    status: leave.status,
+                    rejectionReason: leave.rejectionReason || "",
+                    appliedAt: leave.appliedAt,
+                    reviewedAt: leave.reviewedAt || null
+                });
+            });
+        });
+
+        allLeaveRequests.sort((a, b) => new Date(b.appliedAt) - new Date(a.appliedAt));
+
+        return res.status(200).json({
+            success: true,
+            totalCount: allLeaveRequests.length,
+            pendingCount: allLeaveRequests.filter((l) => l.status === 'Pending').length,
+            approvedCount: allLeaveRequests.filter((l) => l.status === 'Approved').length,
+            rejectedCount: allLeaveRequests.filter((l) => l.status === 'Rejected').length,
+            data: allLeaveRequests
+        });
+    } catch (error) {
+        console.error("Get Clinic Doctor Leaves Error:", error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// ==========================================
+// 14. CLINIC APPROVES OR REJECTS DOCTOR LEAVE REQUEST
+// (Approved leaves automatically block those dates in Availability.blockedDates)
+// @route   PATCH /api/clinic/doctors/leaves/respond
+// @access  Private (Clinic)
+// ==========================================
+const respondToDoctorLeaveByClinic = async (req, res) => {
+    try {
+        const clinicId = req.user.id;
+        const { doctorId, leaveId, action, status, rejectionReason, reason } = req.body || {};
+
+        if (!doctorId || !leaveId) {
+            return res.status(400).json({
+                success: false,
+                message: "doctorId and leaveId are required."
+            });
+        }
+
+        if (!mongoose.Types.ObjectId.isValid(doctorId) || !mongoose.Types.ObjectId.isValid(leaveId)) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid doctorId or leaveId format."
+            });
+        }
+
+        const rawDecision = String(action || status || '').trim().toLowerCase();
+        let finalStatus = null;
+        if (['approve', 'approved'].includes(rawDecision)) finalStatus = 'Approved';
+        else if (['reject', 'rejected'].includes(rawDecision)) finalStatus = 'Rejected';
+
+        if (!finalStatus) {
+            return res.status(400).json({
+                success: false,
+                message: "Valid action ('Approve' or 'Reject') or status ('Approved' or 'Rejected') is required."
+            });
+        }
+
+        const cleanRejectReason = String(rejectionReason || reason || '').trim();
+        if (finalStatus === 'Rejected' && !cleanRejectReason) {
+            return res.status(400).json({
+                success: false,
+                message: "rejectionReason is required when rejecting a leave application."
+            });
+        }
+
+        const doctor = await Doctor.findOne({ _id: doctorId, clinicId });
+        if (!doctor) {
+            return res.status(404).json({
+                success: false,
+                message: "Doctor not found in your clinic."
+            });
+        }
+
+        const leaveItem = doctor.leaves.id(leaveId);
+        if (!leaveItem) {
+            return res.status(404).json({
+                success: false,
+                message: "Leave request not found for this doctor."
+            });
+        }
+
+        if (leaveItem.status !== 'Pending') {
+            return res.status(400).json({
+                success: false,
+                message: `This leave request has already been ${leaveItem.status}.`
+            });
+        }
+
+        const now = new Date();
+        leaveItem.status = finalStatus;
+        leaveItem.reviewedAt = now;
+        leaveItem.rejectionReason = finalStatus === 'Rejected' ? cleanRejectReason : "";
+
+        // Collect all YYYY-MM-DD dates from startDate to endDate
+        const leaveDatesList = [];
+        let cursor = moment(leaveItem.startDate).startOf('day');
+        const endCursor = moment(leaveItem.endDate).startOf('day');
+        while (cursor.isSameOrBefore(endCursor)) {
+            leaveDatesList.push(cursor.format("YYYY-MM-DD"));
+            cursor.add(1, 'days');
+        }
+
+        // If leave covers today, update dutyStatus
+        const todayStr = moment().format("YYYY-MM-DD");
+        if (finalStatus === 'Approved' && leaveDatesList.includes(todayStr)) {
+            doctor.dutyStatus = 'On Leave';
+        }
+
+        await doctor.save();
+
+        // Automatically block all approved leave dates in Availability.blockedDates
+        if (finalStatus === 'Approved' && leaveDatesList.length > 0) {
+            await Availability.findOneAndUpdate(
+                { vendorId: doctor._id },
+                {
+                    $set: { vendorType: 'Doctor', clinicId },
+                    $addToSet: { blockedDates: { $each: leaveDatesList } }
+                },
+                { upsert: true, new: true }
+            );
+        }
+
+        // Notify Doctor via FCM (Non-blocking)
+        sendPushNotification(
+            doctor._id,
+            'doctor',
+            `Leave Request ${finalStatus}`,
+            finalStatus === 'Approved'
+                ? `Your leave from ${moment(leaveItem.startDate).format("DD MMM")} to ${moment(leaveItem.endDate).format("DD MMM")} has been approved.`
+                : `Your leave request was rejected. Reason: ${cleanRejectReason}`,
+            {
+                doctorId: String(doctor._id),
+                leaveId: String(leaveItem._id),
+                status: finalStatus,
+                type: "CLINIC_DOCTOR_LEAVE_RESPONDED"
+            }
+        ).catch(() => {});
+
+        return res.status(200).json({
+            success: true,
+            message: finalStatus === 'Approved'
+                ? `Leave approved for ${doctor.name}. ${leaveDatesList.length} date(s) automatically blocked from patient bookings.`
+                : `Leave rejected for ${doctor.name}.`,
+            blockedDatesAdded: finalStatus === 'Approved' ? leaveDatesList : [],
+            data: leaveItem
+        });
+    } catch (error) {
+        console.error("Respond To Doctor Leave Error:", error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+}
 module.exports = {
     addClinicDoctor,
     getMyClinicDoctors,
@@ -1383,5 +2012,9 @@ module.exports = {
     assignAppointmentToClinicDoctor,
     reassignAppointmentToClinicDoctor,
     configureDoctorOpdScheduleByClinic,
-    getAvailableClinicDoctors
+    getAvailableClinicDoctors,
+    getDoctorOpdSettingsByClinic,
+    toggleDoctorOpdSlotBlockByClinic,
+    getClinicDoctorLeaves,
+    respondToDoctorLeaveByClinic
 };

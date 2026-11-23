@@ -3,12 +3,40 @@
 const Doctor = require('../../../models/Doctor');
 const Clinic = require('../../../models/Clinic');
 const Appointment = require('../../../models/Appointment');
+const Availability = require('../../../models/Availability');
 const Admin = require('../../../models/Admin');
 const ProfileUpdateRequest = require('../../../models/ProfileUpdateRequest');
 const mongoose = require('mongoose');
 const moment = require('moment');
 const { deleteFile } = require('../../../utils/fileHandler');
 const { sendPushNotification } = require('../../../utils/notification');
+const { generateTimeSlots } = require('../../../utils/timeSlotHelper');
+
+const FULL_DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+const DAY_SHORT_TO_FULL = {
+    mon: 'Monday', monday: 'Monday',
+    tue: 'Tuesday', tuesday: 'Tuesday',
+    wed: 'Wednesday', wednesday: 'Wednesday',
+    thu: 'Thursday', thursday: 'Thursday',
+    fri: 'Friday', friday: 'Friday',
+    sat: 'Saturday', saturday: 'Saturday',
+    sun: 'Sunday', sunday: 'Sunday'
+};
+const DAY_FULL_TO_SHORT = {
+    Monday: 'Mon', Tuesday: 'Tue', Wednesday: 'Wed',
+    Thursday: 'Thu', Friday: 'Fri', Saturday: 'Sat', Sunday: 'Sun'
+};
+
+const normalizeTime24 = (timeStr, fallback = "09:00") => {
+    if (!timeStr) return fallback;
+    const clean = String(timeStr).trim();
+    if (/^\d{1,2}:\d{2}$/.test(clean)) {
+        const [h, m] = clean.split(':').map(Number);
+        return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+    }
+    const parsed = moment(clean, ["hh:mm A", "h:mm A", "HH:mm", "H:mm", "hh:mma", "h:mma"]);
+    return parsed.isValid() ? parsed.format("HH:mm") : fallback;
+};
 
 // ==========================================
 // 1. GET MY CLINIC DOCTOR PROFILE
@@ -78,7 +106,6 @@ const updateDoctorProfile = async (req, res) => {
             consultationStatus,
             alternatePhone,
 
-            // Flat fields to bypass WAF blocks
             fees_online,
             fees_clinic,
             fees_home,
@@ -118,7 +145,6 @@ const updateDoctorProfile = async (req, res) => {
         if (treatedConditions !== undefined) updates.treatedConditions = safeArrayParse(treatedConditions);
         if (competencies !== undefined) updates.competencies = safeArrayParse(competencies);
 
-        // Assemble fees object
         if (fees_online !== undefined || fees_clinic !== undefined || fees_home !== undefined) {
             updates.fees = {
                 online: fees_online !== undefined ? Number(fees_online) : (existingDoc.fees?.online || 0),
@@ -129,7 +155,6 @@ const updateDoctorProfile = async (req, res) => {
             updates.fees = typeof fees === 'string' ? JSON.parse(fees) : fees;
         }
 
-        // Assemble consultationStatus & direct availability booleans
         if (
             consultationStatus_online !== undefined ||
             consultationStatus_clinic !== undefined ||
@@ -163,7 +188,6 @@ const updateDoctorProfile = async (req, res) => {
             if (parsedStatus.home !== undefined) updates.isHomeAvailable = Boolean(parsedStatus.home);
         }
 
-        // Process uploaded files (profileImage & signatureImage)
         if (req.files) {
             if (req.files.profileImage && req.files.profileImage[0]) {
                 updates.profileImage = `/uploads/doctors/${req.files.profileImage[0].filename}`;
@@ -181,7 +205,6 @@ const updateDoctorProfile = async (req, res) => {
             });
         }
 
-        // Disk Cleanup: Remove unapproved files from any existing Pending update request
         const existingPending = await ProfileUpdateRequest.findOne({
             vendorId: doctorId,
             vendorModel: 'Doctor',
@@ -198,7 +221,6 @@ const updateDoctorProfile = async (req, res) => {
             await ProfileUpdateRequest.findByIdAndDelete(existingPending._id);
         }
 
-        // Save staged changes for Admin Approval
         const request = await ProfileUpdateRequest.create({
             vendorId: doctorId,
             vendorModel: 'Doctor',
@@ -206,7 +228,6 @@ const updateDoctorProfile = async (req, res) => {
             status: 'Pending'
         });
 
-        // Notify active Admins (Non-blocking)
         try {
             const admins = await Admin.find({ isActive: true }).select('_id').lean();
             await Promise.allSettled(
@@ -298,7 +319,6 @@ const applyDoctorLeave = async (req, res) => {
             });
         }
 
-        // Strict Rule: Today and past dates leave cannot be applied
         if (reqStart.isSameOrBefore(todayStart)) {
             return res.status(400).json({
                 success: false,
@@ -321,7 +341,6 @@ const applyDoctorLeave = async (req, res) => {
             });
         }
 
-        // Check overlapping Pending or Approved leaves
         const isOverlapping = (doctor.leaves || []).some((l) => {
             if (l.status === 'Rejected') return false;
             const lStart = moment(l.startDate).startOf('day');
@@ -348,7 +367,6 @@ const applyDoctorLeave = async (req, res) => {
         doctor.leaves.push(newLeave);
         await doctor.save();
 
-        // Notify Admins (Non-blocking)
         try {
             const admins = await Admin.find({ isActive: true }).select('_id').lean();
             await Promise.allSettled(
@@ -420,8 +438,8 @@ const getDoctorLeavesHistory = async (req, res) => {
 
 // ==========================================
 // 6. CHECK IF DOCTOR IS BUSY OR FREE (Live Status + Active Consultations)
-// @route   GET /api/clinic/doctor-panel/busy-status (Doctor checks self)
-// @route   GET /api/clinic/doctor-panel/busy-status/:doctorId (Clinic checks specific doctor)
+// @route   GET /api/clinic/doctor-panel/busy-status
+// @route   GET /api/clinic/doctor-panel/busy-status/:doctorId
 // @access  Private (Clinic Doctor or Clinic)
 // ==========================================
 const checkDoctorBusyStatus = async (req, res) => {
@@ -430,7 +448,6 @@ const checkDoctorBusyStatus = async (req, res) => {
         let targetDoctorId = req.user.id;
         let clinicFilter = {};
 
-        // If Clinic is checking a specific doctor's busy status
         if (userRole === 'clinic') {
             targetDoctorId = req.params.doctorId || req.query.doctorId;
             if (!targetDoctorId || !mongoose.Types.ObjectId.isValid(targetDoctorId)) {
@@ -453,7 +470,6 @@ const checkDoctorBusyStatus = async (req, res) => {
             });
         }
 
-        // Check active In-Progress appointments right now
         const activeInProgressAppointments = await Appointment.find({
             doctorId: doctor._id,
             status: 'In-Progress'
@@ -461,7 +477,6 @@ const checkDoctorBusyStatus = async (req, res) => {
             .select('_id bookingId bookingType consultationType appointmentDate appointmentTime wardName bedNumber patients')
             .lean();
 
-        // Check if doctor is on Approved Leave today
         const todayStart = moment().startOf('day');
         const todayEnd = moment().endOf('day');
         const isOnApprovedLeaveToday = (doctor.leaves || []).some((l) => {
@@ -471,11 +486,8 @@ const checkDoctorBusyStatus = async (req, res) => {
 
         const currentDutyStatus = doctor.dutyStatus || 'On Duty';
         const hasActiveInProgressCase = activeInProgressAppointments.length > 0;
-
-        // Busy logic: true if manually marked Busy OR currently in an In-Progress appointment
         const isBusy = currentDutyStatus === 'Busy' || hasActiveInProgressCase;
 
-        // Available for new assignment logic
         const isAvailable =
             doctor.isActive !== false &&
             doctor.profileStatus === 'Approved' &&
@@ -537,8 +549,6 @@ const updateDoctorDutyStatus = async (req, res) => {
         const { dutyStatus, status, isBusy } = req.body || {};
 
         let resolvedStatus = dutyStatus || status;
-
-        // Shorthand support: { isBusy: true } or { isBusy: false }
         if (!resolvedStatus && typeof isBusy === 'boolean') {
             resolvedStatus = isBusy ? 'Busy' : 'On Duty';
         }
@@ -587,6 +597,290 @@ const updateDoctorDutyStatus = async (req, res) => {
     }
 };
 
+// ==========================================
+// 8. GET CLINIC DOCTOR'S ALL SLOTS, SHIFT TIMINGS, CABIN & FEES
+// @route   GET /api/clinic/doctor-panel/opd-settings?date=YYYY-MM-DD
+// @access  Private (Clinic Doctor)
+// ==========================================
+const getDoctorOpdSettings = async (req, res) => {
+    try {
+        const doctorId = req.user.id;
+        const { date } = req.query;
+
+        const targetDateStr = date && String(date).trim() !== ''
+            ? String(date).trim()
+            : moment().format("YYYY-MM-DD");
+
+        const targetMoment = moment(targetDateStr, "YYYY-MM-DD", true);
+        if (!targetMoment.isValid()) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid date format. Please use YYYY-MM-DD."
+            });
+        }
+
+        const [doctor, availConfig] = await Promise.all([
+            Doctor.findById(doctorId)
+                .populate('clinicId', 'name clinicName city address phoneNumber image')
+                .select('name speciality qualification profileImage cabinNumber department fees consultationStatus isClinicAvailable isOnlineAvailable isHomeAvailable slotDuration availability leaves dutyStatus clinicId')
+                .lean(),
+            Availability.findOne({ vendorId: doctorId }).lean()
+        ]);
+
+        if (!doctor) {
+            return res.status(404).json({
+                success: false,
+                message: "Doctor profile not found."
+            });
+        }
+
+        const startTime24 = normalizeTime24(availConfig?.startTime, "09:00");
+        const endTime24 = normalizeTime24(availConfig?.endTime, "17:00");
+        const duration = Math.max(5, Number(availConfig?.slotDuration || doctor.slotDuration || 30));
+
+        // Resolve Fees (Clinic, Online, Home)
+        const fees = {
+            clinic: Number(doctor.fees?.clinic || 0),
+            online: Number(doctor.fees?.online || 0),
+            home: Number(doctor.fees?.home || 0)
+        };
+
+        const consultationModes = {
+            clinic: doctor.isClinicAvailable !== false && doctor.consultationStatus?.clinic !== false,
+            online: doctor.isOnlineAvailable !== false && doctor.consultationStatus?.online !== false,
+            home: Boolean(doctor.isHomeAvailable || doctor.consultationStatus?.home)
+        };
+
+        // Resolve Weekly Roster (offDays vs activeDays)
+        let offDays = (availConfig?.offDays || []).map(
+            (d) => DAY_SHORT_TO_FULL[String(d).trim().toLowerCase()] || d
+        );
+        if (offDays.length === 0 && Array.isArray(doctor.availability) && doctor.availability.length > 0) {
+            const activeSet = new Set(
+                doctor.availability.map((a) => DAY_SHORT_TO_FULL[String(a.day).trim().toLowerCase()]).filter(Boolean)
+            );
+            offDays = FULL_DAYS.filter((d) => !activeSet.has(d));
+        }
+        const activeDays = FULL_DAYS.filter((d) => !offDays.includes(d));
+
+        // Format Premium, Blocked & Leave Lists
+        const premiumSlots = (availConfig?.premiumSlots || []).map((ps) => {
+            const t24 = normalizeTime24(ps.time, ps.time);
+            const extraFee = Number(ps.extraFee || 0);
+            return {
+                time: moment(t24, "HH:mm").format("hh:mm A"),
+                time24: t24,
+                extraFee,
+                totalClinicFee: fees.clinic + extraFee
+            };
+        });
+
+        const unavailableSlots = (availConfig?.unavailableSlots || []).map((t) => {
+            const t24 = normalizeTime24(t, t);
+            return {
+                time: moment(t24, "HH:mm").format("hh:mm A"),
+                time24: t24
+            };
+        });
+
+        const blockedSlotsWithReason = (availConfig?.blockedSlotsWithReason || []).map((b) => {
+            const t24 = normalizeTime24(b.time, b.time);
+            return {
+                date: moment(b.date).format("YYYY-MM-DD"),
+                time: moment(t24, "HH:mm").format("hh:mm A"),
+                time24: t24,
+                reason: b.reason || "Blocked",
+                blockedAt: b.blockedAt || null
+            };
+        });
+
+        const approvedLeaves = (doctor.leaves || [])
+            .filter((l) => l.status === 'Approved')
+            .map((l) => ({
+                _id: l._id,
+                startDate: moment(l.startDate).format("YYYY-MM-DD"),
+                endDate: moment(l.endDate).format("YYYY-MM-DD"),
+                reason: l.reason
+            }));
+
+        // Build Date-wise Live Slots Grid
+        const dayFull = targetMoment.format("dddd");
+        const dayShort = targetMoment.format("ddd");
+        const blockedDates = availConfig?.blockedDates || [];
+
+        const isApprovedLeaveDate = approvedLeaves.some(
+            (l) => targetDateStr >= l.startDate && targetDateStr <= l.endDate
+        );
+        const isOffDay = offDays.includes(dayFull);
+        const isBlockedDate = blockedDates.includes(targetDateStr) || isApprovedLeaveDate;
+
+        let liveSlots = {
+            date: targetDateStr,
+            day: dayFull,
+            dayShort,
+            isClosed: false,
+            closedReason: null,
+            totalSlots: 0,
+            availableCount: 0,
+            bookedCount: 0,
+            blockedCount: 0,
+            slots: []
+        };
+
+        if (!consultationModes.clinic) {
+            liveSlots.isClosed = true;
+            liveSlots.closedReason = "Clinic OPD is currently disabled.";
+        } else if (isBlockedDate) {
+            liveSlots.isClosed = true;
+            liveSlots.closedReason = `You are on Leave / Unavailable on ${targetDateStr}.`;
+        } else if (isOffDay) {
+            liveSlots.isClosed = true;
+            liveSlots.closedReason = `${dayFull} is marked as your Weekly Off.`;
+        } else {
+            const rawSlots = generateTimeSlots({
+                startTime: startTime24,
+                endTime: endTime24,
+                slotDuration: duration,
+                morningSlots: availConfig?.morningSlots !== false,
+                afternoonSlots: availConfig?.afternoonSlots !== false,
+                eveningSlots: availConfig?.eveningSlots !== false,
+                unavailableSlots: [],
+                premiumSlots: availConfig?.premiumSlots || []
+            });
+
+            const dayStart = targetMoment.clone().startOf('day').toDate();
+            const dayEnd = targetMoment.clone().endOf('day').toDate();
+
+            const bookedAppts = await Appointment.find({
+                doctorId: doctor._id,
+                bookingType: { $in: ['Appointment', 'Emergency'] },
+                status: { $in: ['Pending', 'Clinic-Pending', 'Confirmed', 'In-Progress', 'Completed'] },
+                appointmentDate: { $gte: dayStart, $lte: dayEnd }
+            }).select('appointmentTime bookingId status patients').lean();
+
+            const bookedMap = {};
+            bookedAppts.forEach((b) => {
+                const t24 = normalizeTime24(b.appointmentTime, "");
+                if (t24) bookedMap[t24] = b;
+            });
+
+            const unavailableSet = new Set(unavailableSlots.map((u) => u.time24));
+            const dateBlockedMap = {};
+            blockedSlotsWithReason.forEach((b) => {
+                if (b.date === targetDateStr) {
+                    dateBlockedMap[b.time24] = b.reason;
+                }
+            });
+
+            const nowIST = moment().utcOffset("+05:30");
+            const isToday = targetDateStr === nowIST.format("YYYY-MM-DD");
+
+            const generated = rawSlots.map((s) => {
+                const t24 = s.slotTime;
+                const formatted12 = moment(t24, "HH:mm").format("hh:mm A");
+                const slotMomentIST = moment.utc(`${targetDateStr} ${t24}`, "YYYY-MM-DD HH:mm").utcOffset("+05:30");
+                const isPast = isToday && slotMomentIST.isBefore(nowIST);
+
+                const bookedInfo = bookedMap[t24] || null;
+                const dateBlockReason = dateBlockedMap[t24] || null;
+                const isRecurringBlocked = unavailableSet.has(t24);
+
+                let status = "Available";
+                if (dateBlockReason || isRecurringBlocked) status = "Blocked";
+                else if (bookedInfo) status = bookedInfo.status === 'Completed' ? "Completed" : "Booked";
+                else if (isPast) status = "Past";
+
+                return {
+                    time: formatted12,
+                    time24: t24,
+                    displayTime: s.displayTime,
+                    category: s.category,
+                    status,
+                    isAvailable: status === "Available",
+                    isPremium: s.isPremium,
+                    extraFee: s.extraFee,
+                    baseClinicFee: fees.clinic,
+                    totalFee: fees.clinic + s.extraFee,
+                    blockReason: dateBlockReason || (isRecurringBlocked ? "Blocked recurring slot" : null),
+                    bookingDetails: bookedInfo ? {
+                        appointmentId: bookedInfo._id,
+                        bookingId: bookedInfo.bookingId,
+                        patientName: bookedInfo.patients?.[0]?.patientName || "Patient",
+                        status: bookedInfo.status
+                    } : null
+                };
+            });
+
+            liveSlots.totalSlots = generated.length;
+            liveSlots.availableCount = generated.filter((x) => x.isAvailable).length;
+            liveSlots.bookedCount = generated.filter((x) => x.status === 'Booked' || x.status === 'Completed').length;
+            liveSlots.blockedCount = generated.filter((x) => x.status === 'Blocked').length;
+            liveSlots.slots = generated;
+        }
+
+        return res.status(200).json({
+            success: true,
+            message: "Clinic doctor OPD slots and fees fetched successfully.",
+            data: {
+                doctor: {
+                    _id: doctor._id,
+                    name: doctor.name,
+                    speciality: doctor.speciality,
+                    qualification: doctor.qualification,
+                    profileImage: doctor.profileImage,
+                    dutyStatus: doctor.dutyStatus || "On Duty",
+                    cabinNumber: doctor.cabinNumber || doctor.department?.roomNumber || "",
+                    slotDurationMinutes: duration,
+                    clinic: doctor.clinicId ? {
+                        _id: doctor.clinicId._id,
+                        name: doctor.clinicId.clinicName || doctor.clinicId.name,
+                        city: doctor.clinicId.city || "",
+                        address: doctor.clinicId.address || "",
+                        image: doctor.clinicId.image || null
+                    } : null
+                },
+                fees,
+                consultationModes,
+                isConfiguredByClinic: Boolean(availConfig),
+                generalSchedule: {
+                    startTime: startTime24,
+                    endTime: endTime24,
+                    startTime12h: moment(startTime24, "HH:mm").format("hh:mm A"),
+                    endTime12h: moment(endTime24, "HH:mm").format("hh:mm A"),
+                    slotDurationMinutes: duration,
+                    morningSlots: availConfig?.morningSlots !== false,
+                    afternoonSlots: availConfig?.afternoonSlots !== false,
+                    eveningSlots: availConfig?.eveningSlots !== false,
+                    weeklyAvailability: doctor.availability || []
+                },
+                weeklyRoster: {
+                    activeDaysCount: activeDays.length,
+                    offDaysCount: offDays.length,
+                    activeDays,
+                    offDays,
+                    daysList: FULL_DAYS.map((dayName) => ({
+                        day: dayName,
+                        shortDay: DAY_FULL_TO_SHORT[dayName],
+                        isActive: !offDays.includes(dayName)
+                    }))
+                },
+                premiumSlots,
+                unavailableSlots,
+                blockedSlotsWithReason,
+                blockedDates,
+                approvedLeaves,
+                liveSlots
+            }
+        });
+    } catch (error) {
+        console.error("Get Clinic Doctor OPD Settings Error:", error);
+        return res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+};
+
 module.exports = {
     getMyDoctorProfile,
     updateDoctorProfile,
@@ -594,5 +888,6 @@ module.exports = {
     applyDoctorLeave,
     getDoctorLeavesHistory,
     checkDoctorBusyStatus,
-    updateDoctorDutyStatus
+    updateDoctorDutyStatus,
+    getDoctorOpdSettings
 };

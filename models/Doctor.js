@@ -26,6 +26,14 @@ const doctorSchema = new mongoose.Schema({
     isOnline: { type: Boolean, default: true },
     alternatePhone: { type: String, default: null },
 
+    // Cabin & Department Room Info
+    cabinNumber: { type: String, default: "" },
+    department: {
+        isNormal: { type: Boolean, default: true },
+        isEmergency: { type: Boolean, default: false },
+        roomNumber: { type: String, default: "" }
+    },
+
     // Professional Info
     qualification: { type: String, default: null }, // Primary degree summary string (e.g., "MBBS, MD")
     

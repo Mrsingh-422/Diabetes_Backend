@@ -311,6 +311,7 @@ app.use('/api/clinic/coupons', require('./routes/clinic/clinicCouponRoute'));
 ////////////////// Clinic Doctor Panel Routes /////////////////////
 app.use('/api/clinic/doctor-panel', require('./routes/clinic/clinicDoctorPannel/clinicDocAppointmentRoute'));
 app.use('/api/clinic/doctor-panel', require('./routes/clinic/clinicDoctorPannel/clinicDocProfileRoute'));
+app.use('/api/clinic/doctor-panel', require('./routes/clinic/clinicDoctorPannel/clinicDocCasesRoute'));
 
 
 

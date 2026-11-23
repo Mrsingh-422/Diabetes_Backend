@@ -11,7 +11,8 @@ const {
     applyDoctorLeave,
     getDoctorLeavesHistory,
     checkDoctorBusyStatus,
-    updateDoctorDutyStatus
+    updateDoctorDutyStatus,
+    getDoctorOpdSettings
 } = require('../../../controllers/clinic/clinicDoctorPannel/clinicDocProfile');
 
 // Base Route: /api/clinic/doctor-panel
@@ -20,6 +21,9 @@ const {
 router.get('/profile', protect('clinic-doctor'), getMyDoctorProfile);
 router.put('/profile/update', protect('clinic-doctor'), doctorDocUploads, updateDoctorProfile);
 router.get('/profile/update-status', protect('clinic-doctor'), getLatestDoctorProfileRequest);
+
+// --- OPD SLOTS, SCHEDULE & FEES ---
+router.get('/opd-settings', protect('clinic-doctor'), getDoctorOpdSettings);
 
 // --- LEAVES ---
 router.post('/leaves/apply', protect('clinic-doctor'), applyDoctorLeave);

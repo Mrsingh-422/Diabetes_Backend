@@ -44,6 +44,11 @@ const clinicSchema = new Schema(
       type: String,
       default: "",
     },
+
+    // Clinic Cabins / OPD Rooms Master
+    totalCabins: { type: Number, default: 1 },
+    cabins: [{ type: String, trim: true }],
+
     // --- Operational Facilities & Ambulance Toggle ---
     isAmbulanceAvailable: {
       type: Boolean,
