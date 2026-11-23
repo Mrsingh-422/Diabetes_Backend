@@ -2,6 +2,8 @@
 
 const Appointment = require('../../../models/Appointment');
 const Prescription = require('../../../models/Prescription');
+const { getOpdTokenQueueStatus } = require('../../../utils/opdTokenHelper');
+const { sendPushNotification } = require('../../../utils/notification');
 const mongoose = require('mongoose');
 const moment = require('moment');
 
@@ -159,13 +161,13 @@ const buildIdCondition = (idParam) => {
 };
 
 // ==========================================
-// Shared Core: Lightweight List Fetcher by Category ('OPD' | 'IPD' | 'EMERGENCY')
+// Shared Core: Lightweight List Fetcher (Supports ?skipped=true|false & Skipped Tokens Sorted Below Active Queue)
 // ==========================================
 const fetchCategoryAppointmentsList = async (req, res, categoryMode) => {
     try {
         const doctorId = req.user.id;
         const clinicId = req.user.clinicId || null;
-        const { status, date, search, page = 1, limit = 20 } = req.query;
+        const { status, date, search, skipped, page = 1, limit = 20 } = req.query;
 
         const pageNum = Math.max(1, parseInt(page, 10) || 1);
         const limitNum = Math.max(1, parseInt(limit, 10) || 20);
@@ -185,9 +187,13 @@ const fetchCategoryAppointmentsList = async (req, res, categoryMode) => {
             andConditions.push({ clinicId });
         }
 
-        // Category Filter
         if (categoryMode === 'OPD') {
             andConditions.push({ bookingType: 'Appointment' });
+            if (skipped === 'true') {
+                andConditions.push({ isTokenSkipped: true });
+            } else if (skipped === 'false') {
+                andConditions.push({ isTokenSkipped: { $ne: true } });
+            }
         } else if (categoryMode === 'IPD') {
             andConditions.push({ bookingType: 'Admission' });
         } else if (categoryMode === 'EMERGENCY') {
@@ -199,7 +205,6 @@ const fetchCategoryAppointmentsList = async (req, res, categoryMode) => {
             });
         }
 
-        // Optional Status Filter
         if (status && String(status).trim() !== '') {
             const cleanStatus = String(status).trim();
             if (cleanStatus.toLowerCase() === 'active') {
@@ -215,7 +220,6 @@ const fetchCategoryAppointmentsList = async (req, res, categoryMode) => {
             }
         }
 
-        // Optional Date Filter
         if (date && date !== 'all' && String(date).trim() !== '') {
             const targetMoment = String(date).toLowerCase() === 'today' ? moment() : moment(date);
             if (!targetMoment.isValid()) {
@@ -239,12 +243,12 @@ const fetchCategoryAppointmentsList = async (req, res, categoryMode) => {
             });
         }
 
-        // Optional Search Filter
         if (search && String(search).trim() !== '') {
             const regex = new RegExp(String(search).trim(), 'i');
             andConditions.push({
                 $or: [
                     { bookingId: regex },
+                    { formattedToken: regex },
                     { "patients.patientName": regex },
                     { "address.name": regex },
                     { "address.phone": regex },
@@ -256,83 +260,99 @@ const fetchCategoryAppointmentsList = async (req, res, categoryMode) => {
         }
 
         const query = { $and: andConditions };
+        const sortOrder = categoryMode === 'OPD'
+            ? { appointmentDate: -1, isTokenSkipped: 1, tokenNumber: 1, createdAt: 1 }
+            : { appointmentDate: -1, createdAt: -1 };
 
         const [totalDocs, docs] = await Promise.all([
             Appointment.countDocuments(query),
             Appointment.find(query)
-                .select('_id bookingId bookingType consultationType status doctorAcceptanceStatus triageLevel bookingReason isDoctorSelectedAlready appointmentDate appointmentTime startDate endDate stayDuration wardName bedNumber ambulanceId totalAmount paymentStatus userId doctorId pendingDoctorId patients address createdAt')
+                .select('_id bookingId bookingType consultationType status doctorAcceptanceStatus triageLevel bookingReason isDoctorSelectedAlready appointmentDate appointmentTime startDate endDate stayDuration wardName bedNumber ambulanceId totalAmount paymentStatus userId clinicId doctorId pendingDoctorId tokenNumber formattedToken tokenIntervalMinutes opdRoomNumber isTokenSkipped tokenSkipCount tokenSkippedAt tokenSkipReason patients address createdAt')
                 .populate('userId', 'name phone profilePic gender dob age familyMember')
                 .populate('ambulanceId', 'vehicleNumber vehicleType')
-                .sort({ appointmentDate: -1, createdAt: -1 })
+                .sort(sortOrder)
                 .skip(skip)
                 .limit(limitNum)
                 .lean()
         ]);
 
-        // Lightweight summary payload per item
-        const data = docs.map((appt) => {
-            const patientProfile = resolvePatientProfile(appt);
-            const dateVal = appt.appointmentDate || appt.startDate;
-            const isPendingHandover = Boolean(
-                appt.pendingDoctorId && String(appt.pendingDoctorId) === String(doctorId)
-            );
-            const acceptanceState = appt.doctorAcceptanceStatus || 'Pending';
+        const data = await Promise.all(
+            docs.map(async (appt) => {
+                const patientProfile = resolvePatientProfile(appt);
+                const dateVal = appt.appointmentDate || appt.startDate;
+                const isPendingHandover = Boolean(
+                    appt.pendingDoctorId && String(appt.pendingDoctorId) === String(doctorId)
+                );
+                const acceptanceState = appt.doctorAcceptanceStatus || 'Pending';
 
-            const baseItem = {
-                _id: appt._id,
-                bookingId: appt.bookingId,
-                categoryTag: categoryMode,
-                bookingType: appt.bookingType,
-                status: appt.status,
-                doctorAcceptanceStatus: acceptanceState,
-                isDoctorSelectedAlready: Boolean(appt.isDoctorSelectedAlready),
-                canRespondToAssignment: ((String(appt.doctorId) === String(doctorId) && acceptanceState === 'Pending') || isPendingHandover) &&
-                    !['Completed', 'Cancelled-By-User', 'Cancelled-By-Doctor', 'Cancelled-By-Clinic', 'No-Show'].includes(appt.status),
-                patient: {
-                    name: patientProfile.patientName,
-                    age: patientProfile.age,
-                    gender: patientProfile.gender,
-                    phone: patientProfile.phone,
-                    profilePic: patientProfile.profilePic
-                },
-                reasonForVisit: patientProfile.reasonForVisit,
-                paymentStatus: appt.paymentStatus || 'Pending',
-                totalAmount: appt.totalAmount || 0,
-                createdAt: appt.createdAt
-            };
-
-            if (categoryMode === 'OPD') {
-                return {
-                    ...baseItem,
-                    consultationType: appt.consultationType || 'Clinic Visit',
-                    appointmentDate: dateVal ? moment(dateVal).format('YYYY-MM-DD') : null,
-                    appointmentTime: appt.appointmentTime || "10:30 AM"
+                const baseItem = {
+                    _id: appt._id,
+                    bookingId: appt.bookingId,
+                    categoryTag: categoryMode,
+                    bookingType: appt.bookingType,
+                    status: appt.status,
+                    doctorAcceptanceStatus: acceptanceState,
+                    isDoctorSelectedAlready: Boolean(appt.isDoctorSelectedAlready),
+                    canRespondToAssignment: ((String(appt.doctorId) === String(doctorId) && acceptanceState === 'Pending') || isPendingHandover) &&
+                        !['Completed', 'Cancelled-By-User', 'Cancelled-By-Doctor', 'Cancelled-By-Clinic', 'No-Show'].includes(appt.status),
+                    patient: {
+                        name: patientProfile.patientName,
+                        age: patientProfile.age,
+                        gender: patientProfile.gender,
+                        phone: patientProfile.phone,
+                        profilePic: patientProfile.profilePic
+                    },
+                    reasonForVisit: patientProfile.reasonForVisit,
+                    paymentStatus: appt.paymentStatus || 'Pending',
+                    totalAmount: appt.totalAmount || 0,
+                    createdAt: appt.createdAt
                 };
-            }
 
-            if (categoryMode === 'IPD') {
+                if (categoryMode === 'OPD') {
+                    const queueInfo = appt.tokenNumber
+                        ? await getOpdTokenQueueStatus(appt)
+                        : null;
+
+                    return {
+                        ...baseItem,
+                        consultationType: appt.consultationType || 'Clinic Visit',
+                        appointmentDate: dateVal ? moment(dateVal).format('YYYY-MM-DD') : null,
+                        appointmentTime: appt.appointmentTime || "10:30 AM",
+                        tokenNumber: appt.tokenNumber || null,
+                        formattedToken: appt.formattedToken || "",
+                        tokenIntervalMinutes: appt.tokenIntervalMinutes || null,
+                        opdRoomNumber: appt.opdRoomNumber || "",
+                        isTokenSkipped: Boolean(appt.isTokenSkipped),
+                        tokenSkipCount: appt.tokenSkipCount || 0,
+                        tokenSkipReason: appt.tokenSkipReason || "",
+                        tokenSkippedAt: appt.tokenSkippedAt || null,
+                        queueInfo
+                    };
+                }
+
+                if (categoryMode === 'IPD') {
+                    return {
+                        ...baseItem,
+                        wardName: appt.wardName || null,
+                        bedNumber: appt.bedNumber || null,
+                        stayDuration: appt.stayDuration || 1,
+                        startDate: appt.startDate ? moment(appt.startDate).format('YYYY-MM-DD') : null,
+                        endDate: appt.endDate ? moment(appt.endDate).format('YYYY-MM-DD') : null
+                    };
+                }
+
                 return {
                     ...baseItem,
+                    triageLevel: appt.triageLevel || 'Emergency',
+                    appointmentDate: dateVal ? moment(dateVal).format('YYYY-MM-DD') : null,
+                    appointmentTime: appt.appointmentTime || null,
                     wardName: appt.wardName || null,
                     bedNumber: appt.bedNumber || null,
-                    stayDuration: appt.stayDuration || 1,
-                    startDate: appt.startDate ? moment(appt.startDate).format('YYYY-MM-DD') : null,
-                    endDate: appt.endDate ? moment(appt.endDate).format('YYYY-MM-DD') : null
+                    hasAmbulance: Boolean(appt.ambulanceId),
+                    ambulanceVehicleNumber: appt.ambulanceId?.vehicleNumber || null
                 };
-            }
-
-            // EMERGENCY
-            return {
-                ...baseItem,
-                triageLevel: appt.triageLevel || 'Emergency',
-                appointmentDate: dateVal ? moment(dateVal).format('YYYY-MM-DD') : null,
-                appointmentTime: appt.appointmentTime || null,
-                wardName: appt.wardName || null,
-                bedNumber: appt.bedNumber || null,
-                hasAmbulance: Boolean(appt.ambulanceId),
-                ambulanceVehicleNumber: appt.ambulanceId?.vehicleNumber || null
-            };
-        });
+            })
+        );
 
         return res.status(200).json({
             success: true,
@@ -350,8 +370,9 @@ const fetchCategoryAppointmentsList = async (req, res, categoryMode) => {
     }
 };
 
+
 // ==========================================
-// Shared Core: Full 360° Appointment Detail By ID & Category
+// Shared Core: Full 360° Appointment Detail By ID (Includes Live Token Queue Status for OPD)
 // ==========================================
 const fetchCategoryAppointmentById = async (req, res, categoryMode) => {
     try {
@@ -533,6 +554,14 @@ const fetchCategoryAppointmentById = async (req, res, categoryMode) => {
             paymentDetails: appointment.paymentDetails || null
         };
 
+        const tokenQueueStatus = categoryMode === 'OPD'
+            ? await getOpdTokenQueueStatus({
+                ...appointment,
+                clinicId: appointment.clinicId?._id || appointment.clinicId,
+                doctorId: appointment.doctorId?._id || appointment.doctorId
+            })
+            : null;
+
         const isPrimaryDoctor = Boolean(
             appointment.doctorId &&
             appointment.doctorId._id?.toString() === String(doctorId)
@@ -554,6 +583,7 @@ const fetchCategoryAppointmentById = async (req, res, categoryMode) => {
             data: {
                 ...appointment,
                 categoryTag: categoryMode,
+                tokenQueueStatus,
                 resolvedPatient,
                 treatmentHistory: enrichedTreatmentHistory,
                 treatmentTeamTimeline,
@@ -577,6 +607,7 @@ const fetchCategoryAppointmentById = async (req, res, categoryMode) => {
         return res.status(500).json({ success: false, message: error.message });
     }
 };
+
 
 // ==========================================
 // 1. OPD LIST (Light Info)
@@ -614,11 +645,353 @@ const getClinicDoctorEmergencyList = (req, res) => fetchCategoryAppointmentsList
 // ==========================================
 const getClinicDoctorEmergencyById = (req, res) => fetchCategoryAppointmentById(req, res, 'EMERGENCY');
 
+// ==========================================
+// 7. CLINIC DOCTOR CALLS NEXT WAITING OPD TOKEN (Skips isTokenSkipped: true)
+// @route   PATCH /api/clinic/doctor-panel/opd/call-next-token
+// ==========================================
+const callNextClinicOpdToken = async (req, res) => {
+    try {
+        const doctorId = req.user.id;
+        const clinicId = req.user.clinicId || null;
+        const { date } = req.body || {};
+
+        const targetMoment = date ? moment(date) : moment();
+        const dayStart = targetMoment.clone().startOf('day').toDate();
+        const dayEnd = targetMoment.clone().endOf('day').toDate();
+
+        const baseFilter = {
+            doctorId,
+            ...(clinicId ? { clinicId } : {}),
+            bookingType: 'Appointment',
+            appointmentDate: { $gte: dayStart, $lte: dayEnd }
+        };
+
+        await Appointment.updateMany(
+            { ...baseFilter, status: 'In-Progress' },
+            {
+                $set: {
+                    status: 'Completed',
+                    'clinicalSummary.dischargedAt': new Date()
+                }
+            }
+        );
+
+        const nextAppointment = await Appointment.findOne({
+            ...baseFilter,
+            status: { $in: ['Confirmed', 'Pending', 'Clinic-Pending'] },
+            tokenNumber: { $ne: null },
+            isTokenSkipped: { $ne: true }
+        })
+            .sort({ tokenNumber: 1, createdAt: 1 })
+            .populate('userId', 'name phone');
+
+        if (!nextAppointment) {
+            return res.status(404).json({
+                success: false,
+                message: "No unskipped waiting OPD tokens left in today's queue."
+            });
+        }
+
+        nextAppointment.status = 'In-Progress';
+        if (nextAppointment.doctorAcceptanceStatus !== 'Accepted') {
+            nextAppointment.doctorAcceptanceStatus = 'Accepted';
+            nextAppointment.doctorRespondedAt = new Date();
+        }
+        await nextAppointment.save();
+
+        const cabinLabel = nextAppointment.opdRoomNumber || req.user.cabinNumber || "OPD Cabin";
+        if (nextAppointment.userId?._id) {
+            sendPushNotification(
+                nextAppointment.userId._id,
+                'user',
+                `Your Turn! Token #${nextAppointment.formattedToken}`,
+                `${req.user.name} is calling Token #${nextAppointment.formattedToken} in ${cabinLabel}. Please proceed inside.`,
+                {
+                    appointmentId: String(nextAppointment._id),
+                    bookingId: String(nextAppointment.bookingId || ""),
+                    formattedToken: String(nextAppointment.formattedToken || ""),
+                    type: "OPD_TOKEN_CALLED"
+                }
+            ).catch(() => {});
+        }
+
+        const followingToken = await Appointment.findOne({
+            ...baseFilter,
+            status: { $in: ['Confirmed', 'Pending', 'Clinic-Pending'] },
+            isTokenSkipped: { $ne: true },
+            tokenNumber: { $gt: nextAppointment.tokenNumber }
+        })
+            .sort({ tokenNumber: 1 })
+            .select('_id bookingId userId tokenNumber formattedToken tokenIntervalMinutes')
+            .lean();
+
+        if (followingToken && followingToken.userId) {
+            const waitMins = followingToken.tokenIntervalMinutes || 15;
+            sendPushNotification(
+                followingToken.userId,
+                'user',
+                `Get Ready! Token #${followingToken.formattedToken} is Next`,
+                `Token #${nextAppointment.formattedToken} is currently inside. Your turn (~${waitMins} mins) is next.`,
+                {
+                    appointmentId: String(followingToken._id),
+                    bookingId: String(followingToken.bookingId || ""),
+                    formattedToken: String(followingToken.formattedToken || ""),
+                    type: "OPD_NEXT_TOKEN_ALERT"
+                }
+            ).catch(() => {});
+        }
+
+        return res.status(200).json({
+            success: true,
+            message: `Now serving Token #${nextAppointment.formattedToken}.`,
+            currentServingToken: nextAppointment.formattedToken,
+            nextWaitingToken: followingToken?.formattedToken || null,
+            data: nextAppointment
+        });
+    } catch (error) {
+        console.error("Call Next OPD Token Error:", error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// ==========================================
+// 8. CLINIC DOCTOR TEMPORARILY SKIPS AN OPD TOKEN (Patient Not Arrived Yet)
+// @route   PATCH /api/clinic/doctor-panel/opd/skip-token/:id
+// @access  Private (Clinic Doctor)
+// ==========================================
+const skipClinicOpdToken = async (req, res) => {
+    try {
+        const doctorId = req.user.id;
+        const clinicId = req.user.clinicId || null;
+        const idCondition = buildIdCondition(req.params.id || req.body?.appointmentId);
+
+        if (!idCondition) {
+            return res.status(400).json({
+                success: false,
+                message: "Appointment ID or bookingId is required."
+            });
+        }
+
+        const { reason = "Patient not present when called", autoCallNext = false } = req.body || {};
+
+        const appointment = await Appointment.findOne({
+            $and: [
+                idCondition,
+                { doctorId },
+                ...(clinicId ? [{ clinicId }] : []),
+                { bookingType: 'Appointment' }
+            ]
+        }).populate('userId', 'name phone');
+
+        if (!appointment) {
+            return res.status(404).json({
+                success: false,
+                message: "OPD appointment not found or not assigned to you."
+            });
+        }
+
+        const closedStatuses = ['Completed', 'Cancelled-By-User', 'Cancelled-By-Doctor', 'Cancelled-By-Clinic', 'No-Show'];
+        if (closedStatuses.includes(appointment.status)) {
+            return res.status(400).json({
+                success: false,
+                message: `Cannot skip token because appointment is already '${appointment.status}'.`
+            });
+        }
+
+        const now = new Date();
+        const cleanReason = String(reason || "Patient not present when called").trim();
+
+        appointment.status = 'Confirmed'; // Keep booking alive so patient can be recalled later
+        appointment.isTokenSkipped = true;
+        appointment.tokenSkippedAt = now;
+        appointment.tokenSkipCount = (appointment.tokenSkipCount || 0) + 1;
+        appointment.tokenSkipReason = cleanReason;
+
+        await appointment.save();
+
+        const tokenLabel = appointment.formattedToken ? `Token #${appointment.formattedToken}` : `Appointment #${appointment.bookingId}`;
+        const cabinLabel = appointment.opdRoomNumber || req.user.cabinNumber || "OPD Cabin";
+
+        // Notify skipped patient
+        if (appointment.userId?._id) {
+            sendPushNotification(
+                appointment.userId._id,
+                'user',
+                `${tokenLabel} Temporarily Skipped`,
+                `You were not present when ${tokenLabel} was called by ${req.user.name}. Please report at ${cabinLabel} when you arrive.`,
+                {
+                    appointmentId: String(appointment._id),
+                    bookingId: String(appointment.bookingId || ""),
+                    formattedToken: String(appointment.formattedToken || ""),
+                    type: "OPD_TOKEN_SKIPPED"
+                }
+            ).catch(() => {});
+        }
+
+        // Find next waiting unskipped token in queue
+        const dayStart = moment(appointment.appointmentDate || now).startOf('day').toDate();
+        const dayEnd = moment(appointment.appointmentDate || now).endOf('day').toDate();
+
+        const nextWaitingAppt = await Appointment.findOne({
+            doctorId,
+            ...(clinicId ? { clinicId } : {}),
+            bookingType: 'Appointment',
+            status: { $in: ['Confirmed', 'Pending', 'Clinic-Pending'] },
+            isTokenSkipped: { $ne: true },
+            tokenNumber: { $ne: null },
+            _id: { $ne: appointment._id },
+            appointmentDate: { $gte: dayStart, $lte: dayEnd }
+        }).sort({ tokenNumber: 1, createdAt: 1 });
+
+        let autoCalledNextAppointment = null;
+        if ((autoCallNext === true || autoCallNext === 'true') && nextWaitingAppt) {
+            nextWaitingAppt.status = 'In-Progress';
+            if (nextWaitingAppt.doctorAcceptanceStatus !== 'Accepted') {
+                nextWaitingAppt.doctorAcceptanceStatus = 'Accepted';
+                nextWaitingAppt.doctorRespondedAt = now;
+            }
+            await nextWaitingAppt.save();
+            autoCalledNextAppointment = nextWaitingAppt;
+
+            if (nextWaitingAppt.userId) {
+                sendPushNotification(
+                    nextWaitingAppt.userId,
+                    'user',
+                    `Your Turn! Token #${nextWaitingAppt.formattedToken}`,
+                    `${req.user.name} is calling Token #${nextWaitingAppt.formattedToken} in ${cabinLabel}. Please proceed inside.`,
+                    {
+                        appointmentId: String(nextWaitingAppt._id),
+                        formattedToken: String(nextWaitingAppt.formattedToken || ""),
+                        type: "OPD_TOKEN_CALLED"
+                    }
+                ).catch(() => {});
+            }
+        }
+
+        return res.status(200).json({
+            success: true,
+            message: `${tokenLabel} temporarily skipped.${autoCalledNextAppointment ? ` Now serving Token #${autoCalledNextAppointment.formattedToken}.` : ''}`,
+            skippedToken: appointment.formattedToken || null,
+            tokenSkipCount: appointment.tokenSkipCount,
+            tokenSkipReason: appointment.tokenSkipReason,
+            nextWaitingToken: nextWaitingAppt?.formattedToken || null,
+            autoCalledNextAppointment,
+            data: appointment
+        });
+    } catch (error) {
+        console.error("Skip Clinic OPD Token Error:", error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// ==========================================
+// 9. RECALL A TEMPORARILY SKIPPED OPD TOKEN (When Patient Arrives Back)
+// @route   PATCH /api/clinic/doctor-panel/opd/recall-token/:id
+// @access  Private (Clinic Doctor)
+// ==========================================
+const recallSkippedClinicOpdToken = async (req, res) => {
+    try {
+        const doctorId = req.user.id;
+        const clinicId = req.user.clinicId || null;
+        const idCondition = buildIdCondition(req.params.id || req.body?.appointmentId);
+
+        if (!idCondition) {
+            return res.status(400).json({
+                success: false,
+                message: "Appointment ID or bookingId is required."
+            });
+        }
+
+        const { startImmediately = false } = req.body || {};
+
+        const appointment = await Appointment.findOne({
+            $and: [
+                idCondition,
+                { doctorId },
+                ...(clinicId ? [{ clinicId }] : []),
+                { bookingType: 'Appointment' }
+            ]
+        }).populate('userId', 'name phone');
+
+        if (!appointment) {
+            return res.status(404).json({
+                success: false,
+                message: "OPD appointment not found or not assigned to you."
+            });
+        }
+
+        if (!appointment.isTokenSkipped) {
+            return res.status(400).json({
+                success: false,
+                message: "This token is not currently skipped."
+            });
+        }
+
+        const now = new Date();
+        const callNow = startImmediately === true || startImmediately === 'true';
+
+        if (callNow) {
+            const dayStart = moment(appointment.appointmentDate || now).startOf('day').toDate();
+            const dayEnd = moment(appointment.appointmentDate || now).endOf('day').toDate();
+            await Appointment.updateMany(
+                {
+                    doctorId,
+                    ...(clinicId ? { clinicId } : {}),
+                    bookingType: 'Appointment',
+                    status: 'In-Progress',
+                    appointmentDate: { $gte: dayStart, $lte: dayEnd },
+                    _id: { $ne: appointment._id }
+                },
+                { $set: { status: 'Completed', 'clinicalSummary.dischargedAt': now } }
+            );
+            appointment.status = 'In-Progress';
+        } else {
+            appointment.status = 'Confirmed';
+        }
+
+        appointment.isTokenSkipped = false;
+        await appointment.save();
+
+        const tokenLabel = appointment.formattedToken ? `Token #${appointment.formattedToken}` : `Appointment #${appointment.bookingId}`;
+        const cabinLabel = appointment.opdRoomNumber || req.user.cabinNumber || "OPD Cabin";
+
+        if (appointment.userId?._id) {
+            sendPushNotification(
+                appointment.userId._id,
+                'user',
+                callNow ? `Your Turn! ${tokenLabel}` : `${tokenLabel} Added Back to Queue`,
+                callNow
+                    ? `${req.user.name} has recalled ${tokenLabel}. Please proceed to ${cabinLabel}.`
+                    : `${tokenLabel} has been restored to the active waiting queue for ${req.user.name}.`,
+                {
+                    appointmentId: String(appointment._id),
+                    formattedToken: String(appointment.formattedToken || ""),
+                    type: "OPD_TOKEN_RECALLED"
+                }
+            ).catch(() => {});
+        }
+
+        return res.status(200).json({
+            success: true,
+            message: callNow
+                ? `${tokenLabel} recalled and consultation started ('In-Progress').`
+                : `${tokenLabel} restored back into the active waiting queue.`,
+            data: appointment
+        });
+    } catch (error) {
+        console.error("Recall Skipped OPD Token Error:", error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 module.exports = {
-    getClinicDoctorOpdList,
+     getClinicDoctorOpdList,
     getClinicDoctorOpdById,
     getClinicDoctorIpdList,
     getClinicDoctorIpdById,
     getClinicDoctorEmergencyList,
-    getClinicDoctorEmergencyById
+    getClinicDoctorEmergencyById,
+    callNextClinicOpdToken,
+    skipClinicOpdToken,
+    recallSkippedClinicOpdToken
 };

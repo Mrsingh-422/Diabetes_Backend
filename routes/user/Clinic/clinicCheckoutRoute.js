@@ -10,7 +10,8 @@ const {
     bookClinicOrder,
     verifyClinicPayment,
     getMyClinicBookings,
-    getSingleClinicBooking
+    getSingleClinicBooking,
+    getMyOpdTokenLiveStatus
 } = require('../../../controllers/user/Clinic/ClinicCheckout');
 
 // Base URL: /api/clinic/checkout
@@ -29,5 +30,8 @@ router.get('/my-bookings', protect('user'), getMyClinicBookings);
 
 // 5. Get Single Booking Full Details by ID
 router.get('/booking/:id', protect('user'), getSingleClinicBooking);
+
+router.get('/token-status/:id', protect('user'), getMyOpdTokenLiveStatus);
+
 
 module.exports = router;

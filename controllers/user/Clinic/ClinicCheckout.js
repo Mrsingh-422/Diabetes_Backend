@@ -8,6 +8,9 @@ const Coupon = require('../../../models/Coupon');
 const CodConfig = require('../../../models/CodConfig');
 const Ward = require('../../../models/Ward');
 const Bed = require('../../../models/Bed');
+const mongoose = require('mongoose');
+const { assignOpdTokenToAppointment, getOpdTokenQueueStatus } = require('../../../utils/opdTokenHelper');
+
 
 const crypto = require('crypto');
 const {
@@ -243,7 +246,7 @@ const calculateClinicBill = async (req, res) => {
 };
 
 // ==========================================
-// 🏥 2. PLACE CLINIC BOOKING (POST /book - Supports Multipart FormData & JSON)
+// 🏥 2. PLACE CLINIC BOOKING (POST /book - Generates OPD Token for COD/Free Bookings)
 // ==========================================
 const bookClinicOrder = async (req, res) => {
     try {
@@ -266,39 +269,32 @@ const bookClinicOrder = async (req, res) => {
         const paymentMethod = body.paymentMethod || 'Online';
 
         if (!clinicId) {
-            return res.status(400).json({
-                success: false,
-                message: "Clinic ID (clinicId) is required."
+            return res.status(400).json({ 
+                success: false, 
+                message: "Clinic ID (clinicId) is required." 
             });
         }
 
-        // 📁 File Processing for Prescription / Medical Reports
         let uploadedFileUrl = null;
-        let uploadedFileName = null;
-
         if (req.files) {
             const file = req.files['medicalDocument']?.[0] || req.files['prescription']?.[0] || req.files['file']?.[0];
             if (file) {
                 uploadedFileUrl = `/uploads/clinics/${file.filename}`;
-                uploadedFileName = file.originalname;
             }
         } else if (req.file) {
             uploadedFileUrl = `/uploads/clinics/${req.file.filename}`;
-            uploadedFileName = req.file.originalname;
         }
 
-        // Home Visit address check
         const selectedMode = doctor?.mode || consultationType;
         const isHomeVisit = selectedMode === 'Home Visit' || selectedMode === 'homeVisitFee' || selectedMode === 'home';
-
+        
         if (isHomeVisit && (!address || !address.phone || !address.city || !address.houseNo)) {
-            return res.status(400).json({
-                success: false,
-                message: "Complete address with phone, house number, and city is mandatory for Doctor Home Visits."
+            return res.status(400).json({ 
+                success: false, 
+                message: "Complete address with phone, house number, and city is mandatory for Doctor Home Visits." 
             });
         }
 
-        // Bill Calculation
         const calculation = await calculateClinicBillHelper({
             clinicId,
             bookingType,
@@ -308,7 +304,6 @@ const bookClinicOrder = async (req, res) => {
             couponCode
         });
 
-        // COD Enforcement Check
         if (paymentMethod === 'COD' && calculation.orderRestrictions.isCodAvailable === false) {
             return res.status(400).json({
                 success: false,
@@ -320,7 +315,6 @@ const bookClinicOrder = async (req, res) => {
         const targetBedId = calculation.verifiedWard?.bedId || ward?.bedId || null;
         const targetAmbulanceId = calculation.verifiedAmbulance?.ambulanceId || ambulance?.ambulanceId || null;
 
-        // 🛡️ BED AVAILABILITY VALIDATION
         if (targetBedId) {
             const existingBed = await Bed.findById(targetBedId);
             if (!existingBed) {
@@ -341,13 +335,13 @@ const bookClinicOrder = async (req, res) => {
 
         const userSelectedDoctorId = doctor?.doctorId || doctor?._id || calculation.verifiedDoctor?._id || null;
 
-        // Create Master Appointment Document
         const newAppointment = await Appointment.create({
             bookingId: tempBookingId,
             userId,
             clinicId,
             doctorId: userSelectedDoctorId,
             isDoctorSelectedAlready: Boolean(userSelectedDoctorId),
+
             wardId: targetWardId,
             bedId: targetBedId,
             ambulanceId: targetAmbulanceId,
@@ -358,7 +352,7 @@ const bookClinicOrder = async (req, res) => {
             consultationType: isHomeVisit ? 'Home Visit' : (selectedMode === 'video' || selectedMode === 'Video Consult' || selectedMode === 'videoConsultFee' ? 'Video Consult' : 'Clinic Visit'),
             appointmentDate: appointmentDate ? new Date(appointmentDate) : (ward?.startDate ? new Date(ward.startDate) : new Date()),
             appointmentTime: appointmentTime || homeVisitDetails?.preferredTime || "10:30 AM",
-
+            
             patients: [{
                 patientName: patient?.memberName || req.user?.name || "Myself (Primary Account)",
                 patientAge: Number(patient?.age) || 30,
@@ -398,7 +392,6 @@ const bookClinicOrder = async (req, res) => {
             startDate: calculation.verifiedWard?.startDate ? new Date(calculation.verifiedWard.startDate) : (ward?.startDate ? new Date(ward.startDate) : null),
             endDate: calculation.verifiedWard?.endDate ? new Date(calculation.verifiedWard.endDate) : (ward?.endDate ? new Date(ward.endDate) : null),
 
-            // 📁 Attached Prescription / Report Path
             clinicalSummary: {
                 chiefComplaint: symptoms || "",
                 uploadedReports: uploadedFileUrl ? [uploadedFileUrl] : []
@@ -418,7 +411,6 @@ const bookClinicOrder = async (req, res) => {
             }
         });
 
-        // 🚨 UPDATE BED STATUS IN DATABASE (For COD or 0 Amount Bookings)
         if (targetBedId && (paymentMethod === 'COD' || totalPayable === 0)) {
             await Bed.findByIdAndUpdate(targetBedId, {
                 status: 'Occupied',
@@ -430,24 +422,31 @@ const bookClinicOrder = async (req, res) => {
                 });
             }
         } else if (targetBedId) {
-            // Online Payment Pending: Bed is Reserved
             await Bed.findByIdAndUpdate(targetBedId, {
                 status: 'Reserved',
                 currentAppointmentId: newAppointment._id
             });
         }
 
-        // COD Flow
+        // Generate OPD Token immediately for Confirmed (COD / Free) bookings when doctor is selected
+        let tokenDetails = null;
+        if ((paymentMethod === 'COD' || totalPayable === 0) && newAppointment.bookingType === 'Appointment' && newAppointment.doctorId) {
+            await assignOpdTokenToAppointment(newAppointment);
+            tokenDetails = await getOpdTokenQueueStatus(newAppointment);
+        }
+
         if (paymentMethod === 'COD' || totalPayable === 0) {
             return res.status(201).json({
                 success: true,
                 isOnlinePayment: false,
-                message: "Clinic booking confirmed successfully (COD)!",
+                message: tokenDetails?.formattedToken
+                    ? `Clinic booking confirmed! Your OPD Token is #${tokenDetails.formattedToken}.`
+                    : "Clinic booking confirmed successfully (COD)!",
+                tokenDetails,
                 data: newAppointment
             });
         }
 
-        // Online Razorpay Flow
         const rawKey = process.env.RAZORPAY_KEY_ID || "rzp_test_T2f3swDLdaDZCP";
         const razorpayKey = rawKey.replace(/["']/g, "").trim();
 
@@ -456,7 +455,7 @@ const bookClinicOrder = async (req, res) => {
             isOnlinePayment: true,
             message: "Razorpay payment order generated for clinic booking.",
             key: razorpayKey,
-            amount: rzpOrder.amount, // in paise
+            amount: rzpOrder.amount,
             amountInRupees: totalPayable,
             currency: "INR",
             razorpayOrderId: rzpOrder.id,
@@ -471,17 +470,17 @@ const bookClinicOrder = async (req, res) => {
 };
 
 // ==========================================
-// 💳 3. VERIFY RAZORPAY PAYMENT (POST /verify-payment)
+// 💳 3. VERIFY RAZORPAY PAYMENT (Generates OPD Token after Payment Confirmation)
 // ==========================================
 const verifyClinicPayment = async (req, res) => {
     try {
         const userId = req.user.id;
-        const {
-            appointmentId,
-            bookingId,
-            razorpayOrderId,
-            razorpayPaymentId,
-            razorpaySignature
+        const { 
+            appointmentId, 
+            bookingId, 
+            razorpayOrderId, 
+            razorpayPaymentId, 
+            razorpaySignature 
         } = req.body;
 
         const targetId = appointmentId || bookingId;
@@ -529,11 +528,32 @@ const verifyClinicPayment = async (req, res) => {
             paidAt: new Date()
         };
 
+        if (booking.bedId) {
+            const bed = await Bed.findByIdAndUpdate(
+                booking.bedId,
+                { status: 'Occupied', currentAppointmentId: booking._id },
+                { new: false }
+            );
+            if (bed && bed.status !== 'Occupied' && booking.wardId) {
+                await Ward.findByIdAndUpdate(booking.wardId, { $inc: { availableBeds: -1 } });
+            }
+        }
+
         await booking.save();
+
+        // Generate OPD Token on Payment Confirmation if OPD + Doctor selected
+        let tokenDetails = null;
+        if (booking.bookingType === 'Appointment' && booking.doctorId) {
+            await assignOpdTokenToAppointment(booking);
+            tokenDetails = await getOpdTokenQueueStatus(booking);
+        }
 
         res.json({
             success: true,
-            message: "Payment verified successfully & clinic booking confirmed!",
+            message: tokenDetails?.formattedToken
+                ? `Payment verified & clinic booking confirmed! Your OPD Token is #${tokenDetails.formattedToken}.`
+                : "Payment verified successfully & clinic booking confirmed!",
+            tokenDetails,
             data: booking
         });
 
@@ -543,7 +563,7 @@ const verifyClinicPayment = async (req, res) => {
 };
 
 // ==========================================
-// 📋 4. GET MY CLINIC BOOKINGS (List View)
+// 📋 4. GET MY CLINIC BOOKINGS (Includes Token & Live Wait Status for OPD)
 // ==========================================
 const getMyClinicBookings = async (req, res) => {
     try {
@@ -555,41 +575,55 @@ const getMyClinicBookings = async (req, res) => {
         if (bookingType) query.bookingType = bookingType;
 
         const bookings = await Appointment.find(query)
-            .select('_id bookingId bookingType consultationType status paymentStatus totalAmount appointmentDate appointmentTime wardName bedNumber startDate endDate clinicId doctorId createdAt')
+            .select('_id bookingId bookingType consultationType status paymentStatus totalAmount appointmentDate appointmentTime wardName bedNumber startDate endDate clinicId doctorId tokenNumber formattedToken tokenIntervalMinutes opdRoomNumber createdAt')
             .populate('clinicId', 'name clinicName city image')
-            .populate('doctorId', 'name speciality profileImage')
+            .populate('doctorId', 'name speciality profileImage cabinNumber')
             .sort({ createdAt: -1 })
             .lean();
 
-        const cleanList = bookings.map(b => {
-            const dateVal = b.appointmentDate || b.startDate;
+        const cleanList = await Promise.all(
+            bookings.map(async (b) => {
+                const dateVal = b.appointmentDate || b.startDate;
+                let tokenQueueStatus = null;
+                if (b.bookingType === 'Appointment' && b.tokenNumber) {
+                    tokenQueueStatus = await getOpdTokenQueueStatus({
+                        ...b,
+                        clinicId: b.clinicId?._id || b.clinicId,
+                        doctorId: b.doctorId?._id || b.doctorId
+                    });
+                }
 
-            return {
-                _id: b._id,
-                bookingId: b.bookingId,
-                bookingType: b.bookingType,
-                consultationType: b.consultationType,
-                status: b.status,
-                paymentStatus: b.paymentStatus,
-                totalAmount: b.totalAmount || 0,
-                appointmentDate: dateVal ? new Date(dateVal).toISOString().split('T')[0] : null,
-                appointmentTime: b.appointmentTime || "10:30 AM",
-                wardInfo: b.wardName ? `${b.wardName} (Bed #${b.bedNumber})` : null,
-                clinic: {
-                    _id: b.clinicId?._id,
-                    name: b.clinicId?.clinicName || b.clinicId?.name || "Clinic Facility",
-                    city: b.clinicId?.city || "Mohali",
-                    image: b.clinicId?.image || null
-                },
-                doctor: {
-                    _id: b.doctorId?._id,
-                    name: b.doctorId?.name || "Attending Specialist",
-                    speciality: b.doctorId?.speciality || "General Physician",
-                    profileImage: b.doctorId?.profileImage || null
-                },
-                createdAt: b.createdAt
-            };
-        });
+                return {
+                    _id: b._id,
+                    bookingId: b.bookingId,
+                    bookingType: b.bookingType,
+                    consultationType: b.consultationType,
+                    status: b.status,
+                    paymentStatus: b.paymentStatus,
+                    totalAmount: b.totalAmount || 0,
+                    appointmentDate: dateVal ? new Date(dateVal).toISOString().split('T')[0] : null,
+                    appointmentTime: b.appointmentTime || "10:30 AM",
+                    tokenNumber: b.tokenNumber || null,
+                    formattedToken: b.formattedToken || "",
+                    opdRoomNumber: b.opdRoomNumber || b.doctorId?.cabinNumber || "",
+                    tokenQueueStatus,
+                    wardInfo: b.wardName ? `${b.wardName} (Bed #${b.bedNumber})` : null,
+                    clinic: {
+                        _id: b.clinicId?._id,
+                        name: b.clinicId?.clinicName || b.clinicId?.name || "Clinic Facility",
+                        city: b.clinicId?.city || "Mohali",
+                        image: b.clinicId?.image || null
+                    },
+                    doctor: {
+                        _id: b.doctorId?._id,
+                        name: b.doctorId?.name || "Attending Specialist",
+                        speciality: b.doctorId?.speciality || "General Physician",
+                        profileImage: b.doctorId?.profileImage || null
+                    },
+                    createdAt: b.createdAt
+                };
+            })
+        );
 
         res.json({
             success: true,
@@ -603,31 +637,94 @@ const getMyClinicBookings = async (req, res) => {
 };
 
 // ==========================================
-// 🔍 5. GET SINGLE CLINIC BOOKING FULL DETAILS
+// 🔍 5. GET SINGLE CLINIC BOOKING FULL DETAILS (With Live Token Queue Status)
 // ==========================================
 const getSingleClinicBooking = async (req, res) => {
     try {
         const userId = req.user.id;
         const { id } = req.params;
 
+        const idQuery = mongoose.Types.ObjectId.isValid(id)
+            ? { $or: [{ _id: id }, { bookingId: id }] }
+            : { bookingId: id };
+
         const booking = await Appointment.findOne({
-            $or: [{ _id: id }, { bookingId: id }],
+            ...idQuery,
             userId
         })
-            .populate('clinicId', 'name clinicName city state address phoneNumber image posterimage')
-            .populate('doctorId', 'name speciality qualification experienceYears languages fees profileImage')
-            .populate('ambulanceId', 'name vehicleNumber vehicleType phone driverName pricing')
-            .lean();
+        .populate('clinicId', 'name clinicName city state address phoneNumber image posterimage')
+        .populate('doctorId', 'name speciality qualification experienceYears languages fees profileImage cabinNumber')
+        .populate('ambulanceId', 'name vehicleNumber vehicleType phone driverName pricing')
+        .lean();
 
         if (!booking) {
             return res.status(404).json({ success: false, message: "Clinic booking not found." });
         }
 
+        let tokenQueueStatus = null;
+        if (booking.bookingType === 'Appointment') {
+            tokenQueueStatus = await getOpdTokenQueueStatus({
+                ...booking,
+                clinicId: booking.clinicId?._id || booking.clinicId,
+                doctorId: booking.doctorId?._id || booking.doctorId
+            });
+        }
+
         res.json({
             success: true,
-            data: booking
+            data: {
+                ...booking,
+                tokenQueueStatus
+            }
         });
 
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// ==========================================
+// 🎫 6. USER LIVE OPD TOKEN & QUEUE TRACKER
+// @route   GET /api/clinic/checkout/token-status/:id
+// ==========================================
+const getMyOpdTokenLiveStatus = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const { id } = req.params;
+
+        const idQuery = mongoose.Types.ObjectId.isValid(id)
+            ? { $or: [{ _id: id }, { bookingId: id }] }
+            : { bookingId: id };
+
+        const booking = await Appointment.findOne({ ...idQuery, userId })
+            .populate('doctorId', 'name speciality profileImage cabinNumber')
+            .populate('clinicId', 'name clinicName city address')
+            .lean();
+
+        if (!booking) {
+            return res.status(404).json({ success: false, message: "Appointment not found." });
+        }
+
+        if (booking.bookingType !== 'Appointment') {
+            return res.status(400).json({
+                success: false,
+                message: "Token queue tracking is only applicable to OPD appointments."
+            });
+        }
+
+        const tokenQueueStatus = await getOpdTokenQueueStatus({
+            ...booking,
+            clinicId: booking.clinicId?._id || booking.clinicId,
+            doctorId: booking.doctorId?._id || booking.doctorId
+        });
+
+        res.status(200).json({
+            success: true,
+            bookingId: booking.bookingId,
+            doctor: booking.doctorId || null,
+            clinic: booking.clinicId || null,
+            data: tokenQueueStatus
+        });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
@@ -638,5 +735,6 @@ module.exports = {
     bookClinicOrder,
     verifyClinicPayment,
     getMyClinicBookings,
-    getSingleClinicBooking
+    getSingleClinicBooking,
+    getMyOpdTokenLiveStatus
 };

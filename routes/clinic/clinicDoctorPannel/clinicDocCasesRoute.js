@@ -9,14 +9,20 @@ const {
     getClinicDoctorIpdList,
     getClinicDoctorIpdById,
     getClinicDoctorEmergencyList,
-    getClinicDoctorEmergencyById
+    getClinicDoctorEmergencyById,
+    callNextClinicOpdToken,
+    skipClinicOpdToken,
+    recallSkippedClinicOpdToken
 } = require('../../../controllers/clinic/clinicDoctorPannel/clinicDocCases');
 
 // Base Route: /api/clinic/doctor-panel
 
-// --- OPD (Consultation Appointments) ---
+// --- OPD (Consultation Appointments & Token Queue Actions) ---
 router.get('/opd/appointments', protect('clinic-doctor'), getClinicDoctorOpdList);
 router.get('/opd/appointments/:id', protect('clinic-doctor'), getClinicDoctorOpdById);
+router.patch('/opd/call-next-token', protect('clinic-doctor'), callNextClinicOpdToken);
+router.patch('/opd/skip-token/:id', protect('clinic-doctor'), skipClinicOpdToken);
+router.patch('/opd/recall-token/:id', protect('clinic-doctor'), recallSkippedClinicOpdToken);
 
 // --- IPD (Ward / Bed Admissions) ---
 router.get('/ipd/appointments', protect('clinic-doctor'), getClinicDoctorIpdList);

@@ -9,6 +9,7 @@ const Ward = require('../../models/Ward');
 const User = require('../../models/User');
 const crypto = require('crypto');
 const moment = require('moment');
+const { assignOpdTokenToAppointment, getOpdTokenQueueStatus } = require('../../utils/opdTokenHelper');
 // Safe JSON parser for FormData
 const parseField = (val) => {
     if (typeof val === 'string') {
@@ -18,15 +19,13 @@ const parseField = (val) => {
 };
 
 // ==========================================
-// 🏥 1. CREATE CLINIC APPOINTMENT / ADMISSION
-// Full Path: POST /api/clinic/booking/create
+// 🏥 1. CREATE CLINIC APPOINTMENT / ADMISSION (Generates OPD Token if OPD + Doctor Selected)
 // ==========================================
 const createClinicAppointmentByClinic = async (req, res) => {
     try {
-        const clinicId = req.user.id; // Logged-in clinic from protect('clinic')
+        const clinicId = req.user.id;
         const body = req.body || {};
 
-        // 1. Extract Basic Patient Info
         const patient = parseField(body.patient);
         const address = parseField(body.address);
 
@@ -45,9 +44,6 @@ const createClinicAppointmentByClinic = async (req, res) => {
             });
         }
 
-        // ========================================================
-        // 👤 STEP 1: USER REGISTRATION (NO DUMMY PASSWORD)
-        // ========================================================
         let user = await User.findOne({ 
             $or: [
                 { phone: patientPhone },
@@ -56,29 +52,24 @@ const createClinicAppointmentByClinic = async (req, res) => {
         });
         
         if (!user) {
-            // Clean User Creation with isUserRegistered: true & isPasswordAvailable: false
             user = await User.create({
                 name: relation.toLowerCase() === 'self' ? patientName : (address?.name || patientName),
                 phone: patientPhone,
                 countryCode: countryCode,
-                password: null,                // 👈 NO DUMMY PASSWORD (Clean null)
-                isUserRegistered: true,        // 👈 User is registered in system
-                isPasswordAvailable: false,    // 👈 Password is NOT available yet
-                profileStatus: 'Incomplete',   // 👈 Incomplete profile until full KYC
+                password: null,
+                isUserRegistered: true,
+                isPasswordAvailable: false,
+                profileStatus: 'Incomplete',
                 role: 'user',
                 userAddress: [],
                 familyMember: []
             });
         }
 
-        // ========================================================
-        // 👨‍👩‍👦 STEP 2: FAMILY MEMBER HANDLING & REAL NAME RESOLUTION
-        // ========================================================
         const isSelfBooking = relation.toLowerCase() === 'self' || 
                               patientName.toLowerCase().includes('myself') || 
                               patientName.toLowerCase() === 'self';
         
-        // 🎯 FIX: Agar 'Self' booking hai, toh real user name resolve karein (Placeholder string ko overwrite karein)
         let resolvedPatientName = patientName;
         if (isSelfBooking) {
             if (user?.name && !user.name.toLowerCase().includes('myself') && user.name.toLowerCase() !== 'self') {
@@ -105,7 +96,6 @@ const createClinicAppointmentByClinic = async (req, res) => {
             }
         }
 
-        // 2. Booking Core Configurations
         const bookingType = body.bookingType || 'Appointment';
         const consultationType = body.consultationType || 'Clinic Visit';
         const doctorId = body.doctorId || null;
@@ -118,7 +108,6 @@ const createClinicAppointmentByClinic = async (req, res) => {
         const symptoms = body.symptoms || body.bookingReason || "";
         const paymentMethod = body.paymentMethod || 'COD';
 
-        // 3. Doctor Verification & Fee
         let verifiedDoctor = null;
         let doctorFee = 0;
         if (doctorId) {
@@ -128,7 +117,6 @@ const createClinicAppointmentByClinic = async (req, res) => {
             }
         }
 
-        // 4. Ambulance Verification
         let verifiedAmbulance = null;
         let ambulanceFee = 0;
         if (ambulanceId) {
@@ -138,7 +126,6 @@ const createClinicAppointmentByClinic = async (req, res) => {
             }
         }
 
-        // 5. Bed Verification & Occupancy Validation
         let verifiedBed = null;
         let verifiedWard = null;
         let bedFee = 0;
@@ -161,11 +148,9 @@ const createClinicAppointmentByClinic = async (req, res) => {
             bedFee = perDayPrice * totalDays;
         }
 
-        // 6. Pricing Calculation
         const subtotal = Number(body.totalAmount) || (doctorFee + bedFee + ambulanceFee);
         const tempBookingId = `CLN-ADM-${Math.floor(100000 + Math.random() * 900000)}`;
 
-        // 7. Create Master Appointment
         const newAppointment = await Appointment.create({
             bookingId: tempBookingId,
             userId: user._id,
@@ -183,7 +168,7 @@ const createClinicAppointmentByClinic = async (req, res) => {
             appointmentTime,
 
             patients: [{
-                patientName: resolvedPatientName, // 👈 Resolved real user name
+                patientName: resolvedPatientName,
                 patientAge: patientAge,
                 gender: patientGender,
                 relation: isSelfBooking ? 'Self' : relation,
@@ -235,7 +220,6 @@ const createClinicAppointmentByClinic = async (req, res) => {
             paymentStatus: paymentMethod === 'COD' ? 'Pending' : 'Paid'
         });
 
-        // 8. Update Database Bed status to Occupied
         if (targetBedId) {
             await Bed.findByIdAndUpdate(targetBedId, {
                 status: 'Occupied',
@@ -250,14 +234,23 @@ const createClinicAppointmentByClinic = async (req, res) => {
             }
         }
 
+        // Generate OPD Token if OPD & Doctor selected
+        if (newAppointment.bookingType === 'Appointment' && newAppointment.doctorId) {
+            await assignOpdTokenToAppointment(newAppointment);
+        }
+
         res.status(201).json({
             success: true,
-            message: "Clinic booking created successfully! Bed marked Occupied & linked to user account.",
+            message: newAppointment.formattedToken
+                ? `Clinic booking created! OPD Token #${newAppointment.formattedToken} generated.`
+                : "Clinic booking created successfully! Bed marked Occupied & linked to user account.",
             data: {
                 _id: newAppointment._id,
                 bookingId: newAppointment.bookingId,
                 bookingType: newAppointment.bookingType,
                 status: newAppointment.status,
+                tokenNumber: newAppointment.tokenNumber || null,
+                formattedToken: newAppointment.formattedToken || "",
                 patientName: newAppointment.patients?.[0]?.patientName,
                 relation: newAppointment.patients?.[0]?.relation,
                 userProfileStatus: user.profileStatus,
@@ -278,18 +271,17 @@ const createClinicAppointmentByClinic = async (req, res) => {
 };
 
 // ==========================================
-// 📋 2. GET ALL CLINIC BOOKINGS (Default: Current Date, Filter & Search)
-// Full Path: GET /api/clinic/booking/all-bookings?date=YYYY-MM-DD
+// 📋 2. GET ALL CLINIC BOOKINGS (Includes Token Number)
 // ==========================================
 const getClinicBookings = async (req, res) => {
     try {
-        const clinicId = req.user.id; // Logged-in clinic ID from protect('clinic')
+        const clinicId = req.user.id;
         const { 
             status, 
             bookingType, 
             type, 
             search, 
-            date, // 👈 e.g. "2026-10-14" ya "all"
+            date,
             page = 1, 
             limit = 20 
         } = req.query;
@@ -300,12 +292,10 @@ const getClinicBookings = async (req, res) => {
 
         const query = { clinicId };
 
-        // 1. Status Filter
         if (status) {
             query.status = status;
         }
 
-        // 2. Booking Type Filter (OPD / IPD / Emergency)
         const targetType = (bookingType || type || '').trim();
         if (targetType) {
             const normalized = targetType.toUpperCase();
@@ -322,7 +312,6 @@ const getClinicBookings = async (req, res) => {
 
         const andConditions = [];
 
-        // 🎯 3. DATE FILTER (Default: Current Date / Today)
         if (date !== 'all') {
             const filterMoment = (date && date.trim() !== '') ? moment(date) : moment();
             const startOfDay = filterMoment.clone().startOf('day').toDate();
@@ -330,9 +319,7 @@ const getClinicBookings = async (req, res) => {
 
             andConditions.push({
                 $or: [
-                    // OPD Appointments: matches appointmentDate of target day
                     { appointmentDate: { $gte: startOfDay, $lte: endOfDay } },
-                    // IPD Admissions / Daycare: stay overlaps with target day
                     { 
                         bookingType: { $in: ['Admission', 'Emergency'] },
                         startDate: { $lte: endOfDay },
@@ -342,7 +329,6 @@ const getClinicBookings = async (req, res) => {
             });
         }
 
-        // 🎯 4. SEARCH FILTER
         if (search && search.trim() !== '') {
             const searchRegex = new RegExp(search.trim(), 'i');
             andConditions.push({
@@ -362,7 +348,7 @@ const getClinicBookings = async (req, res) => {
         const totalDocs = await Appointment.countDocuments(query);
 
         const bookings = await Appointment.find(query)
-            .select('_id bookingId bookingType consultationType status paymentStatus totalAmount appointmentDate appointmentTime wardName bedNumber startDate endDate clinicId doctorId isDoctorSelectedAlready patients address createdAt')
+            .select('_id bookingId bookingType consultationType status paymentStatus totalAmount appointmentDate appointmentTime wardName bedNumber startDate endDate clinicId doctorId isDoctorSelectedAlready tokenNumber formattedToken opdRoomNumber patients address createdAt')
             .populate('clinicId', 'name clinicName city image')
             .populate('doctorId', 'name speciality profileImage')
             .populate('userId', 'name phone')
@@ -375,7 +361,6 @@ const getClinicBookings = async (req, res) => {
             const dateVal = b.appointmentDate || b.startDate;
             const primaryPatient = Array.isArray(b.patients) && b.patients.length > 0 ? b.patients[0] : null;
 
-            // 🎯 Real User Name Resolution (No "Myself (Primary Account)")
             let resolvedName = primaryPatient?.patientName || b.address?.name || b.userId?.name || "Patient";
             const lowerName = resolvedName.toLowerCase();
             const lowerRel = (primaryPatient?.relation || "").toLowerCase();
@@ -395,6 +380,9 @@ const getClinicBookings = async (req, res) => {
                 totalAmount: b.totalAmount || 0,
                 appointmentDate: dateVal ? new Date(dateVal).toISOString().split('T')[0] : null,
                 appointmentTime: b.appointmentTime || "10:30 AM",
+                tokenNumber: b.tokenNumber || null,
+                formattedToken: b.formattedToken || "",
+                opdRoomNumber: b.opdRoomNumber || "",
                 patientName: resolvedName,
                 patientAge: primaryPatient?.patientAge || null,
                 patientGender: primaryPatient?.gender || null,
@@ -425,6 +413,7 @@ const getClinicBookings = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
 
 // ==========================================
 // 🔍 3. GET SINGLE CLINIC BOOKING FULL DETAILS

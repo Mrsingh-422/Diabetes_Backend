@@ -189,7 +189,14 @@ const appointmentSchema = new mongoose.Schema({
         sentAt: { type: Date, default: null },
         sentBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Doctor', default: null }
     },
-
+     tokenNumber: { type: Number, default: null },
+    formattedToken: { type: String, default: "" }, // e.g. "001", "002", "010"
+    tokenIntervalMinutes: { type: Number, default: 15 }, // Doctor slotDuration (10, 15, 20, 30 mins)
+    opdRoomNumber: { type: String, default: "" },
+    isTokenSkipped: { type: Boolean, default: false },
+    tokenSkipCount: { type: Number, default: 0 },
+    tokenSkippedAt: { type: Date, default: null },
+    tokenSkipReason: { type: String, default: "" },
     // --- CLINIC LAB REFERRAL ---
     clinicLabReferral: {
         labId: { type: mongoose.Schema.Types.ObjectId, ref: 'Lab', default: null },

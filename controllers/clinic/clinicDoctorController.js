@@ -677,9 +677,7 @@ const removeClinicDoctor = async (req, res) => {
 };
 
 // ==========================================
-// 7. CLINIC ASSIGNS APPOINTMENT TO CLINIC DOCTOR
-// @route   PUT /api/clinic/doctors/assign-appointment
-// @access  Private (Clinic)
+// 7. CLINIC ASSIGNS APPOINTMENT TO CLINIC DOCTOR (Generates OPD Token if Missing)
 // ==========================================
 const assignAppointmentToClinicDoctor = async (req, res) => {
     try {
@@ -758,8 +756,9 @@ const assignAppointmentToClinicDoctor = async (req, res) => {
         const now = new Date();
         const previousDoctorId = appointment.doctorId ? appointment.doctorId.toString() : null;
         const hasHistory = Array.isArray(appointment.treatmentHistory) && appointment.treatmentHistory.length > 0;
+        const isSwitchingDoctor = Boolean(previousDoctorId && previousDoctorId !== doctor._id.toString());
 
-        if (previousDoctorId && previousDoctorId !== doctor._id.toString()) {
+        if (isSwitchingDoctor) {
             const historyArr = appointment.treatmentHistory || [];
             for (let i = historyArr.length - 1; i >= 0; i--) {
                 if (!historyArr[i].endTime) {
@@ -790,7 +789,7 @@ const assignAppointmentToClinicDoctor = async (req, res) => {
                     : `Assigned to ${doctor.name} by Clinic`),
                 startTime: now
             });
-        } else if (previousDoctorId !== doctor._id.toString()) {
+        } else if (isSwitchingDoctor) {
             appointment.treatmentHistory.push({
                 fromDoctorId: appointment.doctorId,
                 toDoctorId: doctor._id,
@@ -804,7 +803,7 @@ const assignAppointmentToClinicDoctor = async (req, res) => {
 
         appointment.doctorId = doctor._id;
         appointment.pendingDoctorId = null;
-        appointment.doctorAcceptanceStatus = 'Pending'; // 👈 Reset for new doctor response
+        appointment.doctorAcceptanceStatus = 'Pending';
         appointment.doctorRejectionReason = "";
         appointment.doctorRespondedAt = null;
 
@@ -820,16 +819,24 @@ const assignAppointmentToClinicDoctor = async (req, res) => {
 
         await appointment.save();
 
+        // Generate OPD Token if missing OR if doctor changed
+        if (appointment.bookingType === 'Appointment') {
+            await assignOpdTokenToAppointment(appointment, {
+                forceRegenerate: isSwitchingDoctor
+            });
+        }
+
         try {
             const patientName = appointment.patients?.[0]?.patientName || "Patient";
             await sendPushNotification(
                 doctor._id,
                 'doctor',
                 "New Appointment Assigned",
-                `Clinic assigned ${appointment.bookingType} (#${appointment.bookingId}) for ${patientName} to you.`,
+                `Clinic assigned ${appointment.bookingType} (#${appointment.bookingId}${appointment.formattedToken ? ` • Token #${appointment.formattedToken}` : ''}) for ${patientName} to you.`,
                 {
                     appointmentId: String(appointment._id),
                     bookingId: String(appointment.bookingId || ""),
+                    formattedToken: String(appointment.formattedToken || ""),
                     type: "CLINIC_APPOINTMENT_ASSIGNED"
                 }
             );
@@ -858,10 +865,9 @@ const assignAppointmentToClinicDoctor = async (req, res) => {
     }
 };
 
+
 // ==========================================
-// 10. CLINIC REASSIGNS APPOINTMENT TO ANOTHER FREE CLINIC DOCTOR
-// @route   PUT /api/clinic/doctors/reassign-appointment
-// @access  Private (Clinic)
+// 10. CLINIC REASSIGNS APPOINTMENT TO ANOTHER FREE CLINIC DOCTOR (Regenerates New Doctor's OPD Token)
 // ==========================================
 const reassignAppointmentToClinicDoctor = async (req, res) => {
     try {
@@ -1002,7 +1008,7 @@ const reassignAppointmentToClinicDoctor = async (req, res) => {
 
         appointment.doctorId = newDoctor._id;
         appointment.pendingDoctorId = null;
-        appointment.doctorAcceptanceStatus = 'Pending'; // 👈 Reset for new doctor response
+        appointment.doctorAcceptanceStatus = 'Pending';
         appointment.doctorRejectionReason = "";
         appointment.doctorRespondedAt = null;
 
@@ -1018,16 +1024,22 @@ const reassignAppointmentToClinicDoctor = async (req, res) => {
 
         await appointment.save();
 
+        // Generate fresh OPD token under the new doctor's queue
+        if (appointment.bookingType === 'Appointment') {
+            await assignOpdTokenToAppointment(appointment, { forceRegenerate: true });
+        }
+
         const patientName = appointment.patients?.[0]?.patientName || "Patient";
         Promise.allSettled([
             sendPushNotification(
                 newDoctor._id,
                 'doctor',
                 "Appointment Reassigned to You",
-                `Clinic reassigned ${appointment.bookingType} (#${appointment.bookingId}) for ${patientName} to you.`,
+                `Clinic reassigned ${appointment.bookingType} (#${appointment.bookingId}${appointment.formattedToken ? ` • Token #${appointment.formattedToken}` : ''}) for ${patientName} to you.`,
                 {
                     appointmentId: String(appointment._id),
                     bookingId: String(appointment.bookingId || ""),
+                    formattedToken: String(appointment.formattedToken || ""),
                     type: "CLINIC_APPOINTMENT_REASSIGNED"
                 }
             ),
@@ -1047,10 +1059,11 @@ const reassignAppointmentToClinicDoctor = async (req, res) => {
                     appointment.userId,
                     'user',
                     "Doctor Updated for Your Appointment",
-                    `Your appointment #${appointment.bookingId} has been reassigned to ${newDoctor.name} (${newDoctor.speciality || 'Specialist'}).`,
+                    `Your appointment #${appointment.bookingId} has been reassigned to ${newDoctor.name}${appointment.formattedToken ? ` (New Token #${appointment.formattedToken})` : ''}.`,
                     {
                         appointmentId: String(appointment._id),
                         bookingId: String(appointment.bookingId || ""),
+                        formattedToken: String(appointment.formattedToken || ""),
                         type: "APPOINTMENT_DOCTOR_REASSIGNED"
                     }
                 )

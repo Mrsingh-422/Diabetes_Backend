@@ -962,8 +962,7 @@ const respondToAssignedAppointment = async (req, res) => {
 };
 
 // ==========================================
-// 4. START OPD CONSULTATION (Doctor Sees Patient in OPD)
-// @route   PATCH /api/clinic/doctor-panel/appointments/:id/start-consultation
+// 4. START OPD CONSULTATION (Enforces Single Active Token & Alerts Current + Next Token)
 // ==========================================
 const startClinicConsultation = async (req, res) => {
     try {
@@ -996,8 +995,27 @@ const startClinicConsultation = async (req, res) => {
             });
         }
 
+        // Single Active OPD Token Guard: auto-close previous In-Progress OPD token for today
+        if (appointment.bookingType === 'Appointment') {
+            const dayStart = moment(appointment.appointmentDate || new Date()).startOf('day').toDate();
+            const dayEnd = moment(appointment.appointmentDate || new Date()).endOf('day').toDate();
+            await Appointment.updateMany(
+                {
+                    doctorId,
+                    ...(clinicId ? { clinicId } : {}),
+                    bookingType: 'Appointment',
+                    status: 'In-Progress',
+                    appointmentDate: { $gte: dayStart, $lte: dayEnd },
+                    _id: { $ne: appointment._id }
+                },
+                { $set: { status: 'Completed', 'clinicalSummary.dischargedAt': new Date() } }
+            );
+        }
+
         const now = new Date();
         appointment.status = 'In-Progress';
+        appointment.isTokenSkipped = false; // Auto-clear skip flag if started directly
+
 
         if (appointment.doctorAcceptanceStatus !== 'Accepted') {
             appointment.doctorAcceptanceStatus = 'Accepted';
@@ -1006,23 +1024,61 @@ const startClinicConsultation = async (req, res) => {
 
         await appointment.save();
 
+        const cabinLabel = appointment.opdRoomNumber || req.user.cabinNumber || "OPD Cabin";
         if (appointment.userId?._id) {
+            const tokenTag = appointment.formattedToken ? `Token #${appointment.formattedToken}` : `Appointment #${appointment.bookingId}`;
             sendPushNotification(
                 appointment.userId._id,
                 'user',
-                "Your Consultation Has Started",
-                `${req.user.name} is ready to see you for appointment #${appointment.bookingId}.`,
+                `Your Turn! ${tokenTag}`,
+                `${req.user.name} is ready to see you in ${cabinLabel}. Please proceed inside.`,
                 {
                     appointmentId: String(appointment._id),
                     bookingId: String(appointment.bookingId || ""),
+                    formattedToken: String(appointment.formattedToken || ""),
                     type: "CLINIC_CONSULTATION_STARTED"
                 }
             ).catch(() => {});
         }
 
+        // Alert Next Waiting Token if OPD
+        if (appointment.bookingType === 'Appointment' && appointment.tokenNumber) {
+            const dayStart = moment(appointment.appointmentDate || new Date()).startOf('day').toDate();
+            const dayEnd = moment(appointment.appointmentDate || new Date()).endOf('day').toDate();
+
+            const nextWaiting = await Appointment.findOne({
+                doctorId,
+                ...(clinicId ? { clinicId } : {}),
+                bookingType: 'Appointment',
+                status: { $in: ['Confirmed', 'Pending', 'Clinic-Pending'] },
+                tokenNumber: { $gt: appointment.tokenNumber },
+                isTokenSkipped: { $ne: true },
+                appointmentDate: { $gte: dayStart, $lte: dayEnd }
+            })
+                .sort({ tokenNumber: 1 })
+                .select('_id bookingId userId formattedToken tokenIntervalMinutes')
+                .lean();
+
+            if (nextWaiting?.userId) {
+                sendPushNotification(
+                    nextWaiting.userId,
+                    'user',
+                    `Get Ready! Token #${nextWaiting.formattedToken} is Next`,
+                    `Token #${appointment.formattedToken} is now in ${cabinLabel}. Your turn (~${nextWaiting.tokenIntervalMinutes || 15} mins) is next.`,
+                    {
+                        appointmentId: String(nextWaiting._id),
+                        formattedToken: String(nextWaiting.formattedToken || ""),
+                        type: "OPD_NEXT_TOKEN_ALERT"
+                    }
+                ).catch(() => {});
+            }
+        }
+
         return res.status(200).json({
             success: true,
-            message: `Consultation started for appointment #${appointment.bookingId}. Status is now 'In-Progress'.`,
+            message: appointment.formattedToken
+                ? `Consultation started for Token #${appointment.formattedToken}. Status is now 'In-Progress'.`
+                : `Consultation started for appointment #${appointment.bookingId}. Status is now 'In-Progress'.`,
             data: appointment
         });
     } catch (error) {
@@ -2526,8 +2582,7 @@ const submitSecondaryDoctorOpinion = async (req, res) => {
 };
 
 // ==========================================
-// 17. COMPLETE CLINIC CONSULTATION
-// @route   PATCH /api/clinic/doctor-panel/appointments/:id/complete-consultation
+// 17. COMPLETE CLINIC CONSULTATION (Alerts Next Waiting OPD Token)
 // ==========================================
 const completeClinicConsultation = async (req, res) => {
     try {
@@ -2601,9 +2656,48 @@ const completeClinicConsultation = async (req, res) => {
             ).catch(() => {});
         }
 
+        // Alert Next Waiting OPD Token
+        let nextWaitingToken = null;
+        if (appointment.bookingType === 'Appointment' && appointment.tokenNumber) {
+            const dayStart = moment(appointment.appointmentDate || now).startOf('day').toDate();
+            const dayEnd = moment(appointment.appointmentDate || now).endOf('day').toDate();
+
+            const nextWaiting = await Appointment.findOne({
+                doctorId,
+                ...(clinicId ? { clinicId } : {}),
+                bookingType: 'Appointment',
+                status: { $in: ['Confirmed', 'Pending', 'Clinic-Pending'] },
+                tokenNumber: { $gt: appointment.tokenNumber },
+                isTokenSkipped: { $ne: true },
+                appointmentDate: { $gte: dayStart, $lte: dayEnd }
+            })
+                .sort({ tokenNumber: 1 })
+                .select('_id bookingId userId formattedToken')
+                .lean();
+
+            if (nextWaiting) {
+                nextWaitingToken = nextWaiting.formattedToken;
+                if (nextWaiting.userId) {
+                    const cabinLabel = appointment.opdRoomNumber || req.user.cabinNumber || "OPD Cabin";
+                    sendPushNotification(
+                        nextWaiting.userId,
+                        'user',
+                        `Your Turn is Next! Token #${nextWaiting.formattedToken}`,
+                        `Please proceed towards ${cabinLabel}. ${req.user.name} is wrapping up and will call you next.`,
+                        {
+                            appointmentId: String(nextWaiting._id),
+                            formattedToken: String(nextWaiting.formattedToken || ""),
+                            type: "OPD_NEXT_TOKEN_ALERT"
+                        }
+                    ).catch(() => {});
+                }
+            }
+        }
+
         return res.status(200).json({
             success: true,
             message: `Appointment #${appointment.bookingId} marked as Completed.`,
+            nextWaitingToken,
             data: appointment
         });
     } catch (error) {
