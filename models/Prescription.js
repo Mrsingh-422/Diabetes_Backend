@@ -4,34 +4,61 @@ const prescriptionSchema = new mongoose.Schema({
     appointmentId: { type: mongoose.Schema.Types.ObjectId, ref: 'Appointment', default: null },
     doctorId: { type: mongoose.Schema.Types.ObjectId, ref: 'Doctor', default: null },
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-    
+
     // For manual patient uploads
-    prescriptionImages: [{ type: String }], 
+    prescriptionImages: [{ type: String }],
     isManualUpload: { type: Boolean, default: false },
 
-    // Core Medical Sections from Image
+    // Core Medical Sections
     chiefComplaints: { type: String, default: "" },
-    diagnosis: [{ type: String }], 
+    diagnosis: [{ type: String }],
 
-    // Table Data Mapping
+    // Vitals Snapshot at Prescription Time
+    vitals: {
+        bp: { type: String, default: "" },
+        pulse: { type: String, default: "" },
+        temp: { type: String, default: "" },
+        spo2: { type: String, default: "" }
+    },
+
+    // Medicines Table with Full Dose, Frequency & Time-of-Day Schedule
     medicines: [{
-    name: { type: String, required: true },               // Required only if a medicine is entered
-    dose: { type: String, default: "" },                  // Optional (e.g., "1 - 0 - 1")
-    time: { type: String, default: "" },                  // Optional (e.g., "Morning - Evening")
-    duration: { type: String, default: "" },              // Optional (e.g., "5 Days")
-    instructions: { type: String, default: "" }           // Optional extra guidelines
-}],
+        medicineId: { type: mongoose.Schema.Types.ObjectId, ref: 'Medicine', default: null },
+        name: { type: String, required: true },
+        isCustomGeneric: { type: Boolean, default: false },
+        genericComposition: { type: String, default: "" },
+        strength: { type: String, default: "" },             // e.g. "500mg"
+        frequency: { type: String, default: "" },            // e.g. "b.d. (Twice a day)"
+        doseInterval: { type: String, default: "" },         // e.g. "1-0-1"
+        dose: { type: String, default: "" },                 // Backward compatible e.g. "1-0-1"
+        time: { type: String, default: "" },                 // e.g. "Morning - Night"
+        duration: { type: String, default: "" },             // e.g. "5 Days"
+        dispenseQuantity: { type: String, default: "" },     // e.g. "10 Tablets"
+        administrationTiming: { type: String, default: "" }, // e.g. "p.c. (After meals)"
+        instructions: { type: String, default: "" },
+        timeSchedule: {
+            morning: { type: Boolean, default: false },
+            afternoon: { type: Boolean, default: false },
+            evening: { type: Boolean, default: false },
+            night: { type: Boolean, default: false },
+            mealRelation: {
+                type: String,
+                enum: ['Before Meal', 'After Meal', 'With Meal', 'Empty Stomach', 'Anytime', ''],
+                default: ''
+            },
+            customTimes: [{ type: String }] // e.g. ["08:30 AM", "09:00 PM"]
+        }
+    }],
 
-    // Advised & Remarks Sections at bottom of Image
-    advisedInvestigations: { type: String, default: "None" }, // e.g. "CBC, HbA1c" or "XXX"
-    adviceGiven: { type: String, default: "" },                 // General guidelines or advice
-    specialInstructions: { type: String, default: "" },         // Special notes or instructions
-    nextAppointment: { type: String, default: "" },             // Next scheduled date/time string
+    // Advised Investigations & Doctor Suggestions
+    advisedInvestigations: { type: String, default: "" },
+    doctorSuggestions: { type: String, default: "" },
+    adviceGiven: { type: String, default: "" },
+    specialInstructions: { type: String, default: "" },
+    nextAppointment: { type: String, default: "" },
 
-    // Final Compiled PDF Path (Uploaded by Frontend)
     pdfUrl: { type: String, default: null },
     dietPlanPdf: { type: String, default: null },
-    
     additionalNotes: { type: String, default: "" }
 }, { timestamps: true });
 

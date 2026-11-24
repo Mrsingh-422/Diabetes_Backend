@@ -2,6 +2,8 @@
 const Lab = require('../../models/Lab');
 const Clinic = require('../../models/Clinic');
 const ProfileUpdateRequest = require('../../models/ProfileUpdateRequest');
+const Appointment = require('../../models/Appointment');
+const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 const { deleteFile } = require('../../utils/fileHandler');
 const { notifyAdminsAndVendor } = require('../../utils/notification');
@@ -597,6 +599,164 @@ const updateClinicLabTimings = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
+// ==========================================
+// 9. GET ALL DOCTOR-REFERRED LAB TEST REQUESTS (Read-Only for Clinic Lab)
+// @route   GET /api/clinic/lab/doctor-referrals?priority=Urgent&search=...
+// @access  Private (Clinic or Clinic Lab)
+// ==========================================
+const getClinicLabDoctorReferrals = async (req, res) => {
+    try {
+        const userRole = (req.user.role || '').toLowerCase();
+        const { priority, status, search, page = 1, limit = 20 } = req.query;
+
+        const pageNum = Math.max(1, parseInt(page, 10) || 1);
+        const limitNum = Math.max(1, parseInt(limit, 10) || 20);
+        const skip = (pageNum - 1) * limitNum;
+
+        let clinicId = null;
+        let labId = null;
+
+        if (userRole === 'clinic') {
+            clinicId = req.user.id;
+            const clinicLab = await Lab.findOne({ clinicId, isClinic: true }).select('_id').lean();
+            labId = clinicLab?._id || null;
+        } else {
+            labId = req.user.id;
+            clinicId = req.user.clinicId || null;
+        }
+
+        const andConditions = [
+            { 'clinicLabReferral.status': { $in: ['Sent', 'Sample-Collected', 'Report-Ready'] } }
+        ];
+
+        if (clinicId) {
+            andConditions.push({ clinicId });
+        }
+        if (labId) {
+            andConditions.push({
+                $or: [
+                    { 'clinicLabReferral.labId': labId },
+                    { 'clinicLabReferral.labId': null }
+                ]
+            });
+        }
+
+        if (priority && String(priority).trim() !== '') {
+            andConditions.push({ 'clinicLabReferral.priority': String(priority).trim() });
+        }
+        if (status && String(status).trim() !== '') {
+            andConditions.push({ 'clinicLabReferral.status': String(status).trim() });
+        }
+        if (search && String(search).trim() !== '') {
+            const regex = new RegExp(String(search).trim(), 'i');
+            andConditions.push({
+                $or: [
+                    { bookingId: regex },
+                    { formattedToken: regex },
+                    { 'patients.patientName': regex },
+                    { 'clinicLabReferral.tests.name': regex }
+                ]
+            });
+        }
+
+        const query = { $and: andConditions };
+
+        const [totalDocs, appointments] = await Promise.all([
+            Appointment.countDocuments(query),
+            Appointment.find(query)
+                .select('_id bookingId bookingType tokenNumber formattedToken appointmentDate appointmentTime patients userId doctorId clinicLabReferral')
+                .populate('userId', 'name phone email gender age')
+                .populate('doctorId', 'name speciality cabinNumber profileImage')
+                .populate('clinicLabReferral.sentBy', 'name speciality cabinNumber')
+                .sort({ 'clinicLabReferral.sentAt': -1 })
+                .skip(skip)
+                .limit(limitNum)
+                .lean()
+        ]);
+
+        const data = appointments.map((appt) => {
+            const primaryPatient = appt.patients?.[0] || {};
+            const isSelf = Boolean(primaryPatient.isMainUser) || (primaryPatient.relation || '').toLowerCase() === 'self' || (primaryPatient.patientName || '').toLowerCase().includes('myself');
+
+            return {
+                appointmentId: appt._id,
+                bookingId: appt.bookingId,
+                bookingType: appt.bookingType,
+                formattedToken: appt.formattedToken || "",
+                patient: {
+                    name: isSelf ? (appt.userId?.name || primaryPatient.patientName) : primaryPatient.patientName,
+                    age: primaryPatient.patientAge || appt.userId?.age || null,
+                    gender: primaryPatient.gender || appt.userId?.gender || null,
+                    phone: appt.userId?.phone || ""
+                },
+                referredByDoctor: appt.clinicLabReferral?.sentBy || appt.doctorId || null,
+                priority: appt.clinicLabReferral?.priority || 'Routine',
+                status: appt.clinicLabReferral?.status || 'Sent',
+                notes: appt.clinicLabReferral?.notes || "",
+                tests: appt.clinicLabReferral?.tests || [],
+                sentAt: appt.clinicLabReferral?.sentAt || appt.createdAt
+            };
+        });
+
+        return res.status(200).json({
+            success: true,
+            totalDocs,
+            totalPages: Math.ceil(totalDocs / limitNum) || 1,
+            currentPage: pageNum,
+            count: data.length,
+            data
+        });
+    } catch (error) {
+        console.error("Get Clinic Lab Doctor Referrals Error:", error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// ==========================================
+// 10. GET SINGLE DOCTOR-REFERRED LAB REQUEST DETAIL (Read-Only)
+// @route   GET /api/clinic/lab/doctor-referrals/:appointmentId
+// @access  Private (Clinic or Clinic Lab)
+// ==========================================
+const getClinicLabDoctorReferralById = async (req, res) => {
+    try {
+        const userRole = (req.user.role || '').toLowerCase();
+        const { appointmentId } = req.params;
+
+        const idQuery = mongoose.Types.ObjectId.isValid(appointmentId)
+            ? { $or: [{ _id: appointmentId }, { bookingId: appointmentId }] }
+            : { bookingId: appointmentId };
+
+        let clinicId = userRole === 'clinic' ? req.user.id : (req.user.clinicId || null);
+
+        const appointment = await Appointment.findOne({
+            $and: [
+                idQuery,
+                ...(clinicId ? [{ clinicId }] : []),
+                { 'clinicLabReferral.status': { $ne: 'None' } }
+            ]
+        })
+            .select('_id bookingId bookingType tokenNumber formattedToken appointmentDate appointmentTime patients userId doctorId clinicalSummary clinicLabReferral')
+            .populate('userId', 'name phone email gender age')
+            .populate('doctorId', 'name speciality qualification cabinNumber profileImage')
+            .populate('clinicLabReferral.sentBy', 'name speciality cabinNumber')
+            .lean();
+
+        if (!appointment) {
+            return res.status(404).json({
+                success: false,
+                message: "Lab test referral not found."
+            });
+        }
+
+        return res.status(200).json({
+            success: true,
+            data: appointment
+        });
+    } catch (error) {
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
 module.exports = {
     addClinicLab,
     getMyClinicLabs,
@@ -605,5 +765,7 @@ module.exports = {
     toggleClinicLabStatus,
     deleteClinicLab,
     getClinicLabTimings,
-    updateClinicLabTimings
+    updateClinicLabTimings,
+    getClinicLabDoctorReferrals,
+    getClinicLabDoctorReferralById
 };

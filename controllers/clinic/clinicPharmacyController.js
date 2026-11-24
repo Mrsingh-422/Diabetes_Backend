@@ -2,6 +2,8 @@
 const Pharmacy = require('../../models/Pharmacy');
 const Clinic = require('../../models/Clinic');
 const ProfileUpdateRequest = require('../../models/ProfileUpdateRequest');
+const Appointment = require('../../models/Appointment');
+const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 const { deleteFile } = require('../../utils/fileHandler');
 const { notifyAdminsAndVendor } = require('../../utils/notification');
@@ -587,6 +589,163 @@ const updateClinicPharmacyTimings = async (req, res) => {
     }
 };
 
+// ==========================================
+// 9. GET ALL DOCTOR-REFERRED PHARMACY MEDICINE REQUESTS (Read-Only for Clinic Pharmacy)
+// @route   GET /api/clinic/pharmacy/doctor-referrals?search=...
+// @access  Private (Clinic or Clinic Pharmacy)
+// ==========================================
+const getClinicPharmacyDoctorReferrals = async (req, res) => {
+    try {
+        const userRole = (req.user.role || '').toLowerCase();
+        const { status, search, page = 1, limit = 20 } = req.query;
+
+        const pageNum = Math.max(1, parseInt(page, 10) || 1);
+        const limitNum = Math.max(1, parseInt(limit, 10) || 20);
+        const skip = (pageNum - 1) * limitNum;
+
+        let clinicId = null;
+        let pharmacyId = null;
+
+        if (userRole === 'clinic') {
+            clinicId = req.user.id;
+            const clinicPharmacy = await Pharmacy.findOne({ clinicId, isClinic: true }).select('_id').lean();
+            pharmacyId = clinicPharmacy?._id || null;
+        } else {
+            pharmacyId = req.user.id;
+            clinicId = req.user.clinicId || null;
+        }
+
+        const andConditions = [
+            { 'clinicPharmacyReferral.status': { $in: ['Sent', 'Dispensed'] } }
+        ];
+
+        if (clinicId) {
+            andConditions.push({ clinicId });
+        }
+        if (pharmacyId) {
+            andConditions.push({
+                $or: [
+                    { 'clinicPharmacyReferral.pharmacyId': pharmacyId },
+                    { 'clinicPharmacyReferral.pharmacyId': null }
+                ]
+            });
+        }
+
+        if (status && String(status).trim() !== '') {
+            andConditions.push({ 'clinicPharmacyReferral.status': String(status).trim() });
+        }
+
+        if (search && String(search).trim() !== '') {
+            const regex = new RegExp(String(search).trim(), 'i');
+            andConditions.push({
+                $or: [
+                    { bookingId: regex },
+                    { formattedToken: regex },
+                    { 'patients.patientName': regex },
+                    { 'clinicPharmacyReferral.medicines.name': regex }
+                ]
+            });
+        }
+
+        const query = { $and: andConditions };
+
+        const [totalDocs, appointments] = await Promise.all([
+            Appointment.countDocuments(query),
+            Appointment.find(query)
+                .select('_id bookingId bookingType tokenNumber formattedToken appointmentDate appointmentTime patients userId doctorId clinicPharmacyReferral')
+                .populate('userId', 'name phone email gender age')
+                .populate('doctorId', 'name speciality cabinNumber profileImage')
+                .populate('clinicPharmacyReferral.sentBy', 'name speciality cabinNumber')
+                .populate('clinicPharmacyReferral.prescriptionId', 'pdfUrl diagnosis adviceGiven doctorSuggestions')
+                .sort({ 'clinicPharmacyReferral.sentAt': -1 })
+                .skip(skip)
+                .limit(limitNum)
+                .lean()
+        ]);
+
+        const data = appointments.map((appt) => {
+            const primaryPatient = appt.patients?.[0] || {};
+            const isSelf = Boolean(primaryPatient.isMainUser) || (primaryPatient.relation || '').toLowerCase() === 'self' || (primaryPatient.patientName || '').toLowerCase().includes('myself');
+
+            return {
+                appointmentId: appt._id,
+                bookingId: appt.bookingId,
+                bookingType: appt.bookingType,
+                formattedToken: appt.formattedToken || "",
+                patient: {
+                    name: isSelf ? (appt.userId?.name || primaryPatient.patientName) : primaryPatient.patientName,
+                    age: primaryPatient.patientAge || appt.userId?.age || null,
+                    gender: primaryPatient.gender || appt.userId?.gender || null,
+                    phone: appt.userId?.phone || ""
+                },
+                referredByDoctor: appt.clinicPharmacyReferral?.sentBy || appt.doctorId || null,
+                prescription: appt.clinicPharmacyReferral?.prescriptionId || null,
+                status: appt.clinicPharmacyReferral?.status || 'Sent',
+                notes: appt.clinicPharmacyReferral?.notes || "",
+                medicines: appt.clinicPharmacyReferral?.medicines || [],
+                sentAt: appt.clinicPharmacyReferral?.sentAt || appt.createdAt
+            };
+        });
+
+        return res.status(200).json({
+            success: true,
+            totalDocs,
+            totalPages: Math.ceil(totalDocs / limitNum) || 1,
+            currentPage: pageNum,
+            count: data.length,
+            data
+        });
+    } catch (error) {
+        console.error("Get Clinic Pharmacy Doctor Referrals Error:", error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// ==========================================
+// 10. GET SINGLE DOCTOR-REFERRED PHARMACY REQUEST DETAIL (Read-Only)
+// @route   GET /api/clinic/pharmacy/doctor-referrals/:appointmentId
+// @access  Private (Clinic or Clinic Pharmacy)
+// ==========================================
+const getClinicPharmacyDoctorReferralById = async (req, res) => {
+    try {
+        const userRole = (req.user.role || '').toLowerCase();
+        const { appointmentId } = req.params;
+
+        const idQuery = mongoose.Types.ObjectId.isValid(appointmentId)
+            ? { $or: [{ _id: appointmentId }, { bookingId: appointmentId }] }
+            : { bookingId: appointmentId };
+
+        let clinicId = userRole === 'clinic' ? req.user.id : (req.user.clinicId || null);
+
+        const appointment = await Appointment.findOne({
+            $and: [
+                idQuery,
+                ...(clinicId ? [{ clinicId }] : []),
+                { 'clinicPharmacyReferral.status': { $ne: 'None' } }
+            ]
+        })
+            .select('_id bookingId bookingType tokenNumber formattedToken appointmentDate appointmentTime patients userId doctorId clinicalSummary clinicPharmacyReferral')
+            .populate('userId', 'name phone email gender age')
+            .populate('doctorId', 'name speciality qualification cabinNumber profileImage')
+            .populate('clinicPharmacyReferral.sentBy', 'name speciality cabinNumber')
+            .populate('clinicPharmacyReferral.prescriptionId')
+            .lean();
+
+        if (!appointment) {
+            return res.status(404).json({
+                success: false,
+                message: "Pharmacy medicine referral not found."
+            });
+        }
+
+        return res.status(200).json({
+            success: true,
+            data: appointment
+        });
+    } catch (error) {
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
 module.exports = {
     addClinicPharmacy,
     getMyClinicPharmacies,
@@ -595,5 +754,7 @@ module.exports = {
     toggleClinicPharmacyStatus,
     deleteClinicPharmacy,
     getClinicPharmacyTimings,
-    updateClinicPharmacyTimings
+    updateClinicPharmacyTimings,
+    getClinicPharmacyDoctorReferrals,
+    getClinicPharmacyDoctorReferralById
 };

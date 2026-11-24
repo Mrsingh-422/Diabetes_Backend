@@ -71,7 +71,7 @@ const getMyDoctorProfile = async (req, res) => {
 };
 
 // ==========================================
-// 2. UPDATE MY CLINIC DOCTOR PROFILE (Staged for Admin Approval + Disk Cleanup)
+// 2. UPDATE MY CLINIC DOCTOR PROFILE (Staged for Clinic/Admin Approval + Disk Cleanup)
 // @route   PUT /api/clinic/doctor-panel/profile/update
 // @access  Private (Clinic Doctor)
 // ==========================================
@@ -224,6 +224,7 @@ const updateDoctorProfile = async (req, res) => {
         const request = await ProfileUpdateRequest.create({
             vendorId: doctorId,
             vendorModel: 'Doctor',
+            clinicId: existingDoc.clinicId || null,
             updatedFields: updates,
             status: 'Pending'
         });
@@ -239,6 +240,7 @@ const updateDoctorProfile = async (req, res) => {
                         `${existingDoc.name} submitted profile changes for approval.`,
                         {
                             doctorId: String(doctorId),
+                            clinicId: existingDoc.clinicId ? String(existingDoc.clinicId) : "",
                             requestId: String(request._id),
                             type: "CLINIC_DOCTOR_PROFILE_UPDATE"
                         }
@@ -251,7 +253,7 @@ const updateDoctorProfile = async (req, res) => {
 
         return res.status(200).json({
             success: true,
-            message: "Profile changes submitted to Admin for review. Your profile will update once approved.",
+            message: "Profile changes submitted for Clinic & Admin review. Your profile will update once approved.",
             data: request
         });
     } catch (error) {

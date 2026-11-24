@@ -56,6 +56,16 @@ const appointmentSchema = new mongoose.Schema({
         enum: ['Video Consult', 'Clinic Visit', 'Home Visit']
     },
 
+    // --- OPD Token & Queue Tracking ---
+    tokenNumber: { type: Number, default: null },
+    formattedToken: { type: String, default: "" },
+    tokenIntervalMinutes: { type: Number, default: 15 },
+    opdRoomNumber: { type: String, default: "" },
+    isTokenSkipped: { type: Boolean, default: false },
+    tokenSkipCount: { type: Number, default: 0 },
+    tokenSkippedAt: { type: Date, default: null },
+    tokenSkipReason: { type: String, default: "" },
+
     // --- Pricing & Coupon Logic ---
     pricingBreakdown: {
         baseFee: { type: Number },
@@ -84,7 +94,6 @@ const appointmentSchema = new mongoose.Schema({
     paymentStatus: { type: String, enum: ['Pending', 'Paid', 'Failed', 'Refunded', 'Refund-Initiated'], default: 'Pending' },
     transactionId: { type: String },
 
-    // System Fields
     status: {
         type: String,
         enum: ['Pending', 'Clinic-Pending', 'Confirmed', 'In-Progress', 'Discharge-Pending', 'Completed', 'Cancelled-By-User', 'Cancelled-By-Doctor', 'Cancelled-By-Clinic', 'No-Show', 'Rescheduled'],
@@ -100,13 +109,11 @@ const appointmentSchema = new mongoose.Schema({
         price: Number
     }],
 
-    // For Admissions
     startDate: { type: Date },
     endDate: { type: Date },
     cancellationCount: { type: Number, default: 0 },
     rescheduleCount: { type: Number, default: 0 },
 
-    // Transfer & Shift History
     pendingDoctorId: { type: mongoose.Schema.Types.ObjectId, ref: 'Doctor', default: null },
     treatmentHistory: [{
         fromDoctorId: { type: mongoose.Schema.Types.ObjectId, ref: 'Doctor', default: null },
@@ -137,10 +144,10 @@ const appointmentSchema = new mongoose.Schema({
         durationDisplay: { type: String, default: "" }
     }],
 
-    // Clinical Summary & Vitals
     clinicalSummary: {
         diagnosis: { type: String, default: "" },
         investigation: { type: String, default: "" },
+        doctorSuggestions: { type: String, default: "" },
         treatmentResult: { type: String, default: "" },
         dischargeNote: { type: String, default: "" },
         dischargedAt: { type: Date, default: null },
@@ -168,7 +175,7 @@ const appointmentSchema = new mongoose.Schema({
         dischargeSummaryPdf: { type: String, default: null }
     },
 
-    // --- CLINIC PHARMACY REFERRAL ---
+    // --- CLINIC PHARMACY REFERRAL (Direct Read-Only Display to Clinic Pharmacy) ---
     clinicPharmacyReferral: {
         pharmacyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Pharmacy', default: null },
         prescriptionId: { type: mongoose.Schema.Types.ObjectId, ref: 'Prescription', default: null },
@@ -177,11 +184,23 @@ const appointmentSchema = new mongoose.Schema({
             name: { type: String, required: true },
             saltComposition: { type: String, default: "" },
             packaging: { type: String, default: "" },
+            strength: { type: String, default: "" },
             dose: { type: String, default: "" },
+            doseInterval: { type: String, default: "" },
             frequency: { type: String, default: "" },
             duration: { type: String, default: "" },
             quantity: { type: Number, default: 1 },
+            dispenseQuantity: { type: String, default: "" },
+            administrationTiming: { type: String, default: "" },
             instructions: { type: String, default: "" },
+            timeSchedule: {
+                morning: { type: Boolean, default: false },
+                afternoon: { type: Boolean, default: false },
+                evening: { type: Boolean, default: false },
+                night: { type: Boolean, default: false },
+                mealRelation: { type: String, default: "" },
+                customTimes: [{ type: String }]
+            },
             unitPrice: { type: Number, default: 0 }
         }],
         notes: { type: String, default: "" },
@@ -189,15 +208,8 @@ const appointmentSchema = new mongoose.Schema({
         sentAt: { type: Date, default: null },
         sentBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Doctor', default: null }
     },
-     tokenNumber: { type: Number, default: null },
-    formattedToken: { type: String, default: "" }, // e.g. "001", "002", "010"
-    tokenIntervalMinutes: { type: Number, default: 15 }, // Doctor slotDuration (10, 15, 20, 30 mins)
-    opdRoomNumber: { type: String, default: "" },
-    isTokenSkipped: { type: Boolean, default: false },
-    tokenSkipCount: { type: Number, default: 0 },
-    tokenSkippedAt: { type: Date, default: null },
-    tokenSkipReason: { type: String, default: "" },
-    // --- CLINIC LAB REFERRAL ---
+
+    // --- CLINIC LAB REFERRAL (Direct Read-Only Display to Clinic Lab) ---
     clinicLabReferral: {
         labId: { type: mongoose.Schema.Types.ObjectId, ref: 'Lab', default: null },
         tests: [{

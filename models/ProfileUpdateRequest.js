@@ -8,13 +8,19 @@ const profileUpdateRequestSchema = new mongoose.Schema({
     },
     vendorModel: { 
         type: String, 
-        enum: [ 'Doctor', 'Food', 'Pharmacy', 'Lab', 'Ambulance', 'Driver', 'Clinic' ], 
+        enum: ['Doctor', 'Food', 'Pharmacy', 'Lab', 'Ambulance', 'Driver', 'Clinic'], 
         required: true 
+    },
+    clinicId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Clinic',
+        default: null,
+        index: true
     },
     updatedFields: { 
         type: Object, 
         required: true 
-    }, // Holds proposed fields safely as an un-merged object
+    },
     status: { 
         type: String, 
         enum: ['Pending', 'Approved', 'Rejected'], 
@@ -28,6 +34,15 @@ const profileUpdateRequestSchema = new mongoose.Schema({
         type: mongoose.Schema.Types.ObjectId, 
         ref: 'Admin', 
         default: null 
+    },
+    reviewedByClinicId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Clinic',
+        default: null
+    },
+    reviewedAt: {
+        type: Date,
+        default: null
     }
 }, { timestamps: true });
 

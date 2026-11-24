@@ -17,7 +17,8 @@ const {
     getDoctorOpdSettingsByClinic,
     toggleDoctorOpdSlotBlockByClinic,
     getClinicDoctorLeaves,
-    respondToDoctorLeaveByClinic
+    respondToDoctorLeaveByClinic,
+
 } = require('../../controllers/clinic/clinicDoctorController');
 
 // Base Route: /api/clinic/doctors
@@ -31,10 +32,14 @@ router.get('/my-doctors', protect('clinic'), getMyClinicDoctors);
 router.get('/available', protect('clinic'), getAvailableClinicDoctors);
 router.put('/update/:id', protect('clinic'), clinicDoctorUploads, updateClinicDoctor);
 
+
+
 // 2. OPD Governance, Cabin, Weekly Roster & Time Slots (Clinic Panel)
 router.get('/opd-settings/:doctorId', protect('clinic'), getDoctorOpdSettingsByClinic);
 router.put('/configure-opd/:doctorId', protect('clinic'), configureDoctorOpdScheduleByClinic);
 router.post('/opd-slots/toggle-block/:doctorId', protect('clinic'), toggleDoctorOpdSlotBlockByClinic);
+
+
 
 // 3. Doctor Leave Governance (Clinic Panel)
 router.get('/leaves', protect('clinic'), getClinicDoctorLeaves);

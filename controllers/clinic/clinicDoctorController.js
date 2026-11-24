@@ -2015,6 +2015,8 @@ const respondToDoctorLeaveByClinic = async (req, res) => {
         return res.status(500).json({ success: false, message: error.message });
     }
 }
+
+
 module.exports = {
     addClinicDoctor,
     getMyClinicDoctors,
@@ -2029,5 +2031,6 @@ module.exports = {
     getDoctorOpdSettingsByClinic,
     toggleDoctorOpdSlotBlockByClinic,
     getClinicDoctorLeaves,
-    respondToDoctorLeaveByClinic
+    respondToDoctorLeaveByClinic,
+    
 };

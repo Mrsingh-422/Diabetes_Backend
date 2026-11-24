@@ -12,7 +12,9 @@ const {
     toggleClinicPharmacyStatus,
     deleteClinicPharmacy,
     getClinicPharmacyTimings,
-    updateClinicPharmacyTimings
+    updateClinicPharmacyTimings,
+    getClinicPharmacyDoctorReferrals,
+    getClinicPharmacyDoctorReferralById
 } = require('../../controllers/clinic/clinicPharmacyController');
 
 // Base Route: /api/clinic/pharmacy
@@ -37,5 +39,9 @@ router.delete('/delete/:id', protect('clinic'), deleteClinicPharmacy);
 
 router.get('/timings', protect('clinic'), getClinicPharmacyTimings);
 router.put('/timings/update', protect('clinic'), updateClinicPharmacyTimings);
+
+// Direct Read-Only Doctor Pharmacy Medicine Requests (No Accept/Reject)
+router.get('/doctor-referrals', protect(['clinic', 'clinic-pharmacy',]), getClinicPharmacyDoctorReferrals);
+router.get('/doctor-referrals/:appointmentId', protect(['clinic', 'clinic-pharmacy',]), getClinicPharmacyDoctorReferralById);
 
 module.exports = router;

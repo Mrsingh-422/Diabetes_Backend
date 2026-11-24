@@ -38,6 +38,85 @@ const formatShiftDuration = (startTime, endTime = new Date()) => {
 };
 
 // ==========================================
+// Helper: Build Structured Medicine Dose & Time-of-Day Schedule
+// ==========================================
+const parseMedicineDoseAndSchedule = (m = {}) => {
+    const medName = String(m.name || m.medicineName || "").trim();
+    const strengthVal = String(m.strength || "").trim();
+    const rawDoseInterval = String(m.doseInterval || m.dose || "").trim();
+    const freqVal = String(m.frequency || "q.d.").trim();
+    const durationVal = String(m.duration || "5 Days").trim();
+    const qtyVal = String(m.dispenseQuantity || m.quantity || "10 Tablets").trim();
+    const timingText = String(m.administrationTiming || m.instructions || "").trim();
+
+    let scheduleInput = m.timeSchedule || {};
+    if (typeof scheduleInput === 'string') {
+        try { scheduleInput = JSON.parse(scheduleInput); } catch (e) { scheduleInput = {}; }
+    }
+
+    let morning = Boolean(scheduleInput.morning);
+    let afternoon = Boolean(scheduleInput.afternoon);
+    let evening = Boolean(scheduleInput.evening);
+    let night = Boolean(scheduleInput.night);
+
+    // Auto-parse "1-0-1" or "1-1-1-1" if boolean checkboxes were not explicitly sent
+    if (!morning && !afternoon && !evening && !night && rawDoseInterval) {
+        const parts = rawDoseInterval.split('-').map((p) => Number(p.trim()));
+        if (parts.length === 3) {
+            morning = parts[0] > 0;
+            afternoon = parts[1] > 0;
+            night = parts[2] > 0;
+        } else if (parts.length === 4) {
+            morning = parts[0] > 0;
+            afternoon = parts[1] > 0;
+            evening = parts[2] > 0;
+            night = parts[3] > 0;
+        }
+    }
+
+    const finalDoseInterval = rawDoseInterval || `${morning ? 1 : 0}-${afternoon ? 1 : 0}-${night ? 1 : 0}`;
+    const timeLabels = [];
+    if (morning) timeLabels.push("Morning");
+    if (afternoon) timeLabels.push("Afternoon");
+    if (evening) timeLabels.push("Evening");
+    if (night) timeLabels.push("Night");
+
+    const allowedMealRelations = ['Before Meal', 'After Meal', 'With Meal', 'Empty Stomach', 'Anytime', ''];
+    const mealRelation = allowedMealRelations.includes(scheduleInput.mealRelation)
+        ? scheduleInput.mealRelation
+        : '';
+
+    const customTimes = Array.isArray(scheduleInput.customTimes)
+        ? scheduleInput.customTimes.map((t) => String(t).trim()).filter(Boolean)
+        : [];
+
+    return {
+        medicineId: (m.medicineId && mongoose.Types.ObjectId.isValid(m.medicineId)) ? m.medicineId : null,
+        name: medName,
+        isCustomGeneric: Boolean(m.isCustomGeneric === true || m.isCustomGeneric === 'true'),
+        genericComposition: String(m.genericComposition || "").trim(),
+        strength: strengthVal,
+        frequency: freqVal,
+        doseInterval: finalDoseInterval,
+        dose: finalDoseInterval,
+        time: String(m.time || timeLabels.join(' - ')).trim(),
+        duration: durationVal,
+        dispenseQuantity: qtyVal,
+        administrationTiming: timingText || mealRelation,
+        instructions: timingText || mealRelation,
+        timeSchedule: {
+            morning,
+            afternoon,
+            evening,
+            night,
+            mealRelation,
+            customTimes
+        }
+    };
+};
+
+
+// ==========================================
 // Helper 2: Enrich treatmentHistory with live shift durations
 // ==========================================
 const enrichTreatmentHistory = (historyArray = [], appointmentStatus = 'Pending') => {
@@ -1270,7 +1349,7 @@ const getClinicDoctorMedicines = async (req, res) => {
 };
 
 // ==========================================
-// 7. GET ALL LAB TESTS & PACKAGES (Clinic Lab + All Master DB Tests)
+// 7. GET ALL LAB TESTS & PACKAGES FROM DATABASE (Clinic Lab + ALL Master DB Tests & Packages)
 // @route   GET /api/clinic/doctor-panel/appointments/lab-tests
 // ==========================================
 const getClinicDoctorLabTests = async (req, res) => {
@@ -1282,7 +1361,7 @@ const getClinicDoctorLabTests = async (req, res) => {
         const cleanCategory = String(category || '').trim();
 
         const clinicLab = clinicId
-            ? await Lab.findOne({ clinicId, isClinic: true, isActive: true })
+            ? await Lab.findOne({ clinicId, isClinic: true, isActive: { $ne: false } })
                 .select('_id name phone address isHomeCollectionAvailable isRapidServiceAvailable')
                 .lean()
             : null;
@@ -1292,10 +1371,9 @@ const getClinicDoctorLabTests = async (req, res) => {
         const coveredMasterTestIds = [];
         const coveredMasterPackageIds = [];
 
-        // 1. Fetch Clinic Lab's configured tests & packages (if Clinic Lab exists)
         if (clinicLab) {
-            const testQuery = { labId: clinicLab._id, isActive: true };
-            const pkgQuery = { labId: clinicLab._id, isActive: true };
+            const testQuery = { labId: clinicLab._id, isActive: { $ne: false } };
+            const pkgQuery = { labId: clinicLab._id, isActive: { $ne: false } };
 
             if (cleanSearch) {
                 const regex = new RegExp(cleanSearch, 'i');
@@ -1358,13 +1436,13 @@ const getClinicDoctorLabTests = async (req, res) => {
             });
         }
 
-        // 2. Fetch ALL remaining Master Tests & Packages from DB so doctor sees all DB tests
+        // Fetch ALL Master Tests & Packages from DB (even if not in Clinic Lab inventory)
         const masterTestQuery = {
-            isActive: true,
+            isActive: { $ne: false },
             ...(coveredMasterTestIds.length > 0 ? { _id: { $nin: coveredMasterTestIds } } : {})
         };
         const masterPkgQuery = {
-            isActive: true,
+            isActive: { $ne: false },
             ...(coveredMasterPackageIds.length > 0 ? { _id: { $nin: coveredMasterPackageIds } } : {})
         };
 
@@ -1440,9 +1518,8 @@ const getClinicDoctorLabTests = async (req, res) => {
     }
 };
 
-
 // ==========================================
-// 8. PRESCRIBE PATIENT IN OPD (Without advisedInvestigations & dietPlanPdf)
+// 8. PRESCRIBE PATIENT IN OPD (Proper Medicine Doses, Time Schedule & doctorSuggestions)
 // @route   POST /api/clinic/doctor-panel/appointments/:id/prescribe
 // ==========================================
 const prescribeClinicAppointment = async (req, res) => {
@@ -1481,6 +1558,9 @@ const prescribeClinicAppointment = async (req, res) => {
             chiefComplaints,
             diagnosis,
             medicines,
+            doctorSuggestions,
+            advisedInvestigations,
+            suggestions,
             adviceGiven,
             advice,
             specialInstructions,
@@ -1499,13 +1579,7 @@ const prescribeClinicAppointment = async (req, res) => {
 
         const parsedMedicines = rawMedicines
             .filter((m) => m && (m.name || m.medicineName))
-            .map((m) => ({
-                name: String(m.name || m.medicineName).trim(),
-                dose: String(m.dose || m.doseInterval || m.strength || "").trim(),
-                time: String(m.time || m.frequency || "").trim(),
-                duration: String(m.duration || "").trim(),
-                instructions: String(m.instructions || m.administrationTiming || "").trim()
-            }));
+            .map((m) => parseMedicineDoseAndSchedule(m));
 
         let parsedDiagnosis = [];
         if (typeof diagnosis === 'string') {
@@ -1538,7 +1612,6 @@ const prescribeClinicAppointment = async (req, res) => {
             }
         }
 
-        // Single Prescription PDF Upload (No dietPlanPdf)
         let prescriptionPdfPath = null;
         if (req.file) {
             prescriptionPdfPath = `/uploads/doctor_prescriptions/${req.file.filename}`;
@@ -1547,6 +1620,7 @@ const prescribeClinicAppointment = async (req, res) => {
         }
 
         const resolvedAdvice = adviceGiven || advice || "";
+        const resolvedSuggestions = String(doctorSuggestions || suggestions || advisedInvestigations || "").trim();
 
         const newPrescription = await Prescription.create({
             appointmentId: appointment._id,
@@ -1554,7 +1628,20 @@ const prescribeClinicAppointment = async (req, res) => {
             userId: appointment.userId._id || appointment.userId,
             chiefComplaints: chiefComplaints || appointment.clinicalSummary?.chiefComplaint || appointment.bookingReason || "",
             diagnosis: parsedDiagnosis,
+            vitals: parsedVitals ? {
+                bp: parsedVitals.bp,
+                pulse: parsedVitals.pulse,
+                temp: parsedVitals.temp,
+                spo2: parsedVitals.spo2
+            } : {
+                bp: appointment.clinicalSummary?.vitals?.bp || "",
+                pulse: appointment.clinicalSummary?.vitals?.pulse || "",
+                temp: appointment.clinicalSummary?.vitals?.temp || "",
+                spo2: appointment.clinicalSummary?.vitals?.spo2 || ""
+            },
             medicines: parsedMedicines,
+            advisedInvestigations: String(advisedInvestigations || resolvedSuggestions || "").trim(),
+            doctorSuggestions: resolvedSuggestions,
             adviceGiven: resolvedAdvice,
             specialInstructions: specialInstructions || "",
             nextAppointment: nextAppointment || "",
@@ -1565,6 +1652,10 @@ const prescribeClinicAppointment = async (req, res) => {
         if (!appointment.clinicalSummary) appointment.clinicalSummary = {};
         if (chiefComplaints) appointment.clinicalSummary.chiefComplaint = chiefComplaints;
         if (parsedDiagnosis.length > 0) appointment.clinicalSummary.diagnosis = parsedDiagnosis.join(', ');
+        if (resolvedSuggestions) {
+            appointment.clinicalSummary.doctorSuggestions = resolvedSuggestions;
+            appointment.clinicalSummary.investigation = advisedInvestigations || resolvedSuggestions;
+        }
         if (resolvedAdvice) appointment.clinicalSummary.treatmentResult = resolvedAdvice;
         if (parsedVitals) appointment.clinicalSummary.vitals = parsedVitals;
 
@@ -1598,7 +1689,7 @@ const prescribeClinicAppointment = async (req, res) => {
             success: true,
             message: shouldComplete
                 ? `Prescription saved and appointment #${appointment.bookingId} marked Completed.`
-                : `Prescription saved for appointment #${appointment.bookingId}. You can now refer to Pharmacy, Lab, Admission, or Secondary Doctor.`,
+                : `Prescription saved for appointment #${appointment.bookingId}. You can now send to Pharmacy, Lab, Admission, or Secondary Doctor.`,
             prescriptionId: newPrescription._id,
             data: {
                 prescription: newPrescription,
@@ -1611,9 +1702,8 @@ const prescribeClinicAppointment = async (req, res) => {
     }
 };
 
-
 // ==========================================
-// 9. SEND PRESCRIBED MEDICINES TO CLINIC PHARMACY
+// 9. SEND PRESCRIBED MEDICINES TO CLINIC PHARMACY (Direct Read-Only Display — No Accept/Reject)
 // @route   POST /api/clinic/doctor-panel/appointments/:id/send-to-pharmacy
 // ==========================================
 const sendAppointmentToClinicPharmacy = async (req, res) => {
@@ -1626,7 +1716,7 @@ const sendAppointmentToClinicPharmacy = async (req, res) => {
             return res.status(400).json({ success: false, message: "Appointment ID is required." });
         }
 
-        const { medicines, notes = "", prescriptionId } = req.body || {};
+        const { medicines, notes = "", prescriptionId, pharmacyId } = req.body || {};
 
         let rawMedicines = medicines;
         if (typeof medicines === 'string') {
@@ -1653,11 +1743,14 @@ const sendAppointmentToClinicPharmacy = async (req, res) => {
             });
         }
 
+        const pharmacyFilter = pharmacyId && mongoose.Types.ObjectId.isValid(pharmacyId)
+            ? { _id: pharmacyId, ...(clinicId ? { clinicId } : {}), isActive: true }
+            : { clinicId, isClinic: true, isActive: true };
+
         const clinicPharmacy = clinicId
-            ? await Pharmacy.findOne({ clinicId, isClinic: true, isActive: true }).select('_id name phone').lean()
+            ? await Pharmacy.findOne(pharmacyFilter).select('_id name phone address').lean()
             : null;
 
-        // Enrich medicines from Master Medicine & Clinic Pharmacy Inventory if medicineId is passed
         const formattedMedicines = [];
         for (const item of rawMedicines) {
             if (!item) continue;
@@ -1677,19 +1770,27 @@ const sendAppointmentToClinicPharmacy = async (req, res) => {
                 }
             }
 
-            const medName = String(item.name || medDoc?.name || "").trim();
-            if (!medName) continue;
+            const structured = parseMedicineDoseAndSchedule({
+                ...item,
+                name: item.name || item.medicineName || medDoc?.name || ""
+            });
+            if (!structured.name) continue;
 
             formattedMedicines.push({
-                medicineId: medDoc?._id || (mongoose.Types.ObjectId.isValid(item.medicineId) ? item.medicineId : null),
-                name: medName,
-                saltComposition: item.saltComposition || medDoc?.salt_composition || "",
+                medicineId: medDoc?._id || structured.medicineId,
+                name: structured.name,
+                saltComposition: item.saltComposition || medDoc?.salt_composition || structured.genericComposition || "",
                 packaging: item.packaging || medDoc?.packaging || "",
-                dose: String(item.dose || "").trim(),
-                frequency: String(item.frequency || item.time || "").trim(),
-                duration: String(item.duration || "").trim(),
+                strength: structured.strength,
+                dose: structured.dose,
+                doseInterval: structured.doseInterval,
+                frequency: structured.frequency,
+                duration: structured.duration,
                 quantity: Math.max(1, Number(item.quantity) || 1),
-                instructions: String(item.instructions || "").trim(),
+                dispenseQuantity: structured.dispenseQuantity,
+                administrationTiming: structured.administrationTiming,
+                instructions: structured.instructions,
+                timeSchedule: structured.timeSchedule,
                 unitPrice: Number(item.unitPrice || invDoc?.vendor_price || invDoc?.mrp || medDoc?.best_price || medDoc?.mrp || 0)
             });
         }
@@ -1755,7 +1856,7 @@ const sendAppointmentToClinicPharmacy = async (req, res) => {
 };
 
 // ==========================================
-// 10. SEND PRESCRIBED TESTS TO CLINIC LAB (Supports Clinic Lab + Master DB Tests)
+// 10. SEND PRESCRIBED TESTS TO CLINIC LAB (Direct Read-Only Display — No Accept/Reject)
 // @route   POST /api/clinic/doctor-panel/appointments/:id/send-to-lab
 // ==========================================
 const sendAppointmentToClinicLab = async (req, res) => {
@@ -1768,7 +1869,7 @@ const sendAppointmentToClinicLab = async (req, res) => {
             return res.status(400).json({ success: false, message: "Appointment ID is required." });
         }
 
-        const { tests, notes = "", priority = 'Routine' } = req.body || {};
+        const { tests, notes = "", priority = 'Routine', labId } = req.body || {};
 
         let rawTests = tests;
         if (typeof tests === 'string') {
@@ -1795,8 +1896,12 @@ const sendAppointmentToClinicLab = async (req, res) => {
             });
         }
 
+        const labFilter = labId && mongoose.Types.ObjectId.isValid(labId)
+            ? { _id: labId, ...(clinicId ? { clinicId } : {}), isActive: true }
+            : { clinicId, isClinic: true, isActive: true };
+
         const clinicLab = clinicId
-            ? await Lab.findOne({ clinicId, isClinic: true, isActive: true }).select('_id name phone').lean()
+            ? await Lab.findOne(labFilter).select('_id name phone').lean()
             : null;
 
         const formattedTests = [];
@@ -1908,6 +2013,7 @@ const sendAppointmentToClinicLab = async (req, res) => {
         return res.status(500).json({ success: false, message: error.message });
     }
 };
+
 
 // ==========================================
 // 11. GET AVAILABLE CLINIC WARDS & BEDS FOR ADMISSION

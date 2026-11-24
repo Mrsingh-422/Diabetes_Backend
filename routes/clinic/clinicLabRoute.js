@@ -12,7 +12,9 @@ const {
     toggleClinicLabStatus,
     deleteClinicLab,
     getClinicLabTimings,
-    updateClinicLabTimings
+    updateClinicLabTimings,
+    getClinicLabDoctorReferrals,
+    getClinicLabDoctorReferralById
 } = require('../../controllers/clinic/clinicLabController');
 
 // Base Route: /api/clinic/lab
@@ -37,5 +39,9 @@ router.delete('/delete/:id', protect('clinic'), deleteClinicLab);
 
 router.get('/timings', protect('clinic'), getClinicLabTimings);
 router.put('/timings/update', protect('clinic'), updateClinicLabTimings);
+
+// Direct Read-Only Doctor Lab Test Requests (No Accept/Reject)
+router.get('/doctor-referrals', protect(['clinic', 'clinic-lab']), getClinicLabDoctorReferrals);
+router.get('/doctor-referrals/:appointmentId', protect(['clinic', 'clinic-lab' ]), getClinicLabDoctorReferralById);
 
 module.exports = router;
