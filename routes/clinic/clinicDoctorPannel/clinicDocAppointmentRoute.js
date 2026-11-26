@@ -21,7 +21,8 @@ const {
     addSecondaryDoctorOrOpinion,
     respondToSecondaryDoctorRequest,
     submitSecondaryDoctorOpinion,
-    completeClinicConsultation
+    completeClinicConsultation,
+    referToAnotherDoctor
 } = require('../../../controllers/clinic/clinicDoctorPannel/clinicDocAppointment');
 
 // Base Route: /api/clinic/doctor-panel
@@ -55,5 +56,7 @@ router.post('/appointments/:id/refer-admission', protect('clinic-doctor'), refer
 router.post('/appointments/:id/add-secondary-doctor', protect('clinic-doctor'), addSecondaryDoctorOrOpinion);
 router.patch('/appointments/:id/secondary-doctor/respond', protect('clinic-doctor'), respondToSecondaryDoctorRequest);
 router.post('/appointments/:id/secondary-doctor/opinion', protect('clinic-doctor'), submitSecondaryDoctorOpinion);
+
+router.post('/appointments/:id/refer-to-doctor', protect('clinic-doctor'), referToAnotherDoctor);
 
 module.exports = router;

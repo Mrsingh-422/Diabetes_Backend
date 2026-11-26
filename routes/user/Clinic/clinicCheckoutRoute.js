@@ -11,7 +11,9 @@ const {
     verifyClinicPayment,
     getMyClinicBookings,
     getSingleClinicBooking,
-    getMyOpdTokenLiveStatus
+    getMyOpdTokenLiveStatus,
+    getUserPendingAdmissionHolds,
+    initiateAdmissionHoldOnlinePayment
 } = require('../../../controllers/user/Clinic/ClinicCheckout');
 
 // Base URL: /api/clinic/checkout
@@ -28,10 +30,15 @@ router.post('/verify-payment', protect('user'), verifyClinicPayment);
 // 4. Get User's Clinic Bookings List
 router.get('/my-bookings', protect('user'), getMyClinicBookings);
 
+router.get('/pending-admission-holds', protect('user'), getUserPendingAdmissionHolds);
+router.get('/pay-admission-hold/:id', protect('user'), initiateAdmissionHoldOnlinePayment);
+
 // 5. Get Single Booking Full Details by ID
 router.get('/booking/:id', protect('user'), getSingleClinicBooking);
 
 router.get('/token-status/:id', protect('user'), getMyOpdTokenLiveStatus);
+
+
 
 
 module.exports = router;

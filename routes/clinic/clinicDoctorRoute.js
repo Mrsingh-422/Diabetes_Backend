@@ -18,6 +18,7 @@ const {
     toggleDoctorOpdSlotBlockByClinic,
     getClinicDoctorLeaves,
     respondToDoctorLeaveByClinic,
+    getDoctorReferredSlotsForClinic
 
 } = require('../../controllers/clinic/clinicDoctorController');
 
@@ -39,7 +40,8 @@ router.get('/opd-settings/:doctorId', protect('clinic'), getDoctorOpdSettingsByC
 router.put('/configure-opd/:doctorId', protect('clinic'), configureDoctorOpdScheduleByClinic);
 router.post('/opd-slots/toggle-block/:doctorId', protect('clinic'), toggleDoctorOpdSlotBlockByClinic);
 
-
+router.get('/referred-slots/:doctorId', protect('clinic'), getDoctorReferredSlotsForClinic);
+ 
 
 // 3. Doctor Leave Governance (Clinic Panel)
 router.get('/leaves', protect('clinic'), getClinicDoctorLeaves);

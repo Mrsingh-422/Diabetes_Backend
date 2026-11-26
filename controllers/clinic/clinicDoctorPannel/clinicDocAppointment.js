@@ -11,6 +11,8 @@ const Medicine = require('../../../models/Medicine');
 const MedicineInventory = require('../../../models/MedicineInventory');
 const Pharmacy = require('../../../models/Pharmacy');
 const Lab = require('../../../models/Lab');
+const ReferredToAnotherDoctor = require('../../../models/ReferredToAnotherDoctor');
+const { syncClinicWardAndBedCapacity } = require('../../../utils/opdTokenHelper');
 const LabTest = require('../../../models/LabTest');
 const LabPackage = require('../../../models/LabPackage');
 const MasterLabTest = require('../../../models/MasterLabTest');
@@ -2016,7 +2018,7 @@ const sendAppointmentToClinicLab = async (req, res) => {
 
 
 // ==========================================
-// 11. GET AVAILABLE CLINIC WARDS & BEDS FOR ADMISSION
+// 11. GET AVAILABLE CLINIC WARDS & BEDS FOR ADMISSION (With Auto-Release & Hold Duration)
 // @route   GET /api/clinic/doctor-panel/appointments/available-beds
 // ==========================================
 const getClinicDoctorAvailableBeds = async (req, res) => {
@@ -2029,13 +2031,26 @@ const getClinicDoctorAvailableBeds = async (req, res) => {
             });
         }
 
-        const [wards, beds] = await Promise.all([
+        // Release any expired 10/20/30-min bed holds first
+        await syncClinicWardAndBedCapacity(clinicId);
+
+        const [clinic, wards, beds] = await Promise.all([
+            Clinic.findById(clinicId).select('bedHoldDurationMinutes').lean(),
             Ward.find({ clinicId, isActive: true }).sort({ name: 1 }).lean(),
             Bed.find({ clinicId, status: 'Available' }).sort({ bedNumber: 1 }).lean()
         ]);
 
         const wardsWithBeds = wards.map((ward) => {
-            const availableBedsList = beds.filter((b) => String(b.wardId) === String(ward._id));
+            const availableBedsList = beds
+                .filter((b) => String(b.wardId) === String(ward._id))
+                .map((b) => ({
+                    _id: b._id,
+                    bedNumber: b.bedNumber,
+                    status: b.status,
+                    pricePerDay: Number(b.pricePerDay || ward.pricePerDay || 0),
+                    isVentilatorAvailable: Boolean(b.isVentilatorAvailable)
+                }));
+
             return {
                 _id: ward._id,
                 name: ward.name,
@@ -2049,6 +2064,8 @@ const getClinicDoctorAvailableBeds = async (req, res) => {
 
         return res.status(200).json({
             success: true,
+            bedHoldDurationMinutes: Number(clinic?.bedHoldDurationMinutes || 30),
+            totalAvailableBeds: beds.length,
             count: wardsWithBeds.length,
             data: wardsWithBeds
         });
@@ -2059,7 +2076,7 @@ const getClinicDoctorAvailableBeds = async (req, res) => {
 };
 
 // ==========================================
-// 12. REFER / SEND PATIENT TO CLINIC ADMISSION (IPD / BED)
+// 12. INITIATE OPD-TO-IPD BED HOLD (Configurable 10/20/30-Min Hold + Price Multiplied by Stay Days)
 // @route   POST /api/clinic/doctor-panel/appointments/:id/refer-admission
 // ==========================================
 const referAppointmentToAdmission = async (req, res) => {
@@ -2081,15 +2098,18 @@ const referAppointmentToAdmission = async (req, res) => {
             wardType = 'Daycare',
             stayDuration = 1,
             triageLevel = 'Urgent',
+            bookingReason = "",
             reason = "",
             notes = ""
         } = req.body || {};
 
-        const parentAppt = await Appointment.findOne({
-            ...idQuery,
-            clinicId,
-            doctorId
-        });
+        // Release expired holds first
+        await syncClinicWardAndBedCapacity(clinicId);
+
+        const [parentAppt, clinic] = await Promise.all([
+            Appointment.findOne({ $and: [idQuery, { clinicId }, { doctorId }] }),
+            Clinic.findById(clinicId).select('bedHoldDurationMinutes clinicName name').lean()
+        ]);
 
         if (!parentAppt) {
             return res.status(404).json({
@@ -2102,11 +2122,27 @@ const referAppointmentToAdmission = async (req, res) => {
         const days = Math.max(1, parseInt(stayDuration, 10) || 1);
         const allowedTriage = ['Emergency', 'Very Urgent', 'Urgent', 'Routine'];
         const cleanTriage = allowedTriage.includes(triageLevel) ? triageLevel : 'Urgent';
+        const clinicalReason = String(bookingReason || reason || notes || `Admitted from OPD #${parentAppt.bookingId}`).trim();
+        const holdMinutes = Math.max(5, Number(clinic?.bedHoldDurationMinutes || 30));
+        const holdExpiresAt = new Date(now.getTime() + holdMinutes * 60 * 1000);
 
-        // CASE A: Doctor selected a specific Bed -> Reserve Bed & Create Linked IPD Admission Record
         if (bedId) {
             if (!mongoose.Types.ObjectId.isValid(bedId)) {
                 return res.status(400).json({ success: false, message: "Invalid bedId format." });
+            }
+
+            // Check if an active IPD bed hold already exists for this OPD appointment
+            const existingHold = await Appointment.findOne({
+                opdAppointmentId: parentAppt._id,
+                bookingType: 'Admission',
+                status: { $nin: ['Cancelled-By-User', 'Cancelled-By-Clinic', 'Cancelled-By-Doctor', 'No-Show'] }
+            });
+
+            if (existingHold) {
+                return res.status(400).json({
+                    success: false,
+                    message: `An IPD admission (#${existingHold.bookingId}) is already initiated for this OPD visit.`
+                });
             }
 
             const targetBed = await Bed.findOne({ _id: bedId, clinicId }).populate('wardId');
@@ -2119,7 +2155,7 @@ const referAppointmentToAdmission = async (req, res) => {
 
             const wardTitle = targetBed.wardId?.name || "Clinic Ward";
             const bedPerDay = Number(targetBed.pricePerDay || targetBed.wardId?.pricePerDay || 500);
-            const depositAmount = bedPerDay * days;
+            const depositAmount = bedPerDay * days; // Multiplied by stayDuration days
             const admissionBookingId = `CLN-ADM-${Math.floor(100000 + Math.random() * 900000)}`;
 
             const newAdmission = await Appointment.create({
@@ -2135,7 +2171,7 @@ const referAppointmentToAdmission = async (req, res) => {
                 bookingType: 'Admission',
                 bedBookingType: cleanTriage === 'Emergency' ? 'Emergency-Bed' : 'General-Bed',
                 bookingId: admissionBookingId,
-                bookingReason: reason || notes || `Admitted from OPD #${parentAppt.bookingId} by ${req.user.name}`,
+                bookingReason: clinicalReason,
                 triageLevel: cleanTriage,
                 wardName: wardTitle,
                 bedNumber: targetBed.bedNumber,
@@ -2143,11 +2179,13 @@ const referAppointmentToAdmission = async (req, res) => {
                 startDate: now,
                 endDate: moment(now).add(days, 'days').toDate(),
                 appointmentDate: now,
+                admissionHoldExpiresAt: holdExpiresAt,
+                admissionHoldMinutes: holdMinutes,
                 patients: parentAppt.patients,
                 address: parentAppt.address,
                 pricingBreakdown: {
-                    baseFee: 0,
-                    originalBaseFee: 0,
+                    baseFee: depositAmount,
+                    originalBaseFee: depositAmount,
                     visitCharges: depositAmount,
                     extraCharges: 0,
                     discountAmount: 0,
@@ -2159,9 +2197,10 @@ const referAppointmentToAdmission = async (req, res) => {
                 insuranceDetails: parentAppt.insuranceDetails,
                 clinicalSummary: {
                     chiefComplaint: parentAppt.clinicalSummary?.chiefComplaint || "",
-                    diagnosis: parentAppt.clinicalSummary?.diagnosis || reason || "",
+                    diagnosis: parentAppt.clinicalSummary?.diagnosis || clinicalReason,
+                    doctorSuggestions: parentAppt.clinicalSummary?.doctorSuggestions || "",
                     vitals: parentAppt.clinicalSummary?.vitals || {},
-                    admissionNote: notes || `Referred from OPD consultation #${parentAppt.bookingId}`
+                    admissionNote: notes || clinicalReason
                 },
                 treatmentHistory: [{
                     fromDoctorId: null,
@@ -2170,22 +2209,19 @@ const referAppointmentToAdmission = async (req, res) => {
                     acceptanceStatus: 'Accepted',
                     assignedAt: now,
                     acceptedAt: now,
-                    notes: `${req.user.name} initiated IPD bed admission to ${wardTitle} (${targetBed.bedNumber}).`,
+                    notes: `${req.user.name} initiated ${holdMinutes}-min bed hold on ${wardTitle} (${targetBed.bedNumber}) for ${days} day(s).`,
                     startTime: now,
                     durationDisplay: "Active Duty"
                 }]
             });
 
-            // Reserve Bed & Sync Ward Count
+            // Lock Bed under Reserved Hold & Sync Ward
             targetBed.status = 'Reserved';
+            targetBed.holdExpiresAt = holdExpiresAt;
             targetBed.currentAppointmentId = newAdmission._id;
             await targetBed.save();
 
-            if (targetBed.wardId?._id) {
-                await Ward.findByIdAndUpdate(targetBed.wardId._id, {
-                    $inc: { availableBeds: -1 }
-                });
-            }
+            await syncClinicWardAndBedCapacity(clinicId, targetBed.wardId?._id);
 
             parentAppt.admissionReferral = {
                 status: 'Reserved',
@@ -2195,7 +2231,7 @@ const referAppointmentToAdmission = async (req, res) => {
                 wardType: targetBed.wardId?.type || wardType,
                 triageLevel: cleanTriage,
                 stayDuration: days,
-                reason: String(reason || "").trim(),
+                reason: clinicalReason,
                 notes: String(notes || "").trim(),
                 referredAt: now,
                 referredBy: doctorId
@@ -2207,19 +2243,24 @@ const referAppointmentToAdmission = async (req, res) => {
                 sendPushNotification(
                     parentAppt.userId,
                     'user',
-                    "Admission Recommended & Bed Reserved",
-                    `${req.user.name} reserved Bed ${targetBed.bedNumber} (${wardTitle}) for you. Please complete admission formalities at Clinic Reception.`,
+                    `Bed Reserved (${holdMinutes}-Min Hold)`,
+                    `${req.user.name} reserved Bed ${targetBed.bedNumber} (${wardTitle}) for ${days} day(s). Please pay ₹${depositAmount} online or at Clinic Reception within ${holdMinutes} minutes.`,
                     {
                         appointmentId: String(newAdmission._id),
                         bookingId: admissionBookingId,
-                        type: "CLINIC_IPD_ADMISSION_RESERVED"
+                        depositPayable: String(depositAmount),
+                        holdExpiresAt: holdExpiresAt.toISOString(),
+                        type: "CLINIC_IPD_ADMISSION_HOLD"
                     }
                 ).catch(() => {});
             }
 
             return res.status(201).json({
                 success: true,
-                message: `Bed ${targetBed.bedNumber} (${wardTitle}) reserved and IPD admission #${admissionBookingId} initiated.`,
+                message: `Bed ${targetBed.bedNumber} (${wardTitle}) reserved for ${holdMinutes} minutes! Total deposit for ${days} day(s): ₹${depositAmount}.`,
+                bedHoldMinutes: holdMinutes,
+                admissionHoldExpiresAt: holdExpiresAt,
+                depositPayable: depositAmount,
                 data: {
                     admissionReferral: parentAppt.admissionReferral,
                     admissionAppointment: newAdmission
@@ -2227,7 +2268,7 @@ const referAppointmentToAdmission = async (req, res) => {
             });
         }
 
-        // CASE B: Doctor recommends admission without picking a specific bed (Reception allots bed)
+        // Recommendation without specific bed selected
         parentAppt.admissionReferral = {
             status: 'Recommended',
             admissionAppointmentId: null,
@@ -2236,7 +2277,7 @@ const referAppointmentToAdmission = async (req, res) => {
             wardType: String(wardType || 'Daycare').trim(),
             triageLevel: cleanTriage,
             stayDuration: days,
-            reason: String(reason || "").trim(),
+            reason: clinicalReason,
             notes: String(notes || "").trim(),
             referredAt: now,
             referredBy: doctorId
@@ -2244,23 +2285,9 @@ const referAppointmentToAdmission = async (req, res) => {
         parentAppt.status = 'Completed';
         await parentAppt.save();
 
-        if (parentAppt.userId) {
-            sendPushNotification(
-                parentAppt.userId,
-                'user',
-                "Clinic Admission Recommended",
-                `${req.user.name} has recommended admission (${wardType}). Please visit the Clinic Admission Desk.`,
-                {
-                    appointmentId: String(parentAppt._id),
-                    bookingId: String(parentAppt.bookingId || ""),
-                    type: "CLINIC_ADMISSION_RECOMMENDED"
-                }
-            ).catch(() => {});
-        }
-
         return res.status(200).json({
             success: true,
-            message: "Patient referred for Clinic Admission. Clinic Reception can now assign a bed.",
+            message: "Patient referred for Clinic Admission. Clinic Reception can assign a bed.",
             data: parentAppt.admissionReferral
         });
     } catch (error) {
@@ -2268,6 +2295,7 @@ const referAppointmentToAdmission = async (req, res) => {
         return res.status(500).json({ success: false, message: error.message });
     }
 };
+
 
 // ==========================================
 // 13. GET AVAILABLE SECONDARY CLINIC DOCTORS (Excludes Self, Busy, Off Duty, On Leave)
@@ -2812,6 +2840,122 @@ const completeClinicConsultation = async (req, res) => {
     }
 };
 
+// ==========================================
+// 18. OPD DOCTOR REFERS PATIENT TO ANOTHER CLINIC DOCTOR (Creates ReferredToAnotherDoctor for Clinic Reception)
+// @route   POST /api/clinic/doctor-panel/appointments/:id/refer-to-doctor
+// @access  Private (Clinic Doctor)
+// ==========================================
+const referToAnotherDoctor = async (req, res) => {
+    try {
+        const referringDoctorId = req.user.id;
+        const clinicId = req.user.clinicId;
+        const idQuery = buildAppointmentIdQuery(req.params.id || req.body?.appointmentId);
+
+        if (!idQuery) {
+            return res.status(400).json({ success: false, message: "Appointment ID is required." });
+        }
+
+        const {
+            referredToDoctorId,
+            secondaryDoctorId,
+            doctorId,
+            reason = "",
+            clinicalNotes = "",
+            priority = 'Routine'
+        } = req.body || {};
+
+        const targetDoctorId = referredToDoctorId || secondaryDoctorId || doctorId;
+        if (!targetDoctorId || !mongoose.Types.ObjectId.isValid(targetDoctorId)) {
+            return res.status(400).json({
+                success: false,
+                message: "Valid referredToDoctorId is required."
+            });
+        }
+
+        if (String(targetDoctorId) === String(referringDoctorId)) {
+            return res.status(400).json({
+                success: false,
+                message: "You cannot refer a patient to yourself."
+            });
+        }
+
+        const [sourceAppt, targetDoctor] = await Promise.all([
+            Appointment.findOne({ $and: [idQuery, { doctorId: referringDoctorId }, ...(clinicId ? [{ clinicId }] : [])] }),
+            Doctor.findOne({
+                _id: targetDoctorId,
+                ...(clinicId ? { clinicId } : {}),
+                isActive: true,
+                profileStatus: 'Approved'
+            }).select('name speciality fees cabinNumber')
+        ]);
+
+        if (!sourceAppt) {
+            return res.status(404).json({
+                success: false,
+                message: "Source appointment not found or not assigned to you."
+            });
+        }
+
+        if (!targetDoctor) {
+            return res.status(404).json({
+                success: false,
+                message: "Target doctor not found or not approved in this clinic."
+            });
+        }
+
+        const allowedPriorities = ['Routine', 'Urgent', 'Emergency'];
+        const cleanPriority = allowedPriorities.includes(priority) ? priority : 'Routine';
+        const referralCode = `CLN-REF-${Math.floor(100000 + Math.random() * 900000)}`;
+
+        const referralRecord = await ReferredToAnotherDoctor.create({
+            referralCode,
+            clinicId: sourceAppt.clinicId,
+            userId: sourceAppt.userId,
+            sourceAppointmentId: sourceAppt._id,
+            referredByDoctorId: referringDoctorId,
+            prescriptionId: sourceAppt.prescriptionId || null,
+            referredToDoctorId: targetDoctor._id,
+            reason: String(reason || `Referred by ${req.user.name} for specialist evaluation`).trim(),
+            clinicalNotes: String(clinicalNotes || sourceAppt.clinicalSummary?.doctorSuggestions || "").trim(),
+            priority: cleanPriority,
+            status: 'Pending-Clinic-Booking',
+            feeAmount: Number(targetDoctor.fees?.clinic || 0),
+            paymentStatus: 'Pending'
+        });
+
+        sourceAppt.referralRecordId = referralRecord._id;
+        await sourceAppt.save();
+
+        if (sourceAppt.userId) {
+            sendPushNotification(
+                sourceAppt.userId,
+                'user',
+                "Referred to Specialist Doctor",
+                `${req.user.name} has referred you to ${targetDoctor.name} (${targetDoctor.speciality}). Please visit Clinic Reception to book your referred slot.`,
+                {
+                    referralId: String(referralRecord._id),
+                    referralCode,
+                    type: "CLINIC_DOCTOR_REFERRED_PATIENT"
+                }
+            ).catch(() => {});
+        }
+
+        const populatedReferral = await ReferredToAnotherDoctor.findById(referralRecord._id)
+            .populate('referredByDoctorId', 'name speciality cabinNumber')
+            .populate('referredToDoctorId', 'name speciality fees cabinNumber profileImage')
+            .populate('prescriptionId')
+            .lean();
+
+        return res.status(201).json({
+            success: true,
+            message: `Patient referred to ${targetDoctor.name}. Request sent to Clinic Reception for slot booking & payment.`,
+            data: populatedReferral
+        });
+    } catch (error) {
+        console.error("Refer To Another Doctor Error:", error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
 module.exports = {
     getClinicDoctorAppointments,
     getClinicDoctorAppointmentById,
@@ -2829,5 +2973,6 @@ module.exports = {
     addSecondaryDoctorOrOpinion,
     respondToSecondaryDoctorRequest,
     submitSecondaryDoctorOpinion,
-    completeClinicConsultation
+    completeClinicConsultation,
+    referToAnotherDoctor
 };

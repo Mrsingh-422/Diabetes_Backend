@@ -3,6 +3,7 @@ const Ward = require('../../models/Ward');
 const Bed = require('../../models/Bed');
 const Appointment = require('../../models/Appointment');
 const Doctor = require('../../models/Doctor');
+const Clinic = require('../../models/Clinic');
 const moment = require('moment');
 const mongoose = require('mongoose');
 
@@ -663,6 +664,66 @@ const getAllClinicAdmissions = async (req, res) => {
     }
 };
 
+// ==========================================
+// 12. GET CLINIC BED HOLD DURATION CONFIG (10 / 20 / 30 Mins)
+// @route   GET /api/clinic/wards/bed-hold-config
+// ==========================================
+const getClinicBedHoldConfig = async (req, res) => {
+    try {
+        const clinic = await Clinic.findById(req.user.id)
+            .select('name clinicName bedHoldDurationMinutes')
+            .lean();
+
+        if (!clinic) {
+            return res.status(404).json({ success: false, message: "Clinic not found." });
+        }
+
+        return res.status(200).json({
+            success: true,
+            data: {
+                clinicId: clinic._id,
+                clinicName: clinic.clinicName || clinic.name,
+                bedHoldDurationMinutes: Number(clinic.bedHoldDurationMinutes || 30)
+            }
+        });
+    } catch (error) {
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// ==========================================
+// 13. SET / UPDATE CLINIC BED HOLD DURATION (e.g. 10, 20, or 30 Mins)
+// @route   PUT /api/clinic/wards/bed-hold-config
+// ==========================================
+const updateClinicBedHoldConfig = async (req, res) => {
+    try {
+        const { bedHoldDurationMinutes } = req.body || {};
+        const mins = parseInt(bedHoldDurationMinutes, 10);
+
+        if (!mins || mins < 5 || mins > 180) {
+            return res.status(400).json({
+                success: false,
+                message: "bedHoldDurationMinutes must be between 5 and 180 minutes (e.g. 10, 20, or 30)."
+            });
+        }
+
+        const updatedClinic = await Clinic.findByIdAndUpdate(
+            req.user.id,
+            { $set: { bedHoldDurationMinutes: mins } },
+            { new: true }
+        )
+            .select('name clinicName bedHoldDurationMinutes')
+            .lean();
+
+        return res.status(200).json({
+            success: true,
+            message: `Clinic bed hold duration updated to ${mins} minutes.`,
+            data: updatedClinic
+        });
+    } catch (error) {
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
 module.exports = {
     createClinicWardUnit,
     getClinicWards,
@@ -674,5 +735,7 @@ module.exports = {
     updateClinicBedStatus,
     admitPatientToClinicBed,
     assignDoctorToClinicAdmission,
-    getAllClinicAdmissions
+    getAllClinicAdmissions,
+    getClinicBedHoldConfig,
+    updateClinicBedHoldConfig
 };

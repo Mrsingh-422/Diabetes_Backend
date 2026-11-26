@@ -13,7 +13,9 @@ const {
     updateClinicBedStatus,
     admitPatientToClinicBed,
     assignDoctorToClinicAdmission,
-    getAllClinicAdmissions
+    getAllClinicAdmissions,
+    getClinicBedHoldConfig,
+    updateClinicBedHoldConfig
 } = require('../../controllers/clinic/clinicWardBedController');
 
 // Base Route: /api/clinic/wards
@@ -29,6 +31,9 @@ router.get('/:wardId/beds', protect('clinic'), getBedsInClinicWard);
 router.put('/update-beds', protect('clinic'), updateClinicWardBeds);
 router.delete('/bed/:bedId', protect('clinic'), deleteSpecificClinicBed);
 router.patch('/bed/status', protect('clinic'), updateClinicBedStatus);
+
+router.get('/bed-hold-config', protect('clinic'), getClinicBedHoldConfig);
+router.put('/bed-hold-config/update', protect('clinic'), updateClinicBedHoldConfig);
 
 // --- PATIENT ADMISSIONS & DOCTOR ASSIGNMENT ---
 router.post('/admit-patient', protect('clinic'), admitPatientToClinicBed);

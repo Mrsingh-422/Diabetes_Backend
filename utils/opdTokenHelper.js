@@ -2,6 +2,8 @@
 const Appointment = require('../models/Appointment');
 const Doctor = require('../models/Doctor');
 const Availability = require('../models/Availability');
+const Bed = require('../models/Bed');
+const Ward = require('../models/Ward');
 const moment = require('moment');
 
 const formatDurationText = (minutes) => {
@@ -203,9 +205,68 @@ const getOpdTokenQueueStatus = async (appointment) => {
     };
 };
 
+
+/**
+ * Releases expired bed holds (10/20/30 mins) and synchronizes Ward availableBeds counts.
+ */
+const syncClinicWardAndBedCapacity = async (clinicId, specificWardId = null) => {
+    if (!clinicId) return;
+    const now = new Date();
+
+    // 1. Find all expired Clinic-Pending admission holds
+    const expiredAdmissions = await Appointment.find({
+        clinicId,
+        bookingType: 'Admission',
+        status: 'Clinic-Pending',
+        paymentStatus: 'Pending',
+        admissionHoldExpiresAt: { $ne: null, $lte: now }
+    });
+
+    for (const appt of expiredAdmissions) {
+        if (appt.bedId) {
+            await Bed.findByIdAndUpdate(appt.bedId, {
+                $set: { status: 'Available', holdExpiresAt: null, currentAppointmentId: null }
+            });
+        }
+        appt.status = 'Cancelled-By-Clinic';
+        appt.admissionHoldExpiresAt = null;
+        appt.cancellationDetails = {
+            reason: `Bed hold window (${appt.admissionHoldMinutes || 30} mins) expired. Bed automatically released.`,
+            cancelledAt: now,
+            isPermanent: true
+        };
+        await appt.save();
+    }
+
+    // 2. Also release any orphan Reserved beds whose holdExpiresAt passed
+    await Bed.updateMany(
+        {
+            clinicId,
+            status: 'Reserved',
+            holdExpiresAt: { $ne: null, $lte: now }
+        },
+        {
+            $set: { status: 'Available', holdExpiresAt: null, currentAppointmentId: null }
+        }
+    );
+
+    // 3. Recalculate accurate availableBeds on Wards
+    const wardQuery = specificWardId ? { _id: specificWardId, clinicId } : { clinicId };
+    const wards = await Ward.find(wardQuery).select('_id').lean();
+
+    for (const w of wards) {
+        const freeCount = await Bed.countDocuments({
+            clinicId,
+            wardId: w._id,
+            status: 'Available'
+        });
+        await Ward.findByIdAndUpdate(w._id, { $set: { availableBeds: freeCount } });
+    }
+};
 module.exports = {
     padToken,
     formatDurationText,
     assignOpdTokenToAppointment,
-    getOpdTokenQueueStatus
+    getOpdTokenQueueStatus,
+    syncClinicWardAndBedCapacity
 };

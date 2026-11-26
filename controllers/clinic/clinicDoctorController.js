@@ -1269,7 +1269,7 @@ const normalizeTime24 = (timeStr, fallback = "09:00") => {
     return parsed.isValid() ? parsed.format("HH:mm") : fallback;
 };
 // ==========================================
-// Helper: Generate Date-wise Live OPD Slot Grid for a Clinic Doctor
+// Helper: Generate Date-wise Live OPD Slot Grid (Includes isReferredSlot Flag)
 // ==========================================
 const buildDoctorLiveSlotsForDate = async (doctor, availConfig, targetDateStr) => {
     const cleanDate = moment(targetDateStr || new Date()).format("YYYY-MM-DD");
@@ -1326,7 +1326,7 @@ const buildDoctorLiveSlotsForDate = async (doctor, availConfig, targetDateStr) =
         bookingType: { $in: ['Appointment', 'Emergency'] },
         status: { $in: ['Pending', 'Clinic-Pending', 'Confirmed', 'In-Progress', 'Completed'] },
         appointmentDate: { $gte: dayStart, $lte: dayEnd }
-    }).select('appointmentTime bookingId status patients').lean();
+    }).select('appointmentTime bookingId status patients isReferredCase').lean();
 
     const bookedMap = {};
     bookedAppts.forEach((b) => {
@@ -1336,6 +1336,9 @@ const buildDoctorLiveSlotsForDate = async (doctor, availConfig, targetDateStr) =
 
     const unavailableSet = new Set(
         (availConfig?.unavailableSlots || []).map((t) => normalizeTime24(t, t))
+    );
+    const referredSlotSet = new Set(
+        (availConfig?.referredSlots || []).map((t) => normalizeTime24(t, t))
     );
 
     const dateBlockedMap = {};
@@ -1357,6 +1360,7 @@ const buildDoctorLiveSlotsForDate = async (doctor, availConfig, targetDateStr) =
         const bookedInfo = bookedMap[t24] || null;
         const dateBlockReason = dateBlockedMap[t24] || null;
         const isRecurringBlocked = unavailableSet.has(t24);
+        const isReferredSlot = referredSlotSet.has(t24);
 
         let status = "Available";
         if (dateBlockReason || isRecurringBlocked) status = "Blocked";
@@ -1368,6 +1372,8 @@ const buildDoctorLiveSlotsForDate = async (doctor, availConfig, targetDateStr) =
             time24: t24,
             displayTime: s.displayTime,
             category: s.category,
+            slotType: isReferredSlot ? 'Referred' : 'Regular',
+            isReferredSlot,
             status,
             isAvailable: status === "Available",
             isPremium: s.isPremium,
@@ -1377,7 +1383,8 @@ const buildDoctorLiveSlotsForDate = async (doctor, availConfig, targetDateStr) =
                 appointmentId: bookedInfo._id,
                 bookingId: bookedInfo.bookingId,
                 patientName: bookedInfo.patients?.[0]?.patientName || "Patient",
-                status: bookedInfo.status
+                status: bookedInfo.status,
+                isReferredCase: Boolean(bookedInfo.isReferredCase)
             } : null
         };
     });
@@ -1389,6 +1396,7 @@ const buildDoctorLiveSlotsForDate = async (doctor, availConfig, targetDateStr) =
         isClosed: false,
         totalSlots: finalSlots.length,
         availableCount: finalSlots.filter((x) => x.isAvailable).length,
+        referredAvailableCount: finalSlots.filter((x) => x.isAvailable && x.isReferredSlot).length,
         bookedCount: finalSlots.filter((x) => x.status === 'Booked').length,
         blockedCount: finalSlots.filter((x) => x.status === 'Blocked').length,
         slots: finalSlots
@@ -1396,11 +1404,9 @@ const buildDoctorLiveSlotsForDate = async (doctor, availConfig, targetDateStr) =
 };
 
 
-
 // ==========================================
-// 8. CLINIC SETS DOCTOR'S OPD CABIN, WEEKLY ROSTER, SLOTS & SYNCS AVAILABILITY (Without OPD Fee)
+// 8. CLINIC SETS DOCTOR'S OPD CABIN, WEEKLY ROSTER, REGULAR & REFERRED SLOTS
 // @route   PUT /api/clinic/doctors/configure-opd/:doctorId
-// @access  Private (Clinic)
 // ==========================================
 const configureDoctorOpdScheduleByClinic = async (req, res) => {
     try {
@@ -1416,6 +1422,7 @@ const configureDoctorOpdScheduleByClinic = async (req, res) => {
             isClinicAvailable,
             premiumSlots,
             unavailableSlots,
+            referredSlots, // e.g. ["12:00", "12:30", "04:00 PM"]
             startTime,
             endTime,
             offDays,
@@ -1445,7 +1452,6 @@ const configureDoctorOpdScheduleByClinic = async (req, res) => {
             return defaultVal;
         };
 
-        // 1. OPD Enable / Disable Flag
         let currentConsultation = safeParse(doctor.consultationStatus, { online: true, clinic: true, home: false });
         let isClinicAvail = doctor.isClinicAvailable !== undefined ? doctor.isClinicAvailable : true;
         const opdToggleInput = isOpdEnabled !== undefined ? isOpdEnabled : isClinicAvailable;
@@ -1456,7 +1462,6 @@ const configureDoctorOpdScheduleByClinic = async (req, res) => {
             isClinicAvail = enabledBool;
         }
 
-        // 2. Cabin / Room Number
         const resolvedCabin = cabinNumber !== undefined
             ? String(cabinNumber).trim()
             : (roomNumber !== undefined
@@ -1466,7 +1471,6 @@ const configureDoctorOpdScheduleByClinic = async (req, res) => {
         let currentDepartment = safeParse(doctor.department, { isNormal: true, isEmergency: false, roomNumber: resolvedCabin });
         currentDepartment.roomNumber = resolvedCabin;
 
-        // 3. Slot Duration & Shift Hours
         const existingAvail = await Availability.findOne({ vendorId: doctorId }).lean();
 
         const resolvedSlotDuration = slotDuration !== undefined
@@ -1488,7 +1492,6 @@ const configureDoctorOpdScheduleByClinic = async (req, res) => {
             });
         }
 
-        // 4. Weekly Roster: Resolve availableDays <-> offDays <-> doctor.availability
         let resolvedOffDays = existingAvail?.offDays || [];
         let parsedAvailabilityArray = doctor.availability || [];
 
@@ -1534,7 +1537,6 @@ const configureDoctorOpdScheduleByClinic = async (req, res) => {
             }
         }
 
-        // 5. Update Doctor Document (Without modifying fees)
         const updatedDoctor = await Doctor.findByIdAndUpdate(
             doctorId,
             {
@@ -1558,7 +1560,6 @@ const configureDoctorOpdScheduleByClinic = async (req, res) => {
             });
         }
 
-        // 6. Sync Availability Collection
         const availabilitySyncFields = {
             vendorId: new mongoose.Types.ObjectId(doctorId),
             vendorType: 'Doctor',
@@ -1585,13 +1586,19 @@ const configureDoctorOpdScheduleByClinic = async (req, res) => {
             availabilitySyncFields.unavailableSlots = rawUnavail.map((t) => normalizeTime24(t, t));
         }
 
+        if (referredSlots !== undefined) {
+            const rawRef = Array.isArray(referredSlots)
+                ? referredSlots
+                : safeParse(referredSlots, []);
+            availabilitySyncFields.referredSlots = rawRef.map((t) => normalizeTime24(t, t));
+        }
+
         const syncedAvail = await Availability.findOneAndUpdate(
             { vendorId: doctorId },
             { $set: availabilitySyncFields },
             { upsert: true, new: true }
         ).lean();
 
-        // 7. Generate Today's Live Slots Preview
         const liveSlotsPreview = await buildDoctorLiveSlotsForDate(
             updatedDoctor,
             syncedAvail,
@@ -1612,7 +1619,11 @@ const configureDoctorOpdScheduleByClinic = async (req, res) => {
                     startTime12h: moment(resolvedStartTime, "HH:mm").format("hh:mm A"),
                     endTime12h: moment(resolvedEndTime, "HH:mm").format("hh:mm A"),
                     offDays: resolvedOffDays,
-                    activeDays: FULL_DAYS.filter((d) => !resolvedOffDays.includes(d))
+                    activeDays: FULL_DAYS.filter((d) => !resolvedOffDays.includes(d)),
+                    referredSlots: (syncedAvail.referredSlots || []).map((t) => ({
+                        time: moment(t, "HH:mm").format("hh:mm A"),
+                        time24: t
+                    }))
                 },
                 availabilityConfig: syncedAvail,
                 liveSlotsPreview
@@ -1693,6 +1704,7 @@ const getDoctorOpdSettingsByClinic = async (req, res) => {
                     isOpdEnabled: doctor.isClinicAvailable !== false && doctor.consultationStatus?.clinic !== false,
                     slotDuration: Number(availConfig?.slotDuration || doctor.slotDuration || 30)
                 },
+                referredSlots: availConfig?.referredSlots || [],
                 clinicCabins: clinic?.cabins || [],
                 shiftHours: {
                     startTime: startTime24,
@@ -2016,7 +2028,65 @@ const respondToDoctorLeaveByClinic = async (req, res) => {
     }
 }
 
+// ==========================================
+// 17. GET REFERRED CASE AVAILABLE TIME SLOTS FOR A DOCTOR (Used by Clinic Reception Desk)
+// @route   GET /api/clinic/doctors/referred-slots/:doctorId?date=YYYY-MM-DD
+// @access  Private (Clinic)
+// ==========================================
+const getDoctorReferredSlotsForClinic = async (req, res) => {
+    try {
+        const clinicId = req.user.id;
+        const { doctorId } = req.params;
+        const { date } = req.query;
 
+        if (!mongoose.Types.ObjectId.isValid(doctorId)) {
+            return res.status(400).json({ success: false, message: "Invalid doctorId format." });
+        }
+
+        const [doctor, availConfig] = await Promise.all([
+            Doctor.findOne({ _id: doctorId, clinicId })
+                .select('name speciality qualification profileImage cabinNumber department fees slotDuration availability consultationStatus isClinicAvailable dutyStatus leaves')
+                .lean(),
+            Availability.findOne({ vendorId: doctorId }).lean()
+        ]);
+
+        if (!doctor) {
+            return res.status(404).json({ success: false, message: "Doctor not found in your clinic." });
+        }
+
+        const targetDateStr = date && String(date).trim() !== ''
+            ? moment(date).format("YYYY-MM-DD")
+            : moment().format("YYYY-MM-DD");
+
+        const liveGrid = await buildDoctorLiveSlotsForDate(doctor, availConfig, targetDateStr);
+        const dedicatedReferredSlots = (liveGrid.slots || []).filter((s) => s.isReferredSlot);
+        const regularSlots = (liveGrid.slots || []).filter((s) => !s.isReferredSlot);
+
+        return res.status(200).json({
+            success: true,
+            data: {
+                doctor: {
+                    _id: doctor._id,
+                    name: doctor.name,
+                    speciality: doctor.speciality,
+                    cabinNumber: doctor.cabinNumber || doctor.department?.roomNumber || "",
+                    opdFee: Number(doctor.fees?.clinic || 0),
+                    dutyStatus: doctor.dutyStatus || "On Duty"
+                },
+                date: liveGrid.date,
+                day: liveGrid.day,
+                isClosed: liveGrid.isClosed,
+                closedReason: liveGrid.reason || null,
+                hasDedicatedReferredSlots: dedicatedReferredSlots.length > 0,
+                referredSlots: dedicatedReferredSlots,
+                regularSlots
+            }
+        });
+    } catch (error) {
+        console.error("Get Doctor Referred Slots Error:", error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
 module.exports = {
     addClinicDoctor,
     getMyClinicDoctors,
@@ -2032,5 +2102,6 @@ module.exports = {
     toggleDoctorOpdSlotBlockByClinic,
     getClinicDoctorLeaves,
     respondToDoctorLeaveByClinic,
+    getDoctorReferredSlotsForClinic
     
 };

@@ -10,7 +10,13 @@ const {
     getClinicBookings,
     getSingleClinicBookingDetails,
     getClinicDirectBookings,
-    getClinicBookingResources
+    getClinicBookingResources,
+    getClinicReferredCases,
+    getSingleClinicReferredCase,
+    confirmAndPayReferredCase,
+    getClinicPendingAdmissionHolds,
+    collectClinicAdmissionCounterPayment,
+    switchClinicHeldBedAtCounter
 } = require('../../controllers/clinic/clinicAppointments');
 
 // Base URL: /api/clinic/booking
@@ -27,5 +33,15 @@ router.get('/all-bookings', protect('clinic'), getClinicBookings);
 
 // 3. Get Single Booking Full Details by ID or bookingId
 router.get('/booking/:bookingId', protect('clinic'), getSingleClinicBookingDetails);
+
+// Referred Cases Desk
+router.get('/referred-cases', protect('clinic'), getClinicReferredCases);
+router.get('/referred-cases/:referralId', protect('clinic'), getSingleClinicReferredCase);
+router.post('/referred-cases/:referralId/confirm-and-pay', protect('clinic'), confirmAndPayReferredCase);
+
+// IPD Admission Bed Holds Desk
+router.get('/admissions/pending-holds', protect('clinic'), getClinicPendingAdmissionHolds);
+router.patch('/admission/collect-payment/:id', protect('clinic'), collectClinicAdmissionCounterPayment);
+router.patch('/admission/switch-bed/:id', protect('clinic'), switchClinicHeldBedAtCounter);
 
 module.exports = router;

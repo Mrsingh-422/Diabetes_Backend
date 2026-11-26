@@ -49,7 +49,8 @@ const availabilitySchema = new mongoose.Schema({
     hourlyRateSurcharge: { type: Number, default: 0 }, // For "Acc. To Per/Hours"
 
     // "Delete" option ke liye: Vendor jin slots ko hide karna chahta hai
-    unavailableSlots: [String], // Example: ["10:30", "14:15"]
+    unavailableSlots: [String], // Recurring blocked times: ["10:30", "14:15"]
+    referredSlots: [String],    // Dedicated Referred Case Time Slots: ["12:00", "16:30"]
       blockedSlotsWithReason: [{
         date: { type: String, required: true }, // "YYYY-MM-DD"
         time: { type: String, required: true }, // "10:30 AM" or "10:30"

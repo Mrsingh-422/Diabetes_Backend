@@ -2,6 +2,8 @@
 
 const Appointment = require('../../../models/Appointment');
 const Prescription = require('../../../models/Prescription');
+const Bed = require('../../../models/Bed');
+const Ward = require('../../../models/Ward');
 const { getOpdTokenQueueStatus } = require('../../../utils/opdTokenHelper');
 const { sendPushNotification } = require('../../../utils/notification');
 const mongoose = require('mongoose');
@@ -984,6 +986,158 @@ const recallSkippedClinicOpdToken = async (req, res) => {
     }
 };
 
+// ==========================================
+// 10. START IPD INPATIENT CARE (Admitted Patient on Bed — No Token Generated)
+// @route   PATCH /api/clinic/doctor-panel/ipd/appointments/:id/start
+// @access  Private (Clinic Doctor)
+// ==========================================
+const startClinicIpdPatient = async (req, res) => {
+    try {
+        const doctorId = req.user.id;
+        const clinicId = req.user.clinicId || null;
+        const idCondition = buildIdCondition(req.params.id || req.body?.appointmentId);
+
+        if (!idCondition) {
+            return res.status(400).json({
+                success: false,
+                message: "Appointment ID or bookingId is required."
+            });
+        }
+
+        const { notes = "" } = req.body || {};
+
+        const appointment = await Appointment.findOne({
+            $and: [
+                idCondition,
+                { doctorId },
+                ...(clinicId ? [{ clinicId }] : []),
+                { bookingType: 'Admission' }
+            ]
+        });
+
+        if (!appointment) {
+            return res.status(404).json({
+                success: false,
+                message: "IPD admission appointment not found or not assigned to you."
+            });
+        }
+
+        const blockedStatuses = [
+            'Discharge-Pending',
+            'Completed',
+            'Cancelled-By-User',
+            'Cancelled-By-Doctor',
+            'Cancelled-By-Clinic',
+            'No-Show'
+        ];
+        if (blockedStatuses.includes(appointment.status)) {
+            return res.status(400).json({
+                success: false,
+                message: `Cannot start IPD care because admission status is '${appointment.status}'.`
+            });
+        }
+
+        const now = new Date();
+        appointment.status = 'In-Progress';
+        appointment.startDate = appointment.startDate || now;
+
+        if (appointment.doctorAcceptanceStatus !== 'Accepted') {
+            appointment.doctorAcceptanceStatus = 'Accepted';
+            appointment.doctorRespondedAt = appointment.doctorRespondedAt || now;
+        }
+
+        // Sync Bed to Occupied (without affecting other IPD beds/patients)
+        if (appointment.bedId) {
+            const bed = await Bed.findById(appointment.bedId);
+            if (bed && bed.status !== 'Occupied') {
+                bed.status = 'Occupied';
+                bed.currentAppointmentId = appointment._id;
+                await bed.save();
+
+                if (bed.wardId) {
+                    const freeBedsCount = await Bed.countDocuments({
+                        wardId: bed.wardId,
+                        status: 'Available'
+                    });
+                    await Ward.findByIdAndUpdate(bed.wardId, {
+                        $set: { availableBeds: freeBedsCount }
+                    });
+                }
+            }
+        }
+
+        // Log / Activate Doctor's IPD Shift in treatmentHistory
+        if (!Array.isArray(appointment.treatmentHistory)) {
+            appointment.treatmentHistory = [];
+        }
+
+        const openShiftForDoc = [...appointment.treatmentHistory]
+            .reverse()
+            .find((h) => h.toDoctorId && String(h.toDoctorId) === String(doctorId) && !h.endTime);
+
+        if (openShiftForDoc) {
+            openShiftForDoc.acceptanceStatus = 'Accepted';
+            openShiftForDoc.acceptedAt = openShiftForDoc.acceptedAt || now;
+            openShiftForDoc.startTime = openShiftForDoc.startTime || now;
+            openShiftForDoc.durationDisplay = "Active Duty";
+            if (String(notes).trim() !== "") {
+                openShiftForDoc.notes = `${openShiftForDoc.notes || ''} | [IPD Care Started: ${String(notes).trim()}]`;
+            }
+        } else {
+            appointment.treatmentHistory.push({
+                fromDoctorId: null,
+                toDoctorId: doctorId,
+                action: 'Initial-Assignment',
+                acceptanceStatus: 'Accepted',
+                assignedAt: appointment.createdAt || now,
+                acceptedAt: now,
+                unacceptedWaitDuration: formatShiftDuration(appointment.createdAt || now, now),
+                notes: String(notes).trim() || `${req.user.name} started inpatient care for ${appointment.wardName || 'IPD Ward'} (${appointment.bedNumber || 'Bed'}).`,
+                timestamp: now,
+                startTime: now,
+                endTime: null,
+                durationDisplay: "Active Duty"
+            });
+        }
+
+        await appointment.save();
+
+        // Notify Patient (Non-blocking)
+        if (appointment.userId) {
+            const bedLabel = appointment.bedNumber ? `Bed ${appointment.bedNumber}` : 'Ward';
+            const wardLabel = appointment.wardName ? `${appointment.wardName} (${bedLabel})` : bedLabel;
+
+            sendPushNotification(
+                appointment.userId,
+                'user',
+                "IPD Inpatient Care Started",
+                `${req.user.name} has started attending your admission (#${appointment.bookingId}) in ${wardLabel}.`,
+                {
+                    appointmentId: String(appointment._id),
+                    bookingId: String(appointment.bookingId || ""),
+                    type: "CLINIC_IPD_CARE_STARTED"
+                }
+            ).catch(() => {});
+        }
+
+        const populatedAdmission = await Appointment.findById(appointment._id)
+            .populate('userId', 'name phone email gender age profilePic')
+            .populate('doctorId', 'name speciality qualification profileImage cabinNumber dutyStatus')
+            .populate('wardId', 'name type pricePerDay')
+            .populate('bedId', 'bedNumber status pricePerDay')
+            .lean();
+
+        return res.status(200).json({
+            success: true,
+            message: `IPD inpatient care started for admission #${appointment.bookingId}. Status is now 'In-Progress'.`,
+            data: populatedAdmission
+        });
+    } catch (error) {
+        console.error("Start Clinic IPD Patient Error:", error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 module.exports = {
      getClinicDoctorOpdList,
     getClinicDoctorOpdById,
@@ -993,5 +1147,6 @@ module.exports = {
     getClinicDoctorEmergencyById,
     callNextClinicOpdToken,
     skipClinicOpdToken,
-    recallSkippedClinicOpdToken
+    recallSkippedClinicOpdToken,
+    startClinicIpdPatient
 };

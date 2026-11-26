@@ -16,6 +16,13 @@ const appointmentSchema = new mongoose.Schema({
     bedId: { type: mongoose.Schema.Types.ObjectId, ref: 'Bed', default: null },
     wardId: { type: mongoose.Schema.Types.ObjectId, ref: 'Ward', default: null },
     opdAppointmentId: { type: mongoose.Schema.Types.ObjectId, ref: 'Appointment', default: null },
+    
+    admissionHoldExpiresAt: { type: Date, default: null },
+    admissionHoldMinutes: { type: Number, default: 30 },
+    isReferredCase: { type: Boolean, default: false },
+    referredByDoctorId: { type: mongoose.Schema.Types.ObjectId, ref: 'Doctor', default: null },
+    referredFromAppointmentId: { type: mongoose.Schema.Types.ObjectId, ref: 'Appointment', default: null },
+    referralRecordId: { type: mongoose.Schema.Types.ObjectId, ref: 'ReferredToAnotherDoctor', default: null },
     prescriptionId: { type: mongoose.Schema.Types.ObjectId, ref: 'Prescription', default: null },
 
     ambulanceId: { type: mongoose.Schema.Types.ObjectId, ref: 'Ambulance', default: null },

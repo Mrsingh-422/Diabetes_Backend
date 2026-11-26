@@ -7,6 +7,10 @@ const Ambulance = require('../../models/Ambulance');
 const Bed = require('../../models/Bed');
 const Ward = require('../../models/Ward');
 const User = require('../../models/User');
+const ReferredToAnotherDoctor = require('../../models/ReferredToAnotherDoctor');
+const Prescription = require('../../models/Prescription');
+const {  syncClinicWardAndBedCapacity } = require('../../utils/opdTokenHelper');
+const { sendPushNotification } = require('../../utils/notification');
 const crypto = require('crypto');
 const moment = require('moment');
 const { assignOpdTokenToAppointment, getOpdTokenQueueStatus } = require('../../utils/opdTokenHelper');
@@ -607,10 +611,527 @@ const getClinicBookingResources = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
+// ==========================================
+// 🔁 6. CLINIC GETS ONLY REFERRED CASES LIST (Sent by Clinic Doctors)
+// @route   GET /api/clinic/booking/referred-cases?status=Pending-Clinic-Booking
+// ==========================================
+const getClinicReferredCases = async (req, res) => {
+    try {
+        const clinicId = req.user.id;
+        const { status, search, page = 1, limit = 20 } = req.query;
+
+        const pageNum = Math.max(1, parseInt(page, 10) || 1);
+        const limitNum = Math.max(1, parseInt(limit, 10) || 20);
+        const skip = (pageNum - 1) * limitNum;
+
+        const query = { clinicId };
+        if (status && String(status).trim() !== '') {
+            query.status = String(status).trim();
+        }
+
+        if (search && String(search).trim() !== '') {
+            const regex = new RegExp(String(search).trim(), 'i');
+            query.$or = [
+                { referralCode: regex },
+                { reason: regex }
+            ];
+        }
+
+        const [totalDocs, referrals, pendingCount, bookedCount] = await Promise.all([
+            ReferredToAnotherDoctor.countDocuments(query),
+            ReferredToAnotherDoctor.find(query)
+                .populate('userId', 'name phone email gender age profilePic')
+                .populate('referredByDoctorId', 'name speciality cabinNumber profileImage')
+                .populate('referredToDoctorId', 'name speciality fees cabinNumber profileImage')
+                .populate('sourceAppointmentId', 'bookingId patients appointmentDate clinicalSummary')
+                .populate('bookedAppointmentId', 'bookingId tokenNumber formattedToken appointmentDate appointmentTime status')
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(limitNum)
+                .lean(),
+            ReferredToAnotherDoctor.countDocuments({ clinicId, status: 'Pending-Clinic-Booking' }),
+            ReferredToAnotherDoctor.countDocuments({ clinicId, status: 'Booked-And-Paid' })
+        ]);
+
+        return res.status(200).json({
+            success: true,
+            summary: { pendingCount, bookedCount },
+            totalDocs,
+            totalPages: Math.ceil(totalDocs / limitNum) || 1,
+            currentPage: pageNum,
+            count: referrals.length,
+            data: referrals
+        });
+    } catch (error) {
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// ==========================================
+// 🔍 7. CLINIC GETS SINGLE REFERRED CASE FULL DETAILS (Includes Doctor A's Prescription & Vitals)
+// @route   GET /api/clinic/booking/referred-cases/:referralId
+// ==========================================
+const getSingleClinicReferredCase = async (req, res) => {
+    try {
+        const clinicId = req.user.id;
+        const { referralId } = req.params;
+
+        const idQuery = mongoose.Types.ObjectId.isValid(referralId)
+            ? { $or: [{ _id: referralId }, { referralCode: referralId }] }
+            : { referralCode: referralId };
+
+        const referral = await ReferredToAnotherDoctor.findOne({ $and: [idQuery, { clinicId }] })
+            .populate('userId', 'name phone email gender dob age bloodgroup profilePic')
+            .populate('referredByDoctorId', 'name speciality qualification cabinNumber profileImage')
+            .populate('referredToDoctorId', 'name speciality qualification fees cabinNumber profileImage dutyStatus')
+            .populate('sourceAppointmentId')
+            .populate('prescriptionId')
+            .populate('bookedAppointmentId')
+            .lean();
+
+        if (!referral) {
+            return res.status(404).json({ success: false, message: "Referred case not found." });
+        }
+
+        // Fetch all prescriptions written on the source appointment
+        const sourcePrescriptions = referral.sourceAppointmentId?._id
+            ? await Prescription.find({ appointmentId: referral.sourceAppointmentId._id })
+                .populate('doctorId', 'name speciality qualification')
+                .sort({ createdAt: -1 })
+                .lean()
+            : [];
+
+        return res.status(200).json({
+            success: true,
+            data: {
+                ...referral,
+                sourcePrescriptions
+            }
+        });
+    } catch (error) {
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// ==========================================
+// 💳 8. CLINIC RECEPTION COLLECTS PAYMENT, SELECTS REFERRED SLOT & BOOKS APPOINTMENT
+// @route   POST /api/clinic/booking/referred-cases/:referralId/confirm-and-pay
+// ==========================================
+const confirmAndPayReferredCase = async (req, res) => {
+    try {
+        const clinicId = req.user.id;
+        const { referralId } = req.params;
+        const {
+            appointmentDate,
+            appointmentTime,
+            paymentMethod = 'Cash',
+            amount,
+            transactionReference = "",
+            notes = ""
+        } = req.body || {};
+
+        if (!appointmentDate || !appointmentTime) {
+            return res.status(400).json({
+                success: false,
+                message: "appointmentDate (YYYY-MM-DD) and appointmentTime are required."
+            });
+        }
+
+        const idQuery = mongoose.Types.ObjectId.isValid(referralId)
+            ? { $or: [{ _id: referralId }, { referralCode: referralId }] }
+            : { referralCode: referralId };
+
+        const referral = await ReferredToAnotherDoctor.findOne({ $and: [idQuery, { clinicId }] });
+        if (!referral) {
+            return res.status(404).json({ success: false, message: "Referred case not found." });
+        }
+
+        if (referral.status === 'Booked-And-Paid') {
+            return res.status(400).json({
+                success: false,
+                message: "This referred case has already been booked and paid."
+            });
+        }
+
+        const [sourceAppt, targetDoctor] = await Promise.all([
+            Appointment.findById(referral.sourceAppointmentId).lean(),
+            Doctor.findById(referral.referredToDoctorId).select('name speciality fees cabinNumber department').lean()
+        ]);
+
+        if (!targetDoctor) {
+            return res.status(404).json({ success: false, message: "Target referred doctor not found." });
+        }
+
+        const payableFee = amount !== undefined ? Number(amount) : Number(targetDoctor.fees?.clinic || referral.feeAmount || 500);
+        const targetDateObj = new Date(appointmentDate);
+        const now = new Date();
+        const newBookingId = `CLN-REF-${Math.floor(100000 + Math.random() * 900000)}`;
+
+        // Create Confirmed OPD Appointment for the Referred Doctor
+        const newAppointment = await Appointment.create({
+            bookingId: newBookingId,
+            userId: referral.userId,
+            clinicId,
+            doctorId: targetDoctor._id,
+            doctorAcceptanceStatus: 'Pending',
+            isReferredCase: true,
+            referredByDoctorId: referral.referredByDoctorId,
+            referredFromAppointmentId: referral.sourceAppointmentId,
+            referralRecordId: referral._id,
+            bookingType: 'Appointment',
+            consultationType: 'Clinic Visit',
+            bookingReason: notes || referral.reason || "Referred Specialist Consultation",
+            appointmentDate: targetDateObj,
+            appointmentTime: String(appointmentTime).trim(),
+            patients: sourceAppt?.patients || [{ patientName: "Patient", patientAge: 30, gender: 'Male', relation: 'Self', isMainUser: true }],
+            address: sourceAppt?.address || { addressType: 'Home' },
+            pricingBreakdown: {
+                baseFee: payableFee,
+                originalBaseFee: payableFee,
+                visitCharges: 0,
+                extraCharges: 0,
+                discountAmount: 0,
+                subtotal: payableFee
+            },
+            totalAmount: payableFee,
+            paymentStatus: 'Paid',
+            status: 'Confirmed',
+            paymentDetails: {
+                method: paymentMethod,
+                amount: payableFee,
+                currency: 'INR',
+                status: 'captured',
+                razorpayPaymentId: transactionReference || `COUNTER-REF-${Date.now().toString().slice(-6)}`,
+                paidAt: now
+            },
+            clinicalSummary: {
+                chiefComplaint: sourceAppt?.clinicalSummary?.chiefComplaint || referral.reason,
+                diagnosis: sourceAppt?.clinicalSummary?.diagnosis || "",
+                doctorSuggestions: referral.clinicalNotes || sourceAppt?.clinicalSummary?.doctorSuggestions || "",
+                vitals: sourceAppt?.clinicalSummary?.vitals || {}
+            },
+            treatmentHistory: [{
+                fromDoctorId: referral.referredByDoctorId,
+                toDoctorId: targetDoctor._id,
+                action: 'Initial-Assignment',
+                acceptanceStatus: 'Pending-Acceptance',
+                assignedAt: now,
+                notes: `Referred case booked at Clinic Reception for slot ${appointmentTime}.`,
+                startTime: now
+            }]
+        });
+
+        // Generate OPD Token under Referred Doctor's Queue
+        await assignOpdTokenToAppointment(newAppointment);
+
+        // Update Referral Record
+        referral.status = 'Booked-And-Paid';
+        referral.bookedAppointmentId = newAppointment._id;
+        referral.referredDate = targetDateObj;
+        referral.referredSlotTime = String(appointmentTime).trim();
+        referral.feeAmount = payableFee;
+        referral.paymentMethod = paymentMethod;
+        referral.paymentStatus = 'Paid';
+        referral.transactionReference = newAppointment.paymentDetails.razorpayPaymentId;
+        referral.bookedAt = now;
+        await referral.save();
+
+        // Notify Referred Doctor & Patient
+        Promise.allSettled([
+            sendPushNotification(
+                targetDoctor._id,
+                'doctor',
+                "New Referred Case Booked",
+                `Clinic Reception booked a referred OPD case (#${newAppointment.bookingId} • Token #${newAppointment.formattedToken}) for ${appointmentTime}.`,
+                { appointmentId: String(newAppointment._id), type: "CLINIC_REFERRED_APPT_BOOKED" }
+            ),
+            sendPushNotification(
+                referral.userId,
+                'user',
+                "Referred Appointment Confirmed",
+                `Your referred appointment with ${targetDoctor.name} is confirmed for ${moment(targetDateObj).format("DD MMM")} at ${appointmentTime} (Token #${newAppointment.formattedToken}).`,
+                { appointmentId: String(newAppointment._id), formattedToken: newAppointment.formattedToken, type: "USER_REFERRED_APPT_CONFIRMED" }
+            )
+        ]).catch(() => {});
+
+        return res.status(201).json({
+            success: true,
+            message: `Referred appointment booked & paid! Token #${newAppointment.formattedToken} assigned for ${targetDoctor.name}.`,
+            data: {
+                referral,
+                appointment: newAppointment
+            }
+        });
+    } catch (error) {
+        console.error("Confirm And Pay Referred Case Error:", error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// ==========================================
+// ⏳ 9. CLINIC RECEPTION GETS PENDING BED ADMISSION HOLDS (With Live Countdown)
+// @route   GET /api/clinic/booking/admissions/pending-holds
+// ==========================================
+const getClinicPendingAdmissionHolds = async (req, res) => {
+    try {
+        const clinicId = req.user.id;
+        const now = new Date();
+
+        await syncClinicWardAndBedCapacity(clinicId);
+
+        const pendingHolds = await Appointment.find({
+            clinicId,
+            bookingType: 'Admission',
+            status: 'Clinic-Pending',
+            paymentStatus: 'Pending',
+            admissionHoldExpiresAt: { $gt: now }
+        })
+            .populate('userId', 'name phone email profilePic age gender')
+            .populate('doctorId', 'name speciality cabinNumber profileImage')
+            .populate({
+                path: 'bedId',
+                select: 'bedNumber pricePerDay isVentilatorAvailable wardId',
+                populate: { path: 'wardId', select: 'name type' }
+            })
+            .populate('opdAppointmentId', 'bookingId tokenNumber formattedToken appointmentDate')
+            .sort({ admissionHoldExpiresAt: 1 })
+            .lean();
+
+        const formattedData = pendingHolds.map((item) => {
+            const holdDeadline = new Date(item.admissionHoldExpiresAt);
+            const remainingSeconds = Math.max(0, Math.floor((holdDeadline.getTime() - now.getTime()) / 1000));
+
+            return {
+                admissionAppointmentId: item._id,
+                admissionBookingId: item.bookingId,
+                parentOpdBooking: item.opdAppointmentId ? {
+                    opdBookingId: item.opdAppointmentId.bookingId,
+                    formattedToken: item.opdAppointmentId.formattedToken
+                } : null,
+                patient: {
+                    name: item.patients?.[0]?.patientName || item.userId?.name || "Patient",
+                    phone: item.userId?.phone || "N/A",
+                    age: item.patients?.[0]?.patientAge || item.userId?.age || 30,
+                    gender: item.patients?.[0]?.gender || item.userId?.gender || "Male"
+                },
+                doctor: {
+                    doctorId: item.doctorId?._id,
+                    name: item.doctorId?.name || "Doctor",
+                    speciality: item.doctorId?.speciality || "Specialist",
+                    cabinNumber: item.doctorId?.cabinNumber || ""
+                },
+                wardName: item.wardName || item.bedId?.wardId?.name,
+                bedNumber: item.bedNumber || item.bedId?.bedNumber,
+                bedId: item.bedId?._id,
+                isVentilatorAvailable: Boolean(item.bedId?.isVentilatorAvailable),
+                depositPayable: item.totalAmount || 0,
+                stayDays: item.stayDuration || 1,
+                triageLevel: item.triageLevel || "Urgent",
+                bookingReason: item.bookingReason || "",
+                holdMinutes: item.admissionHoldMinutes || 30,
+                holdExpiresAt: item.admissionHoldExpiresAt,
+                remainingSeconds,
+                formattedRemainingTime: `${Math.floor(remainingSeconds / 60)}m ${remainingSeconds % 60}s`,
+                vitalsAtAdmission: item.clinicalSummary?.vitals || null,
+                insuranceDetails: item.insuranceDetails || null
+            };
+        });
+
+        return res.status(200).json({
+            success: true,
+            count: formattedData.length,
+            data: formattedData
+        });
+    } catch (error) {
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// ==========================================
+// 🛏️ 10. CLINIC RECEPTION COLLECTS ADMISSION DEPOSIT (Removes Hold & Allots Bed as Occupied)
+// @route   PATCH /api/clinic/booking/admission/collect-payment/:id
+// ==========================================
+const collectClinicAdmissionCounterPayment = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const clinicId = req.user.id;
+        const rawPaymentMode = req.body?.paymentMode || req.body?.paymentMethod || 'Cash';
+        const { transactionReference = "", remarks = "" } = req.body || {};
+
+        const isObjectId = mongoose.isValidObjectId(id);
+        const query = {
+            clinicId,
+            bookingType: 'Admission',
+            ...(isObjectId ? { _id: id } : { bookingId: String(id).trim() })
+        };
+
+        const appointment = await Appointment.findOne(query).populate('userId', 'name phone');
+        if (!appointment) {
+            return res.status(404).json({ success: false, message: "Bed admission record not found." });
+        }
+
+        if (appointment.paymentStatus === 'Paid') {
+            return res.status(400).json({ success: false, message: "Deposit for this bed is already paid." });
+        }
+
+        const now = new Date();
+        if (appointment.admissionHoldExpiresAt && now > new Date(appointment.admissionHoldExpiresAt)) {
+            await syncClinicWardAndBedCapacity(clinicId);
+            return res.status(400).json({
+                success: false,
+                isExpired: true,
+                message: `The ${appointment.admissionHoldMinutes || 30}-minute hold window for this bed has expired. Bed was released.`
+            });
+        }
+
+        const bed = await Bed.findById(appointment.bedId);
+        if (!bed) {
+            return res.status(404).json({ success: false, message: "Assigned bed record not found." });
+        }
+
+        // Remove hold and allot bed as Occupied
+        bed.status = 'Occupied';
+        bed.holdExpiresAt = null;
+        bed.currentAppointmentId = appointment._id;
+        await bed.save();
+
+        appointment.paymentStatus = 'Paid';
+        appointment.status = 'In-Progress';
+        appointment.admissionHoldExpiresAt = null;
+        appointment.paymentDetails = {
+            method: String(rawPaymentMode).trim(),
+            amount: appointment.totalAmount,
+            currency: 'INR',
+            status: 'captured',
+            paidAt: now,
+            bank: remarks || "Clinic Reception Cash/POS Counter",
+            razorpayPaymentId: transactionReference || `COUNTER-ADM-${Date.now().toString().slice(-6)}`
+        };
+        await appointment.save();
+
+        await syncClinicWardAndBedCapacity(clinicId, bed.wardId);
+
+        if (appointment.userId?._id) {
+            sendPushNotification(
+                appointment.userId._id,
+                'user',
+                "Admission & Bed Confirmed!",
+                `Payment of ₹${appointment.totalAmount} received. Bed ${appointment.bedNumber} (${appointment.wardName}) is now allotted to you.`,
+                { appointmentId: String(appointment._id), type: 'admission_confirmed' }
+            ).catch(() => {});
+        }
+
+        return res.status(200).json({
+            success: true,
+            message: `Bed hold removed & Bed ${appointment.bedNumber} (${appointment.wardName}) allotted! Deposit ₹${appointment.totalAmount} collected.`,
+            bookingId: appointment.bookingId,
+            bedNumber: appointment.bedNumber,
+            wardName: appointment.wardName,
+            data: appointment
+        });
+    } catch (error) {
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// ==========================================
+// 🔄 11. CLINIC RECEPTION SWITCHES HELD BED BEFORE PAYMENT
+// @route   PATCH /api/clinic/booking/admission/switch-bed/:id
+// ==========================================
+const switchClinicHeldBedAtCounter = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const clinicId = req.user.id;
+        const { newBedId } = req.body || {};
+
+        if (!newBedId || !mongoose.isValidObjectId(newBedId)) {
+            return res.status(400).json({ success: false, message: "Valid newBedId is required." });
+        }
+
+        const isObjectId = mongoose.isValidObjectId(id);
+        const query = {
+            clinicId,
+            bookingType: 'Admission',
+            ...(isObjectId ? { _id: id } : { bookingId: String(id).trim() })
+        };
+
+        const appointment = await Appointment.findOne(query);
+        if (!appointment) {
+            return res.status(404).json({ success: false, message: "Bed admission record not found." });
+        }
+
+        if (appointment.paymentStatus === 'Paid') {
+            return res.status(400).json({ success: false, message: "Deposit is already paid for this bed." });
+        }
+
+        const now = new Date();
+        if (appointment.admissionHoldExpiresAt && now > new Date(appointment.admissionHoldExpiresAt)) {
+            await syncClinicWardAndBedCapacity(clinicId);
+            return res.status(400).json({
+                success: false,
+                isExpired: true,
+                message: "Hold has expired. Please ask doctor to re-initiate admission."
+            });
+        }
+
+        const newTargetBed = await Bed.findOne({ _id: newBedId, clinicId }).populate('wardId');
+        if (!newTargetBed || newTargetBed.status !== 'Available') {
+            return res.status(400).json({ success: false, message: "Target bed is not available." });
+        }
+
+        if (appointment.bedId) {
+            await Bed.findByIdAndUpdate(appointment.bedId, {
+                $set: { status: 'Available', holdExpiresAt: null, currentAppointmentId: null }
+            });
+        }
+
+        newTargetBed.status = 'Reserved';
+        newTargetBed.holdExpiresAt = appointment.admissionHoldExpiresAt;
+        newTargetBed.currentAppointmentId = appointment._id;
+        await newTargetBed.save();
+
+        const days = Math.max(1, Number(appointment.stayDuration || 1));
+        const newDeposit = Number(newTargetBed.pricePerDay || newTargetBed.wardId?.pricePerDay || 500) * days;
+        const newWardTitle = newTargetBed.wardId?.name || "Clinic Ward";
+
+        appointment.wardId = newTargetBed.wardId?._id || null;
+        appointment.bedId = newTargetBed._id;
+        appointment.bedNumber = newTargetBed.bedNumber;
+        appointment.wardName = newWardTitle;
+        appointment.totalAmount = newDeposit;
+        if (!appointment.pricingBreakdown) appointment.pricingBreakdown = {};
+        appointment.pricingBreakdown.baseFee = newDeposit;
+        appointment.pricingBreakdown.visitCharges = newDeposit;
+        appointment.pricingBreakdown.subtotal = newDeposit;
+        await appointment.save();
+
+        await syncClinicWardAndBedCapacity(clinicId);
+
+        return res.status(200).json({
+            success: true,
+            message: `Bed switched to ${newWardTitle} (${newTargetBed.bedNumber}). New deposit: ₹${newDeposit}.`,
+            newBedNumber: newTargetBed.bedNumber,
+            newWardName: newWardTitle,
+            newDepositPayable: newDeposit,
+            data: appointment
+        });
+    } catch (error) {
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
 module.exports = {
     createClinicAppointmentByClinic,
     getClinicBookings,
     getSingleClinicBookingDetails,
     getClinicDirectBookings,
-    getClinicBookingResources
+    getClinicBookingResources,
+    getClinicReferredCases,
+    getSingleClinicReferredCase,
+    confirmAndPayReferredCase,
+    getClinicPendingAdmissionHolds,
+    collectClinicAdmissionCounterPayment,
+    switchClinicHeldBedAtCounter
 };

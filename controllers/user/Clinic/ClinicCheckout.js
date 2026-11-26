@@ -9,9 +9,7 @@ const CodConfig = require('../../../models/CodConfig');
 const Ward = require('../../../models/Ward');
 const Bed = require('../../../models/Bed');
 const mongoose = require('mongoose');
-const { assignOpdTokenToAppointment, getOpdTokenQueueStatus } = require('../../../utils/opdTokenHelper');
-
-
+const { assignOpdTokenToAppointment, getOpdTokenQueueStatus, syncClinicWardAndBedCapacity } = require('../../../utils/opdTokenHelper');
 const crypto = require('crypto');
 const {
     createRazorpayOrder,
@@ -470,7 +468,7 @@ const bookClinicOrder = async (req, res) => {
 };
 
 // ==========================================
-// 💳 3. VERIFY RAZORPAY PAYMENT (Generates OPD Token after Payment Confirmation)
+// 💳 3. VERIFY RAZORPAY PAYMENT (OPD Token + Removes IPD Bed Hold & Allots Bed)
 // ==========================================
 const verifyClinicPayment = async (req, res) => {
     try {
@@ -520,7 +518,8 @@ const verifyClinicPayment = async (req, res) => {
 
         booking.paymentStatus = 'Paid';
         booking.paymentMethod = 'Online';
-        booking.status = 'Confirmed';
+        booking.status = booking.bookingType === 'Admission' ? 'In-Progress' : 'Confirmed';
+        booking.admissionHoldExpiresAt = null;
         booking.paymentDetails = {
             razorpayPaymentId,
             razorpayOrderId,
@@ -528,18 +527,22 @@ const verifyClinicPayment = async (req, res) => {
             paidAt: new Date()
         };
 
-        if (booking.bedId) {
-            const bed = await Bed.findByIdAndUpdate(
-                booking.bedId,
-                { status: 'Occupied', currentAppointmentId: booking._id },
-                { new: false }
-            );
-            if (bed && bed.status !== 'Occupied' && booking.wardId) {
-                await Ward.findByIdAndUpdate(booking.wardId, { $inc: { availableBeds: -1 } });
-            }
-        }
-
         await booking.save();
+
+        // Remove hold & allot Bed as Occupied (and sync Ward availableBeds)
+        if (booking.bedId) {
+            await Bed.findByIdAndUpdate(
+                booking.bedId,
+                {
+                    $set: {
+                        status: 'Occupied',
+                        holdExpiresAt: null,
+                        currentAppointmentId: booking._id
+                    }
+                }
+            );
+            await syncClinicWardAndBedCapacity(booking.clinicId, booking.wardId);
+        }
 
         // Generate OPD Token on Payment Confirmation if OPD + Doctor selected
         let tokenDetails = null;
@@ -552,7 +555,9 @@ const verifyClinicPayment = async (req, res) => {
             success: true,
             message: tokenDetails?.formattedToken
                 ? `Payment verified & clinic booking confirmed! Your OPD Token is #${tokenDetails.formattedToken}.`
-                : "Payment verified successfully & clinic booking confirmed!",
+                : (booking.bookingType === 'Admission'
+                    ? `Payment verified! Bed ${booking.bedNumber || ''} is now allotted to you.`
+                    : "Payment verified successfully & clinic booking confirmed!"),
             tokenDetails,
             data: booking
         });
@@ -730,11 +735,116 @@ const getMyOpdTokenLiveStatus = async (req, res) => {
     }
 };
 
+// ==========================================
+// ⏳ 7. USER GETS OWN ACTIVE BED ADMISSION HOLDS (Live Countdown)
+// @route   GET /api/clinic/checkout/pending-admission-holds
+// ==========================================
+const getUserPendingAdmissionHolds = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const now = new Date();
+
+        const holds = await Appointment.find({
+            userId,
+            bookingType: 'Admission',
+            status: 'Clinic-Pending',
+            paymentStatus: 'Pending',
+            admissionHoldExpiresAt: { $gt: now }
+        })
+            .populate('clinicId', 'name clinicName address city image')
+            .populate('doctorId', 'name speciality profileImage cabinNumber')
+            .populate('bedId', 'bedNumber pricePerDay isVentilatorAvailable')
+            .populate('wardId', 'name type')
+            .sort({ admissionHoldExpiresAt: 1 })
+            .lean();
+
+        const data = holds.map((item) => {
+            const remainingSeconds = Math.max(
+                0,
+                Math.floor((new Date(item.admissionHoldExpiresAt).getTime() - now.getTime()) / 1000)
+            );
+            return {
+                _id: item._id,
+                bookingId: item.bookingId,
+                clinic: item.clinicId,
+                doctor: item.doctorId,
+                wardName: item.wardName || item.wardId?.name,
+                bedNumber: item.bedNumber || item.bedId?.bedNumber,
+                stayDuration: item.stayDuration || 1,
+                depositPayable: item.totalAmount || 0,
+                holdMinutes: item.admissionHoldMinutes || 30,
+                holdExpiresAt: item.admissionHoldExpiresAt,
+                remainingSeconds,
+                formattedRemainingTime: `${Math.floor(remainingSeconds / 60)}m ${remainingSeconds % 60}s`
+            };
+        });
+
+        return res.status(200).json({ success: true, count: data.length, data });
+    } catch (error) {
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// ==========================================
+// 💳 8. USER INITIATES ONLINE PAYMENT FOR HELD BED ADMISSION
+// @route   POST /api/clinic/checkout/pay-admission-hold/:id
+// ==========================================
+const initiateAdmissionHoldOnlinePayment = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const { id } = req.params;
+
+        const idQuery = mongoose.Types.ObjectId.isValid(id)
+            ? { $or: [{ _id: id }, { bookingId: id }] }
+            : { bookingId: id };
+
+        const booking = await Appointment.findOne({ ...idQuery, userId, bookingType: 'Admission' });
+        if (!booking) {
+            return res.status(404).json({ success: false, message: "Held admission booking not found." });
+        }
+
+        if (booking.paymentStatus === 'Paid') {
+            return res.status(400).json({ success: false, message: "Admission deposit is already paid." });
+        }
+
+        if (booking.admissionHoldExpiresAt && new Date() > new Date(booking.admissionHoldExpiresAt)) {
+            return res.status(400).json({
+                success: false,
+                isExpired: true,
+                message: "Bed hold time has expired. Please contact clinic reception."
+            });
+        }
+
+        const totalPayable = Number(booking.totalAmount || 0);
+        const rzpOrder = await createRazorpayOrder(totalPayable, `adm_${booking.bookingId}_${Date.now()}`);
+
+        booking.paymentDetails = { ...booking.paymentDetails, razorpayOrderId: rzpOrder.id };
+        await booking.save();
+
+        const rawKey = process.env.RAZORPAY_KEY_ID || "rzp_test_T2f3swDLdaDZCP";
+        const razorpayKey = rawKey.replace(/["']/g, "").trim();
+
+        return res.status(200).json({
+            success: true,
+            key: razorpayKey,
+            amount: rzpOrder.amount,
+            amountInRupees: totalPayable,
+            currency: "INR",
+            razorpayOrderId: rzpOrder.id,
+            bookingId: booking.bookingId,
+            appointmentId: booking._id
+        });
+    } catch (error) {
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
 module.exports = {
     calculateClinicBill,
     bookClinicOrder,
     verifyClinicPayment,
     getMyClinicBookings,
     getSingleClinicBooking,
-    getMyOpdTokenLiveStatus
+    getMyOpdTokenLiveStatus,
+    getUserPendingAdmissionHolds,
+    initiateAdmissionHoldOnlinePayment
 };

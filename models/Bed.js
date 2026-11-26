@@ -18,7 +18,7 @@ const bedSchema = new mongoose.Schema(
     bedNumber: {
       type: String,
       required: true,
-      trim: true // e.g. "DC-01", "OBS-02", "GEN-05"
+      trim: true
     },
     status: {
       type: String,
@@ -30,6 +30,14 @@ const bedSchema = new mongoose.Schema(
       type: Number,
       required: true,
       default: 0
+    },
+    isVentilatorAvailable: {
+      type: Boolean,
+      default: false
+    },
+    holdExpiresAt: {
+      type: Date,
+      default: null
     },
     currentAppointmentId: {
       type: mongoose.Schema.Types.ObjectId,

@@ -47,6 +47,7 @@ const clinicSchema = new Schema(
 
     // Clinic Cabins / OPD Rooms Master
     totalCabins: { type: Number, default: 1 },
+    bedHoldDurationMinutes: { type: Number, default: 30, min: 5 }, // Configurable: 10, 20, 30 mins
     cabins: [{ type: String, trim: true }],
 
     // --- Operational Facilities & Ambulance Toggle ---
