@@ -1138,6 +1138,294 @@ const startClinicIpdPatient = async (req, res) => {
     }
 };
 
+// ==========================================
+// 11. CLINIC DOCTOR GETS ONLY REFERRED CASES ASSIGNED TO THEM
+// @route   GET /api/clinic/doctor-panel/referred/appointments
+// @access  Private (Clinic Doctor)
+// ==========================================
+const getClinicDoctorReferredCasesList = async (req, res) => {
+    try {
+        const doctorId = req.user.id;
+        const clinicId = req.user.clinicId || null;
+        const { status, date, search, page = 1, limit = 20 } = req.query;
+
+        const pageNum = Math.max(1, parseInt(page, 10) || 1);
+        const limitNum = Math.max(1, parseInt(limit, 10) || 20);
+        const skip = (pageNum - 1) * limitNum;
+
+        const andConditions = [
+            { doctorId: doctorId },
+            { isReferredCase: true }
+        ];
+
+        if (clinicId) {
+            andConditions.push({ clinicId });
+        }
+
+        if (status && String(status).trim() !== '') {
+            const cleanStatus = String(status).trim();
+            if (cleanStatus.toLowerCase() === 'active') {
+                andConditions.push({
+                    status: { $in: ['Pending', 'Clinic-Pending', 'Confirmed', 'In-Progress', 'Rescheduled'] }
+                });
+            } else if (cleanStatus.toLowerCase() === 'history') {
+                andConditions.push({
+                    status: { $in: ['Completed', 'Cancelled-By-User', 'Cancelled-By-Doctor', 'Cancelled-By-Clinic', 'No-Show'] }
+                });
+            } else {
+                andConditions.push({ status: cleanStatus });
+            }
+        }
+
+        if (date && date !== 'all' && String(date).trim() !== '') {
+            const targetMoment = String(date).toLowerCase() === 'today' ? moment() : moment(date);
+            if (!targetMoment.isValid()) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Invalid date format. Please use YYYY-MM-DD or 'today'."
+                });
+            }
+            const dayStart = targetMoment.clone().startOf('day').toDate();
+            const dayEnd = targetMoment.clone().endOf('day').toDate();
+
+            andConditions.push({
+                appointmentDate: { $gte: dayStart, $lte: dayEnd }
+            });
+        }
+
+        if (search && String(search).trim() !== '') {
+            const regex = new RegExp(String(search).trim(), 'i');
+            andConditions.push({
+                $or: [
+                    { bookingId: regex },
+                    { formattedToken: regex },
+                    { "patients.patientName": regex },
+                    { "address.name": regex },
+                    { "address.phone": regex },
+                    { bookingReason: regex }
+                ]
+            });
+        }
+
+        const query = { $and: andConditions };
+
+        const [totalDocs, docs] = await Promise.all([
+            Appointment.countDocuments(query),
+            Appointment.find(query)
+                .select('_id bookingId bookingType consultationType status doctorAcceptanceStatus isReferredCase referredByDoctorId referredFromAppointmentId referralRecordId appointmentDate appointmentTime tokenNumber formattedToken tokenIntervalMinutes opdRoomNumber isTokenSkipped tokenSkipCount bookingReason clinicalSummary totalAmount paymentStatus userId clinicId doctorId patients address createdAt')
+                .populate('userId', 'name phone profilePic gender dob age familyMember')
+                .populate('referredByDoctorId', 'name speciality cabinNumber profileImage')
+                .populate('referralRecordId', 'referralCode priority reason clinicalNotes bookedAt')
+                .sort({ appointmentDate: -1, isTokenSkipped: 1, tokenNumber: 1, createdAt: 1 })
+                .skip(skip)
+                .limit(limitNum)
+                .lean()
+        ]);
+
+        const data = await Promise.all(
+            docs.map(async (appt) => {
+                const patientProfile = resolvePatientProfile(appt);
+                const queueInfo = appt.tokenNumber ? await getOpdTokenQueueStatus(appt) : null;
+                const acceptanceState = appt.doctorAcceptanceStatus || 'Pending';
+
+                return {
+                    _id: appt._id,
+                    bookingId: appt.bookingId,
+                    referralCode: appt.referralRecordId?.referralCode || null,
+                    categoryTag: 'REFERRED',
+                    bookingType: appt.bookingType,
+                    isReferredCase: true,
+                    priority: appt.referralRecordId?.priority || 'Routine',
+                    status: appt.status,
+                    doctorAcceptanceStatus: acceptanceState,
+                    canRespondToAssignment: acceptanceState === 'Pending' &&
+                        !['Completed', 'Cancelled-By-User', 'Cancelled-By-Doctor', 'Cancelled-By-Clinic', 'No-Show'].includes(appt.status),
+                    consultationType: appt.consultationType || 'Clinic Visit',
+                    appointmentDate: appt.appointmentDate ? moment(appt.appointmentDate).format('YYYY-MM-DD') : null,
+                    appointmentTime: appt.appointmentTime || "",
+                    tokenNumber: appt.tokenNumber || null,
+                    formattedToken: appt.formattedToken || "",
+                    tokenIntervalMinutes: appt.tokenIntervalMinutes || null,
+                    opdRoomNumber: appt.opdRoomNumber || "",
+                    isTokenSkipped: Boolean(appt.isTokenSkipped),
+                    patient: {
+                        name: patientProfile.patientName,
+                        age: patientProfile.age,
+                        gender: patientProfile.gender,
+                        phone: patientProfile.phone,
+                        profilePic: patientProfile.profilePic
+                    },
+                    referredByDoctor: appt.referredByDoctorId || null,
+                    referralReason: appt.referralRecordId?.reason || appt.bookingReason || "",
+                    clinicalNotesFromReferringDoctor: appt.referralRecordId?.clinicalNotes || appt.clinicalSummary?.doctorSuggestions || "",
+                    paymentStatus: appt.paymentStatus || 'Pending',
+                    totalAmount: appt.totalAmount || 0,
+                    queueInfo,
+                    createdAt: appt.createdAt
+                };
+            })
+        );
+
+        return res.status(200).json({
+            success: true,
+            category: 'REFERRED',
+            totalDocs,
+            totalPages: Math.ceil(totalDocs / limitNum) || 1,
+            currentPage: pageNum,
+            limit: limitNum,
+            count: data.length,
+            data
+        });
+    } catch (error) {
+        console.error("Get Clinic Doctor Referred Cases List Error:", error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// ==========================================
+// 12. CLINIC DOCTOR GETS SINGLE REFERRED CASE FULL DETAILS BY ID
+// (Includes Referring Doctor's Prescriptions, Vitals & Notes)
+// @route   GET /api/clinic/doctor-panel/referred/appointments/:id
+// @access  Private (Clinic Doctor)
+// ==========================================
+const getClinicDoctorReferredCaseById = async (req, res) => {
+    try {
+        const doctorId = req.user.id;
+        const clinicId = req.user.clinicId || null;
+        const idCondition = buildIdCondition(req.params.id);
+
+        if (!idCondition) {
+            return res.status(400).json({
+                success: false,
+                message: "Appointment ID or bookingId is required."
+            });
+        }
+
+        const andConditions = [
+            idCondition,
+            { doctorId: doctorId },
+            { isReferredCase: true }
+        ];
+
+        if (clinicId) {
+            andConditions.push({ clinicId });
+        }
+
+        const appointment = await Appointment.findOne({ $and: andConditions })
+            .populate(
+                'userId',
+                'name email phone profilePic gender dob age bloodgroup height weight diabeticType sinceHowLong diabeticduration takingmedicines otherMedicalCondition conditionStatus familyHistory familyMember insuranceDetails emergencyContact userAddress'
+            )
+            .populate(
+                'clinicId',
+                'name clinicName email phoneNumber address city state country image posterimage'
+            )
+            .populate(
+                'doctorId',
+                'name email phone speciality qualification experienceYears gender profileImage cabinNumber dutyStatus fees'
+            )
+            .populate(
+                'referredByDoctorId',
+                'name email phone speciality qualification cabinNumber profileImage'
+            )
+            .populate(
+                'referredFromAppointmentId',
+                'bookingId appointmentDate appointmentTime clinicalSummary'
+            )
+            .populate(
+                'referralRecordId',
+                'referralCode reason clinicalNotes priority bookedAt feeAmount paymentMethod paymentStatus'
+            )
+            .populate('prescriptionId')
+            .populate('clinicPharmacyReferral.pharmacyId', 'name phone address city')
+            .populate('clinicLabReferral.labId', 'name phone address city')
+            .populate('treatmentHistory.fromDoctorId', 'name speciality qualification profileImage phone')
+            .populate('treatmentHistory.toDoctorId', 'name speciality qualification profileImage phone')
+            .lean();
+
+        if (!appointment) {
+            return res.status(404).json({
+                success: false,
+                message: "Referred appointment not found or not assigned to you."
+            });
+        }
+
+        const [prescriptions, previousDoctorPrescriptions, tokenQueueStatus] = await Promise.all([
+            Prescription.find({ appointmentId: appointment._id })
+                .populate('doctorId', 'name speciality qualification signatureImage profileImage')
+                .sort({ createdAt: -1 })
+                .lean(),
+            appointment.referredFromAppointmentId?._id
+                ? Prescription.find({ appointmentId: appointment.referredFromAppointmentId._id })
+                    .populate('doctorId', 'name speciality qualification profileImage')
+                    .sort({ createdAt: -1 })
+                    .lean()
+                : Promise.resolve([]),
+            appointment.tokenNumber
+                ? getOpdTokenQueueStatus({
+                    ...appointment,
+                    clinicId: appointment.clinicId?._id || appointment.clinicId,
+                    doctorId: appointment.doctorId?._id || appointment.doctorId
+                })
+                : Promise.resolve(null)
+        ]);
+
+        const latestPrescription = prescriptions.length > 0 ? prescriptions[0] : null;
+        const resolvedPatient = resolvePatientProfile(appointment);
+        const enrichedTreatmentHistory = enrichTreatmentHistory(
+            appointment.treatmentHistory,
+            appointment.status
+        );
+
+        const clinicalFiles = {
+            prescriptionPdf: latestPrescription?.pdfUrl || null,
+            dischargeSummaryPdf: appointment.clinicalSummary?.dischargeSummaryPdf || null,
+            uploadedReports: appointment.clinicalSummary?.uploadedReports || [],
+            insuranceDocument: appointment.insuranceDetails?.insuranceDocument || null
+        };
+
+        const billingSummary = {
+            baseDoctorFee: appointment.pricingBreakdown?.baseFee || 0,
+            originalBaseFee: appointment.pricingBreakdown?.originalBaseFee || 0,
+            bedOrVisitCharges: appointment.pricingBreakdown?.visitCharges || 0,
+            ambulanceOrExtraCharges: appointment.pricingBreakdown?.extraCharges || 0,
+            specialServices: appointment.specialServices || [],
+            discountAmount: appointment.pricingBreakdown?.discountAmount || 0,
+            subtotal: appointment.pricingBreakdown?.subtotal || appointment.totalAmount || 0,
+            totalAmount: appointment.totalAmount || 0,
+            paymentStatus: appointment.paymentStatus || 'Pending',
+            paymentMethod: appointment.paymentMethod || appointment.paymentDetails?.method || null,
+            paymentDetails: appointment.paymentDetails || null
+        };
+
+        const acceptanceState = appointment.doctorAcceptanceStatus || 'Pending';
+
+        return res.status(200).json({
+            success: true,
+            category: 'REFERRED',
+            data: {
+                ...appointment,
+                categoryTag: 'REFERRED',
+                tokenQueueStatus,
+                resolvedPatient,
+                treatmentHistory: enrichedTreatmentHistory,
+                billingSummary,
+                clinicalFiles,
+                prescriptions,
+                previousDoctorPrescriptions,
+                doctorPermissions: {
+                    isPrimaryDoctor: true,
+                    doctorAcceptanceStatus: acceptanceState,
+                    canRespondToAssignment: acceptanceState === 'Pending' &&
+                        !['Completed', 'Cancelled-By-User', 'Cancelled-By-Doctor', 'Cancelled-By-Clinic', 'No-Show'].includes(appointment.status)
+                }
+            }
+        });
+    } catch (error) {
+        console.error("Get Clinic Doctor Referred Case By ID Error:", error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
 module.exports = {
      getClinicDoctorOpdList,
     getClinicDoctorOpdById,
@@ -1148,5 +1436,7 @@ module.exports = {
     callNextClinicOpdToken,
     skipClinicOpdToken,
     recallSkippedClinicOpdToken,
-    startClinicIpdPatient
+    startClinicIpdPatient,
+    getClinicDoctorReferredCasesList,
+    getClinicDoctorReferredCaseById
 };

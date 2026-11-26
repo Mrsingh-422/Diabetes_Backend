@@ -13,7 +13,9 @@ const {
     callNextClinicOpdToken,
     skipClinicOpdToken,
     recallSkippedClinicOpdToken,
-    startClinicIpdPatient
+    startClinicIpdPatient,
+    getClinicDoctorReferredCasesList,
+    getClinicDoctorReferredCaseById
 } = require('../../../controllers/clinic/clinicDoctorPannel/clinicDocCases');
 
 // Base Route: /api/clinic/doctor-panel
@@ -24,6 +26,11 @@ router.get('/opd/appointments/:id', protect('clinic-doctor'), getClinicDoctorOpd
 router.patch('/opd/call-next-token', protect('clinic-doctor'), callNextClinicOpdToken);
 router.patch('/opd/skip-token/:id', protect('clinic-doctor'), skipClinicOpdToken);
 router.patch('/opd/recall-token/:id', protect('clinic-doctor'), recallSkippedClinicOpdToken);
+
+
+// --- REFERRED CASES ONLY (Booked via Clinic Reception for this Doctor) ---
+router.get('/referred/appointments', protect('clinic-doctor'), getClinicDoctorReferredCasesList);
+router.get('/referred/appointments/:id', protect('clinic-doctor'), getClinicDoctorReferredCaseById);
 
 // --- IPD (Ward / Bed Admissions) ---
 router.get('/ipd/appointments', protect('clinic-doctor'), getClinicDoctorIpdList);
